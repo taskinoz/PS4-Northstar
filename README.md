@@ -1,6 +1,6 @@
 # PS4 Northstar
 
-An experimental port of the Northstar modding framework to the PS4 version of Titanfall 2, targeting shadPS4 and Titanfall 2 build `Titanfall2_v2_0_11_0`.
+An experimental port of the Northstar modding framework to the PS4 version of Titanfall 2, targeting shadPS4 and Titanfall 2 build `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM`.
 
 **Start here: [docs/GOALS.md](docs/GOALS.md)** — the current goal-by-goal status and prioritized next steps. Static VPK integration (formerly "Stage 1") is complete; everything active right now is native runtime work (formerly "Stage 2").
 
