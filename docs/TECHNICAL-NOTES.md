@@ -806,3 +806,54 @@ behind `-EnableM6ScriptInjectFromMods`; do not remove that gate until this is
 resolved. Default inert PRX restored and boot re-verified clean after this
 session (`work/stage2/iterations/20260807-171205`).
 
+### Goal 8 connectivity test: no loose `.cfg` files are read at boot (2026-08-07)
+
+Attempted the "test a real insecure server connection end-to-end" next step.
+A local dedicated server was started (`D:\Games\Titanfall2\NorthstarLauncher.exe
+-dedicated -multiple`, using the machine's existing `ns_startup_args_dedi.txt`
+which already had `+ns_auth_allow_insecure 1` and `+net_usesocketsforloopback 1`
+set from prior manual testing) and confirmed listening on UDP `37015`/`37005`.
+
+To trigger the client's `connect <ip>:<port>` without any GUI automation
+available (no desktop input tool for the shadPS4 window; only the in-app
+Browser tools exist, which don't apply to a native emulator window), two
+loose-`.cfg`-file injection attempts were tried, both negative:
+
+1. Appended `connect 127.0.0.1:37015` to the `r2`-staged
+   `cfg/autoexec_ns_client.cfg` (Northstar's own client-init cfg, already
+   proven readable via the M6 filesystem overlay). No effect — this file is
+   normally `exec`'d by Northstar's own C++ injection on PC, which this
+   project has not reimplemented; the retail engine has no reason to know
+   about a Northstar-namespaced filename on its own.
+2. Appended the same line to the **vanilla** `cfg/autoexec_client.cfg`
+   (rebuilt and deployed through the proven Stage 1 VPK pipeline, i.e. really
+   installed, not just r2-overlaid) — the standard Source-engine
+   auto-executed startup script on PC. Also no effect.
+
+For (2), the kernel filesystem log for the entire boot (module load through
+reaching the main menu) was checked line by line: the **only** `.cfg` file
+ever opened is `/savedata0/profile.cfg` (a save-data file, not a boot
+script). No `autoexec_client.cfg`, `startup.cfg`, or any other loose `.cfg`
+is opened at all. This strongly suggests the retail PS4 build does not
+support the PC/dev-console convention of executing loose cfg files as
+startup commands at all — plausibly because the feature exists for a
+user-facing developer console that isn't present in a retail, non-dev SKU.
+**Loose-cfg-file injection is not a viable way to trigger `connect` (or any
+other console command) on this platform; do not retry this approach.**
+
+Both temporary `.cfg` edits were reverted and the clean Stage 1 VPKs
+(`work/stage1/sparse`) and default inert native PRX were rebuilt, redeployed,
+and boot re-verified clean afterward.
+
+**Implication for the actual next step:** triggering `connect` (or any other
+console command) reliably requires either (a) real GUI/input automation
+against the shadPS4 window — outside this project's current tooling — or
+(b) calling the engine's console-command execution path directly from the
+native PRX (e.g. locating and calling `Cbuf_AddText`/`Cbuf_Execute` or
+equivalent in `engine.prx`, the same way `CompileList` was already located
+and safely called). (b) is more in keeping with this project's established
+methodology and doesn't depend on external tooling, but is a new,
+non-trivial reverse-engineering task (locate candidate functions, verify
+with hash-locked preimages, prove the calling convention with a harmless
+command before attempting `connect`) that hasn't been started.
+
