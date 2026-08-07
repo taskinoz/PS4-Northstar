@@ -672,3 +672,137 @@ SHA-256 `f640b1dce71a36c90670434239ab74de5c7ec5de907fa3cf17a4f1e6922445b2`
 (87,584 B), boot-verified clean (run `20260807-155651` and again after the
 `-EnableTeamChangesConVar` re-verification below, run `20260807-160202`).
 
+### Debugger setup (2026-08-07): shadPS4 is native x86-64, cdb works directly
+
+shadPS4 runs PS4 game code (also x86-64) directly on the host CPU — it does
+not JIT-translate CPU instructions, only virtualizes OS/kernel calls. That
+means guest crash addresses (like the `client.prx` VA above) are real host
+virtual addresses in the shadPS4 process, and a standard Windows debugger
+attached to `shadPS4.exe` can set breakpoints and inspect registers there
+directly. `shadPS4.exe --help` also confirms a `--wait-for-debugger` flag
+exists, though it wasn't needed here.
+
+**Tooling installed this session:**
+- Modern WinDbg (`winget install --id Microsoft.WinDbg`) is GUI-only
+  (`DbgX.Shell.exe`) with no console debugger binary — not usable for
+  scripted, non-interactive sessions.
+- The classic console debugger (`cdb.exe`) comes from the "Debugging Tools
+  for Windows" standalone feature of the Windows SDK, installed via the
+  official web installer with only that feature selected (no full SDK, no
+  admin GUI):
+
+      winsdksetup.exe /features OptionId.WindowsDesktopDebuggers /quiet /norestart
+
+  (`winsdksetup.exe` is downloaded from `download.microsoft.com`; winget's
+  `Microsoft.WindowsSDK.10.0.26100` package can also fetch it, but silently
+  no-ops with exit code 1000 if it thinks a same-version SDK component is
+  already registered — running the downloaded `winsdksetup.exe` directly
+  with the command above is more reliable.) Installs to
+  `C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe`.
+
+**shadPS4 uses guard-page-based memory virtualization** — its own
+`Kernel.Vmm` reserve/allocate/map logging is the tell. This means first-chance
+access violations are frequent and *expected* (the guest's memory manager
+handles them internally). `sxe av` (break on every first-chance AV) is far
+too broad — it stops at the very first routine, harmless one within seconds
+of launch. **Use `sxd av` instead** (disable first-chance stop for AV, let
+shadPS4's own handler process it) and let cdb's normal, non-optional
+second-chance stop catch only the genuinely unhandled fault — which is
+exactly the `[NorthstarPS4] ... SignalHandler: Unhandled Exception` case
+already used as this project's `FailurePattern`.
+
+Minimal working recipe (adjust the PRX build/deploy step and command line to
+match whatever's being investigated):
+
+    cdb.exe -o -g -G -cf <commandfile> -logo <outputfile> ^
+        "<shadPS4.exe path>" --game "<eboot.bin path>" --log-append
+
+commandfile contents:
+
+    sxd av
+    g
+    r
+    k
+    q
+
+(`-o` also debugs child processes if any are spawned; `-g`/`-G` skip the
+initial process-start and final process-exit breakpoints so the script runs
+to the real stop unattended.) `-logo <file>` mirrors all output to a file
+readable after the (potentially long, GUI-module-heavy) session completes.
+
+To break at a specific `client.prx`/`engine.prx` offset instead of waiting
+for the crash: read the run's actual base from the shad_log.txt line
+`target module=client.sprx ... segment[0] address=...` (varies per run, must
+never be hard-coded — same rule as in the safety rules below) and compute
+`bp <base + offset>` before the `sxd av`/`g` pair. A `k` (stack) at a raw
+address breakpoint inside manually-mapped guest code shows only raw return
+addresses, not symbol names — expected, still useful for register/memory
+state at that exact point.
+
+### Live crash analysis: r15 is `vmPool`, not the UI VM
+
+With cdb attached (recipe above, `-EnableM6ModMetadata -EnableM6ScriptProbe
+-EnableM6ScriptInject -EnableM6ScriptInjectFromMods`), the second-chance stop
+landed at exactly the predicted instruction and confirmed the crash
+mechanically for the first time (previously only inferred from shadPS4's own
+log line and static disassembly):
+
+    (55f0.xxxx): Access violation - code c0000005 (!!! second chance !!!)
+    00000008`1fc1d269 448b6b38   mov r13d,dword ptr [rbx+38h] ds:00000000`00000038=????????
+    rax=0000000000000100 rbx=0000000000000000 rcx=00000000000000af
+    rdx=000000022ac58200 rsi=0000000202608d40 rdi=000000022ac619a0
+    r15=0000000227182700
+
+`ds:00000000'00000038` proves `rbx` is exactly **null** (not merely
+"invalid" — the access is address `0x38`, i.e. `0 + 0x38`). Critically,
+**`r15` (`0x227182700`) is not our probed UI VM at all — it is the exact
+`vmPool` value this project's own code already logs** (`vmObj+0x4218`, e.g.
+`M6 script inject pool ... vmPool=0x227182700` in the same run's
+`shad_log.txt`). The earlier hypothesis (`r15+0x2d8 -> +0x50` reaches the
+*same* `internal_vm` this project profiled at `internal_vm+0x40a0`, and that
+table is simply unpopulated) was corrected, then further refined by a second
+pass:
+
+By that point in the instruction sequence `rax` has already been overwritten
+by a later `mov eax,[rsi+0x40c4]`, so `dq rax` at the crash itself no longer
+shows the `+0x50`-dereferenced pointer — a breakpoint set *before* that
+overwrite (`client_base + 0x861263`, right after `rbx` is assigned but before
+`eax` is clobbered) is needed to see it live. Across 6 sampled hits of that
+breakpoint in one run (before the real crash, which needs more hits to
+reach), `rax == rsi` every time, and both matched a stable, healthy,
+**non-null** value — `0x226ea2480` in that run, which is the *exact* value
+this project's own read-only `internal_vm+0x40a0` profile already found
+during a plain, non-injecting boot (see the profiling section above). So:
+
+- `rsi` genuinely is `internal_vm` (the `+0x50` chain from `vmPool+0x2d8`
+  really does resolve to the same object our UI-native work has profiled all
+  along — the original coincidental-offset concern was unfounded here).
+- `internal_vm+0x40a0` (`rbx` in the crash) is not broadly broken — it was
+  healthy across at least 6 consecutive calls to this code path in the same
+  compile. `rcx` (read from `internal_vm+0x40c0` earlier in the sequence)
+  incremented 3→4→5→6→7→8 across those hits, consistent with a per-call
+  counter, not a table identity check.
+- The null result therefore happens on a **specific, later call** in the
+  same compile pass — most plausibly the one resolving `ModInfo` specifically
+  (the one new, mod-defined type `ui/menu_ns_modmenu.nut` references), not a
+  structurally-unpopulated table. A miss/not-found result for that one
+  lookup is returned as null and used without a null check, rather than the
+  whole table being absent.
+
+**Status:** root cause narrowed to "a specific type lookup misses and the
+miss isn't checked," not "the table doesn't exist yet." Not yet conclusively
+identified *why* that one lookup misses. Next step for whoever picks this
+up: repeat the `client_base + 0x861263` breakpoint recipe above with either
+a much higher iteration count or (better) a conditional breakpoint that only
+stops when `rbx == 0`, e.g.
+
+    bp <addr> ".if (poi(rax+40a0) = 0) {} .else {g}"
+
+(untested exact syntax — verify interactively) to land exactly on the
+failing call and inspect what `internal_vm+0x40c0`/`+0x40c4` (the
+counter/capacity pair read around it) look like right before the miss, and
+what makes that specific call different from the healthy ones. Still gated
+behind `-EnableM6ScriptInjectFromMods`; do not remove that gate until this is
+resolved. Default inert PRX restored and boot re-verified clean after this
+session (`work/stage2/iterations/20260807-171205`).
+
