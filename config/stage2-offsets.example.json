@@ -1,0 +1,8 @@
+{
+  "build": "Titanfall2_v2_0_11_0_ps4",
+  "modules": {
+    "launcher.prx": { "sha256": null, "bootstrapCallsite": null },
+    "engine.prx": { "sha256": null, "conVarRegister": null, "conVarAllocate": null, "conVarVtable": null, "iConVarVtable": null },
+    "client.prx": { "sha256": null, "uiVmCreatedHook": null, "registerUiFunction": null }
+  }
+}

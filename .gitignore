@@ -1,0 +1,37 @@
+# Local, machine-specific configuration. Copy config/project.example.json
+# to config/local.json and edit it instead of committing paths from your
+# own machine.
+config/local.json
+
+# Generated build output and the staging/test workspace. Everything here is
+# reproducible from tracked source plus the tools/ dependencies below.
+work/
+dist/
+artifacts/
+logs/
+
+# External toolchains, downloaded releases, and reference repo clones.
+# Nothing under tools/ is original project content, so all of it is ignored
+# except the checklist that explains what needs to go where.
+tools/*
+!tools/README.md
+
+# This repository never contains Titanfall 2, Northstar release binaries,
+# or extracted/repacked game archives — see the repository policy in
+# README.md. These extensions only ever appear as generated or externally
+# supplied data, never as tracked source.
+*.vpk
+*.rpak
+*.starpak
+*.bin
+*.prx
+*.pkg
+
+# Editor / OS noise
+.vs/
+.vscode/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
+desktop.ini

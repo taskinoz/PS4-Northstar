@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "description": "PC Northstar mod loose files staged into the PS4 engine GAME search dir (r2) so they overlay VPK content without repacking. Native DLLs and PC-only runtime files are excluded. mod.json metadata is published into the PS4 mods root for native runtime discovery.",
+  "target": "r2",
+  "metadataTarget": "mods",
+  "exclude": ["*.dll", "*.exe", "*.so", "*.pdb", "*.json"],
+  "mods": [
+    { "name": "Northstar.Client", "sourceSubdirectory": "Northstar.Client\\mod" },
+    { "name": "Northstar.Custom", "sourceSubdirectory": "Northstar.Custom\\mod" }
+  ]
+}

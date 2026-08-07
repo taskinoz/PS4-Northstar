@@ -1,0 +1,35 @@
+# Foundation: static PS4 content integration
+
+**Status: complete (Goal 0 in [GOALS.md](GOALS.md)).** This document is kept as reference for how the currently-installed PS4 game state was produced, and to reproduce it from scratch if needed. The tooling described here (`scripts/Build-AndDeployStage1Vpks.ps1` and friends) is still required — the native runtime work in [TECHNICAL-NOTES.md](TECHNICAL-NOTES.md) boots on top of these patched VPKs, not instead of them. See "Retiring the Goal 0 VPK patches" in GOALS.md before removing any of it.
+
+## Goal
+
+Join a Northstar server by IP from shadPS4 while the server runs `Northstar.CustomServers` and `Northstar.Custom`, without requiring Northstar's native Windows loader.
+
+## Constraints
+
+- PC VPK archives must not replace PS4 VPK archives. Their chunk layouts differ despite both installations reporting `Titanfall2_v2_0_11_0`.
+- The repository contains only original project code, manifests, documentation, and patches. Extracted or rebuilt game data stays in ignored directories.
+- This phase uses static integration only. Runtime mod loading, Atlas, and the server browser are native work — see Goals 1+ in [GOALS.md](GOALS.md).
+- `Northstar.CustomServers` is server-side and is not staged into the PS4 client by default.
+
+## Pipeline
+
+1. Validate the PC and PS4 installations against the expected build.
+2. Stage `Northstar.Client/mod` and `Northstar.Custom/mod` under `work/stage1/loose`.
+3. Inventory staged paths against the PS4 VPK directories.
+4. Define an explicit source-path-to-PS4-archive mapping.
+5. Resolve Northstar's loader-provided `VANILLA` preprocessor symbol as false with `scripts/Resolve-Stage1Defines.ps1`.
+6. Pack only changed files into patch chunk 228 with RSPNVPK, using pristine PS4 directory indexes.
+7. Install into a disposable shadPS4 game copy and test direct connection.
+
+This phase does not modify the script compiler. Native registration of Northstar compile symbols, including `VANILLA`, is native work (Goal 3+).
+
+## Success criteria
+
+- Titanfall 2 reaches the main menu in shadPS4 with rebuilt archives.
+- The direct-connect UI accepts an IPv4 address and port.
+- The client loads into a controlled Northstar server without missing script, VPK, RPAK, or network-table errors.
+- The original game can be restored using clean archive backups.
+
+All four criteria are met as of the last verified build. See [GOALS.md](GOALS.md) for what has happened since.

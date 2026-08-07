@@ -1,0 +1,28 @@
+{
+  "build": "Titanfall2_v2_0_11_0_ps4_CUSA04013",
+  "module": "engine.prx",
+  "sha256": "fa59636b1b5fa66fa936631457b47e49039b0cfbef29e783c2fd082ece3dae37",
+  "image": { "rxFileOffset": "0x4000", "rxVirtualAddress": "0x0" },
+  "anchors": {
+    "svCheatsConstructorCall": { "virtualAddress": "0xdce52", "preimage": "488d3592b325004c8d0595b325004c8d" },
+    "conVarConstructorWithCallback": { "virtualAddress": "0x205450", "preimage": "554889e54883ec10c5f857c0488d052d" },
+    "conVarConstructorCore": { "virtualAddress": "0x205db0", "preimage": "554889e54157415641554154534883ec" },
+    "conCommandBaseConstructor": { "virtualAddress": "0x204e60", "preimage": "4889f84c8d1d96f51a004d85c9488d3d" },
+    "engineCvarRegistrationThunk": { "virtualAddress": "0x2df1c0", "preimage": "554889e54156534889f04989fe488d3d" }
+  },
+  "interfaces": {
+    "engineCvar": "VEngineCvar007", "findVarSlot": 16, "registerCommandBaseSlotCandidate": 31
+  },
+  "clientUi": {
+    "sha256": "abc6efd2125a2a58d32ad9d23d245a03fd3213a763e407712a575f0bc04e879b",
+    "runUiScript": { "virtualAddress": "0x767b10", "preimage": "554889e54157415641554154534883ec" },
+    "uiVmLoad": { "virtualAddress": "0x767b64", "preimage": "488b054d44390131d231c94c89fe488b" },
+    "scriptOwnerGlobal": "0x1afbfb8",
+    "ownerToUiVmOffset": "0x8",
+    "uiVmToSqVmOffset": "0x50",
+    "registerSquirrelFunc": { "virtualAddress": "0x67a3c0", "preimage": "554889e54157415641554154534883ec" },
+    "runUiScriptRegistration": { "virtualAddress": "0x2f1554", "preimage": "488d3505236e0131d2b9010000004531" }
+  },
+  "status": "diagnostic-convar-verified",
+  "notes": "Offsets are valid only for the exact hash above. Constructor signatures and slot 31 remain candidates until a harmless diagnostic ConVar is tested."
+}
