@@ -29,7 +29,7 @@ These hashes identify the only retail build supported by the current bootstrap.
 | launcher.prx | 0a866190c6dfa7e61555baed6b671ac15d271394731434589c91cfd0f28302e6 |
 | engine.prx | fa59636b1b5fa66fa936631457b47e49039b0cfbef29e783c2fd082ece3dae37 |
 | client.prx | abc6efd2125a2a58d32ad9d23d245a03fd3213a763e407712a575f0bc04e879b |
-| Current northstar_ps4.prx (default, inert) | b550e64ff8b782fe837f0dfd1aa613146c77ff3 |
+| Current northstar_ps4.prx (default, inert) | f640b1dce71a36c90670434239ab74de5c7ec5de907fa3cf17a4f1e6922445b2 (2026-08-07; older hashes below reflect the default at the time each section was written) |
 
 Do not apply the eboot patch to any other hash. The script checks the retail hash and byte preimages before writing.
 
@@ -285,6 +285,13 @@ The gated ns_allow_team_changes registration passed all runtime preimage checks.
 The successful run completed in 5.866 seconds and is saved beneath work/stage2/iterations/20260806-132832. Milestone 4 is complete under shadPS4. The default read-only PRX was restored afterward with SHA-256 c6ea058def829d6ed7c7a1ccc6feaabfea2e41f223dc91d9ca41f07ba09fcfc1.
 
 The tested gated PRX SHA-256 was 66cbb28fc531b1220ef0e5b8295395ff83bdbb63dd6a97e76fc5f70f0f971a79. After both attempts, the default read-only PRX was rebuilt and deployed with SHA-256 c6ea058def829d6ed7c7a1ccc6feaabfea2e41f223dc91d9ca41f07ba09fcfc1.
+
+**Second confirmation (2026-08-07, run `20260807-155931`):** re-ran `-EnableTeamChangesConVar` per the Goal 6 next-steps list. Completed cleanly on the first attempt this time (5.345 s, no address-space assertion), same result:
+
+    [NorthstarPS4] convar mutation gate base=0x80fea8000 size=0x398000 constructor=1 callsite=1
+    [NorthstarPS4] team changes convar registration result=0x8091040b0 expected=0x8091040b0 success=1 default=0 flags=0
+
+This confirms the registration mechanism itself is reliable and the two 2026-08-06 address-space failures were host resource contention, not a code fault, consistent with what was already suspected. **Still not verified**: whether the registered ConVar actually changes gameplay behavior in a live match (e.g. team-switch UI/logic reading it) — that requires a real Northstar server connection and a team-based gamemode, not just `FindVar` identity, and hasn't been attempted. The default inert PRX was restored and boot re-verified clean afterward (run `20260807-160202`).
 
 
 ## Goal 0 / "Stage 1" context
@@ -601,4 +608,67 @@ when the engine's own boot-time compile populates it, before attempting to
 read it from an injected compile), or find a mod UI script with no typed
 struct/class parameters to test whether the crash is specific to typed
 parameters or to something else `menu_ns_modmenu.nut` does.
+
+### Profiling internal_vm+0x40a0 (2026-08-07): the table itself is healthy
+
+`ProbeUiVm` now unconditionally (no build flag needed — pure reads, always
+safe) dumps `internal_vm+0x4090..0x40b0` and, if `+0x40a0` looks like a
+plausible pointer, the first 8 qwords it points to. Verified on a clean boot
+(no injection attempted, run `20260807-155651`):
+
+    UI VM internal+0x4090=0
+    UI VM internal+0x4098=0x8000040
+    UI VM internal+0x40a0=0x226ea2480
+    UI VM internal+0x40a8=0x1000001
+    UI VM internal+0x40b0=0
+    UI VM internal+0x40a0[+0x0]=0x81ea238a0
+    UI VM internal+0x40a0[+0x8]=0x1
+    UI VM internal+0x40a0[+0x10]=0
+    UI VM internal+0x40a0[+0x18]=0x2270b7480
+    UI VM internal+0x40a0[+0x20]=0x2270b72f0
+    UI VM internal+0x40a0[+0x28]=0x202606520
+    UI VM internal+0x40a0[+0x30]=0x227190640
+    UI VM internal+0x40a0[+0x38]=0x400000003
+
+`+0x40a0` is a valid, non-null pointer, and the qword at that table's own
+`+0x38` — the exact offset the crash site reads — is `0x400000003`, a
+plausible packed value, not null and not garbage. **This means "the table is
+unpopulated" is not the explanation for the crash.**
+
+Re-reading the crash disassembly with that in mind:
+
+    0x86124b: mov rax, [r15+0x2d8]
+    0x861252: mov ecx, [rsi+0x40c0]
+    0x861258: mov rax, [rax+0x50]
+    0x86125c: mov rbx, [rax+0x40a0]
+    0x861263: mov eax, [rsi+0x40c4]
+    0x861269: mov r13d, [rbx+0x38]   ; faults
+
+The assumption that `[r15+0x2d8] -> +0x50` reaches the *same* internal VM
+object as `uiVm+0x50` was based only on the `+0x50` offset matching the
+already-verified `uiVmToSqVmOffset` pattern — a single coincidental-offset
+match, not a proven identity. `r15` here is whatever object this compiler
+subroutine received as context, most likely something specific to compiling
+a *typed parameter declaration* (`ModInfo modInfo`), not necessarily our
+probed UI VM at all. Since our own UI VM's `+0x40a0` table is confirmed
+healthy, the more likely explanation is that `r15` (or the chain from it) is
+a different, less-initialized object — e.g. a compile-time type/class
+resolution context that the engine's own boot-time compile pass sets up
+before compiling any file that uses typed struct parameters, and that our
+late injection never triggers the setup of.
+
+This does not yet identify what `r15` actually is. Confirming it requires
+either a debugger attached to shadPS4 at the fault (not available through
+the log-based iteration harness) or tracing backward from the crash site
+through the calling function(s) statically. Until then,
+`-EnableM6ScriptInjectFromMods` remains unsafe for scripts with typed struct
+parameters; scripts without them (like `cl_northstar_client_init.nut`) are
+still verified safe.
+
+The `internal+0x4090..0x40b0` dump above is unconditional (no build flag —
+pure reads, safe on every build), so it changed the default inert PRX's
+bytes and hash. The new default baseline is
+SHA-256 `f640b1dce71a36c90670434239ab74de5c7ec5de907fa3cf17a4f1e6922445b2`
+(87,584 B), boot-verified clean (run `20260807-155651` and again after the
+`-EnableTeamChangesConVar` re-verification below, run `20260807-160202`).
 

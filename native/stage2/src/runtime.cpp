@@ -1273,6 +1273,41 @@ void ProbeUiVm(std::uintptr_t clientBase, std::size_t clientSpan) noexcept {
             ProbeUiRegistrationTree(clientBase, clientSpan, kClientUiRegistrationTreeAVa, "A");
             ProbeUiRegistrationTree(clientBase, clientSpan, kClientUiRegistrationTreeBVa, "B");
 
+            // Read-only profile of internal_vm+0x40a0 and its neighbors
+            // during a normal boot, before any CompileList injection is
+            // attempted. This is the table CompileList reads (at its own
+            // +0x38) that faulted when compiling a real mod script with a
+            // typed struct parameter (ui/menu_ns_modmenu.nut, ModInfo) --
+            // see docs/TECHNICAL-NOTES.md and docs/GOALS.md Goal 6. Pure
+            // reads plus logging; no mutation, no dereference beyond one
+            // plausibility-gated level.
+            {
+                auto internalVmForDump = reinterpret_cast<const std::uintptr_t*>(fields[10]);
+                if (internalVmForDump != nullptr) {
+                    constexpr std::uintptr_t kOffsetsToProbe[] = {
+                        0x4090, 0x4098, 0x40a0, 0x40a8, 0x40b0,
+                    };
+                    for (std::uintptr_t off : kOffsetsToProbe) {
+                        const std::uintptr_t value = internalVmForDump[off / 8];
+                        LogFormat("[NorthstarPS4] UI VM internal+0x%zx=%p\n",
+                            off, reinterpret_cast<void*>(value));
+                    }
+                    const std::uintptr_t table40a0 = internalVmForDump[0x40a0 / 8];
+                    const bool plausible = table40a0 > 0x100000000ULL &&
+                        table40a0 < 0x40000000000ULL;
+                    if (plausible) {
+                        auto tableBytes = reinterpret_cast<const std::uintptr_t*>(table40a0);
+                        for (int i = 0; i < 8; ++i) {
+                            LogFormat("[NorthstarPS4] UI VM internal+0x40a0[+0x%x]=%p\n",
+                                i * 8, reinterpret_cast<void*>(tableBytes[i]));
+                        }
+                    } else {
+                        LogFormat("[NorthstarPS4] UI VM internal+0x40a0 is not a plausible pointer (value=%p)\n",
+                            reinterpret_cast<void*>(table40a0));
+                    }
+                }
+            }
+
 #if defined(NORTHSTAR_PS4_ENABLE_DIAGNOSTIC_UI_NATIVE)
             VerifyAndRestoreDiagnosticUiRecord(clientBase, clientSpan, uiVm);
 #endif
