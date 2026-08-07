@@ -627,6 +627,17 @@ void VerifyAndRestoreDiagnosticUiRecord(
     }
 }
 #endif
+#if defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA) && defined(NORTHSTAR_PS4_ENABLE_M6_SCRIPT_INJECT)
+// Bridges mod metadata discovery (parses each mod's Scripts[] entries whose
+// RunOn is exactly "UI") to the M6 script-inject CompileList call, which
+// otherwise only knows about one hardcoded probe path. Populated by
+// ProbeModMetadata (runs first, from ProbeCvarInterface) and consumed by
+// ProbeUiScriptSystem's M6_SCRIPT_INJECT block (runs later, both from
+// ModuleTracker), so no cross-thread synchronization is needed.
+constexpr std::size_t kMaxCollectedUiScripts = 64;
+char gCollectedUiScripts[kMaxCollectedUiScripts][96]{};
+std::int32_t gCollectedUiScriptCount = 0;
+#endif
 #if defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
 constexpr std::size_t kMaxModConVars = 32;
 constexpr std::size_t kMaxModNames = 16;
@@ -788,6 +799,8 @@ bool ReadFileIntoBuffer(const char* path, char* buffer,
     return true;
 }
 
+constexpr std::size_t kMaxModUiScripts = 32;
+
 struct ModConVarInfo {
     char name[64];
     char defaultValue[64];
@@ -803,6 +816,13 @@ struct ModInfo {
     std::int32_t scriptCount = 0;
     std::int32_t conVarCount = 0;
     ModConVarInfo conVars[kMaxModConVars];
+    // Subset of Scripts[] whose "RunOn" is exactly "UI" (the only CompileList
+    // context proven safe so far, VA-verified as countTable index 2 by
+    // ProbeUiScriptSystem). CLIENT/SERVER/compound RunOn expressions are
+    // counted in scriptCount but intentionally not collected here until
+    // their CompileList context index is identified the same way.
+    std::int32_t uiScriptCount = 0;
+    char uiScripts[kMaxModUiScripts][96];
 };
 
 struct ModDiscovery {
@@ -872,6 +892,24 @@ bool ParseModMetadata(const char* json, ModInfo& out) noexcept {
         if (*elem == '[') elem = JsonSkipWs(elem + 1);
         while (elem != nullptr && *elem != ']') {
             ++out.scriptCount;
+            if (*elem == '{') {
+                const char* const pathValue = JsonFindMember(elem, "Path");
+                const char* const runOnValue = JsonFindMember(elem, "RunOn");
+                char path[96]{};
+                char runOn[64]{};
+                const bool havePath = pathValue != nullptr &&
+                    JsonExtractString(pathValue, path, sizeof(path));
+                const bool haveUiRunOn = runOnValue != nullptr &&
+                    JsonExtractString(runOnValue, runOn, sizeof(runOn)) &&
+                    std::strcmp(runOn, "UI") == 0;
+                if (havePath && haveUiRunOn &&
+                    out.uiScriptCount < static_cast<std::int32_t>(kMaxModUiScripts)) {
+                    std::strncpy(out.uiScripts[out.uiScriptCount], path,
+                        sizeof(out.uiScripts[0]) - 1);
+                    out.uiScripts[out.uiScriptCount][sizeof(out.uiScripts[0]) - 1] = '\0';
+                    ++out.uiScriptCount;
+                }
+            }
             elem = JsonSkipWs(JsonSkipValue(elem));
             if (*elem == ',') elem = JsonSkipWs(elem + 1);
             else break;
@@ -999,15 +1037,43 @@ void ProbeModMetadata(void* cvar, ModFindVarFn findVar,
             "[NorthstarPS4] mod %s version=%s priority=%d init=%s description=%s\n",
             mod.name, mod.version, mod.loadPriority, mod.initScript,
             mod.description);
-        LogFormat("[NorthstarPS4] mod %s convars=%d scripts=%d\n",
-            mod.name, mod.conVarCount, mod.scriptCount);
+        LogFormat("[NorthstarPS4] mod %s convars=%d scripts=%d uiScripts=%d\n",
+            mod.name, mod.conVarCount, mod.scriptCount, mod.uiScriptCount);
         for (std::int32_t s = 0; s < mod.conVarCount; ++s) {
             LogFormat(
                 "[NorthstarPS4] mod %s convar[%d] name=%s default=%s flags=%s\n",
                 mod.name, s, mod.conVars[s].name,
                 mod.conVars[s].defaultValue, mod.conVars[s].flags);
         }
+        for (std::int32_t s = 0; s < mod.uiScriptCount; ++s) {
+            LogFormat("[NorthstarPS4] mod %s uiScript[%d]=%s\n",
+                mod.name, s, mod.uiScripts[s]);
+        }
         RegisterModConVars(mod, conVarSlot, cvar, findVar, constructor);
+#if defined(NORTHSTAR_PS4_ENABLE_M6_SCRIPT_INJECT)
+        // InitScript goes first: run 20260807-153420 showed
+        // ui/menu_ns_modmenu.nut fail to compile with "Expected type, found
+        // identifier ModInfo" because that struct is declared only in
+        // Northstar.Client's InitScript (cl_northstar_client_init.nut, no
+        // RunOn of its own). CompileList appears to build a single growing
+        // symbol table across one call's path list, so compiling InitScript
+        // first makes its struct/type declarations visible to the mod's UI
+        // scripts compiled after it in the same call.
+        if (mod.initScript[0] != '\0' &&
+            gCollectedUiScriptCount < static_cast<std::int32_t>(kMaxCollectedUiScripts)) {
+            std::strncpy(gCollectedUiScripts[gCollectedUiScriptCount], mod.initScript,
+                sizeof(gCollectedUiScripts[0]) - 1);
+            gCollectedUiScripts[gCollectedUiScriptCount][sizeof(gCollectedUiScripts[0]) - 1] = '\0';
+            ++gCollectedUiScriptCount;
+        }
+        for (std::int32_t s = 0; s < mod.uiScriptCount &&
+            gCollectedUiScriptCount < static_cast<std::int32_t>(kMaxCollectedUiScripts); ++s) {
+            std::strncpy(gCollectedUiScripts[gCollectedUiScriptCount], mod.uiScripts[s],
+                sizeof(gCollectedUiScripts[0]) - 1);
+            gCollectedUiScripts[gCollectedUiScriptCount][sizeof(gCollectedUiScripts[0]) - 1] = '\0';
+            ++gCollectedUiScriptCount;
+        }
+#endif
     }
     LogFormat("[NorthstarPS4] mod metadata probe complete convarsRegistered=%d\n",
         conVarSlot);
@@ -1408,17 +1474,52 @@ void ProbeUiScriptSystem(
                     using CompileListFn = bool (*)(void*, std::int32_t, const char* const*, std::int32_t);
                     auto compileList =
                         reinterpret_cast<CompileListFn>(clientBase + kClientCompileListVa);
-                    static const char* const kInjectPaths[] = {
+                    static const char* const kProbeInjectPaths[] = {
                         "ns_m6_probe.gnut",
                     };
-                    const std::int32_t injectCount =
-                        sizeof(kInjectPaths) / sizeof(kInjectPaths[0]);
+                    const char* const* injectPaths = kProbeInjectPaths;
+                    std::int32_t injectCount = static_cast<std::int32_t>(
+                        sizeof(kProbeInjectPaths) / sizeof(kProbeInjectPaths[0]));
+#if defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
+                    LogFormat("[NorthstarPS4] M6 script inject: %d mod UI script(s) collected (not injected unless -EnableM6ScriptInjectFromMods)\n",
+                        gCollectedUiScriptCount);
+#if defined(NORTHSTAR_PS4_ENABLE_M6_SCRIPT_INJECT_FROM_MODS)
+                    // Separately gated from mod discovery itself: run
+                    // 20260807-154245 reproduced a real (non-null) crash
+                    // compiling a real mod UI script (ui/menu_ns_modmenu.nut)
+                    // this way -- a read of internal_vm+0x40a0 that faulted,
+                    // most likely an internal type/struct registry not
+                    // populated the way it would be for the engine's own
+                    // boot-time compile pass. cl_northstar_client_init.nut
+                    // alone compiled cleanly; menu_ns_modmenu.nut (which
+                    // uses the ModInfo struct as a typed parameter) did not,
+                    // even paired with only that one dependency. Do not
+                    // enable this outside a deliberate, isolated experiment
+                    // until that table dependency is understood -- see
+                    // docs/TECHNICAL-NOTES.md and docs/GOALS.md (Goal 6).
+                    static const char* modInjectPaths[kMaxCollectedUiScripts];
+                    if (gCollectedUiScriptCount > 0) {
+                        for (std::int32_t i = 0; i < gCollectedUiScriptCount; ++i) {
+                            modInjectPaths[i] = gCollectedUiScripts[i];
+                        }
+                        injectPaths = modInjectPaths;
+                        injectCount = gCollectedUiScriptCount;
+                        LogFormat("[NorthstarPS4] M6 script inject using %d mod-discovered UI script(s) (EXPERIMENTAL, known to crash on some real scripts)\n",
+                            injectCount);
+                    } else {
+                        LogFormat("[NorthstarPS4] M6 script inject: no mod UI scripts collected, falling back to probe path\n");
+                    }
+#endif
+#endif
                     const std::int32_t before = countTable[2];
                     const bool compileOk =
-                        compileList(owner, 2, kInjectPaths, injectCount);
+                        compileList(owner, 2, injectPaths, injectCount);
                     const std::int32_t after = countTable[2];
                     LogFormat("[NorthstarPS4] M6 script inject ctx=2 count=%d result=%d owner=%p before=%d after=%d\n",
                         injectCount, compileOk ? 1 : 0, owner, before, after);
+                    for (std::int32_t i = 0; i < injectCount; ++i) {
+                        LogFormat("[NorthstarPS4] M6 script inject path[%d]=%s\n", i, injectPaths[i]);
+                    }
                     void* const ctrlScript2 = findUiFunction(uiVm, "ui_main_menu", 0, 0);
                     LogFormat("[NorthstarPS4] M6 script inject FindUiFunction ui_main_menu=%p ctrl=%d\n",
                         ctrlScript2, ctrlScript2 != nullptr ? 1 : 0);

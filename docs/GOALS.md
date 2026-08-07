@@ -40,8 +40,9 @@ Registered a callable native (`NSStage2Ping`) into the UI Squirrel VM's real glo
 - [x] Discover each mod's `Scripts` array from `mod.json` (parsed and counted; not yet compiled).
 - [x] Compile an arbitrary script file into the engine at runtime via `CompileList` (client VA `0x3153f0`). A crash in this path was root-caused and fixed on 2026-08-07 (see TECHNICAL-NOTES.md) and is now verified 3/3 with no crash.
 - [x] Determined the `scripts.rson` manifest-overlay approach (`Merge-Stage2ScriptsRson.ps1`) does **not** work: the engine reads the VPK-packed vanilla `scripts.rson`, not the `r2`-staged merged copy, whenever the same path exists in both. `CompileList` is the correct mechanism going forward, not the manifest merge.
+- [x] Drive `CompileList` from each mod's already-parsed `Scripts` array instead of the one hardcoded probe path used to prove the mechanism. `ModInfo` now stores each mod's `RunOn: "UI"` script paths; collection into a shared buffer always runs (harmless) when mod metadata + script inject are both enabled. **Actually compiling that real list crashes** on at least one real script (`ui/menu_ns_modmenu.nut`, a real-address fault reading an unprofiled internal VM table at `+0x40a0` — see TECHNICAL-NOTES.md), so it's gated behind a further opt-in flag (`-EnableM6ScriptInjectFromMods`) that defaults off; the safe combined build falls back to the harmless probe file and was re-verified clean.
 - [ ] Prove a runtime-compiled script's code actually *executes*, not just compiles. Blocked: bare top-level statements don't compile in this UI script compiler, and `FindUiFunction` does not reliably resolve names (see Next steps below for the concrete unblock).
-- [ ] Drive `CompileList` from each mod's already-parsed `Scripts` array instead of the one hardcoded probe path used to prove the mechanism.
+- [ ] Profile the internal VM table at `internal_vm+0x40a0` (the way `t40d0`/`t4120`/`t41b0` were profiled for Goal 4) before re-attempting `-EnableM6ScriptInjectFromMods` — this is now the concrete blocker for injecting real mod UI scripts, not just the probe file.
 
 ## Goal 7 — Mod enable/disable + lifecycle ⬜ not started
 
@@ -61,8 +62,8 @@ Every goal above is verified only under shadPS4. TECHNICAL-NOTES.md repeatedly f
 
 ## Immediate next steps (priority order)
 
-1. **Unblock Goal 6's execution proof.** A bare `NSM6ProbeMarker()` call at file scope fails to compile (`Global variable definition is followed by "("`). The next attempt should call the mod's `InitScript` (already parsed) through whatever real engine call site invokes it — trace that call site read-only first — or reuse the Goal 4 native-closure-callback trick (call a registered native *from inside* the injected script) instead of a bare statement.
-2. **Wire mod `Scripts[]` into `CompileList`.** Goal 6's metadata discovery and its `CompileList` call currently don't talk to each other — one hardcoded probe path proved the mechanism. Loop over each mod's parsed `Scripts` array and call `CompileList` per file, gated the same way the probe is.
+1. **Profile `internal_vm+0x40a0`.** The new, concrete blocker on real mod script injection (see Goal 6 above and TECHNICAL-NOTES.md for the exact crash site/disassembly). Needed before `-EnableM6ScriptInjectFromMods` is safe to use beyond isolated experiments.
+2. **Unblock Goal 6's execution proof.** A bare `NSM6ProbeMarker()` call at file scope fails to compile (`Global variable definition is followed by "("`). The next attempt should call the mod's `InitScript` (already parsed) through whatever real engine call site invokes it — trace that call site read-only first — or reuse the Goal 4 native-closure-callback trick (call a registered native *from inside* the injected script) instead of a bare statement.
 3. **Re-verify `ns_allow_team_changes` a second time**, and — more importantly — confirm the registered ConVar actually changes gameplay behavior in a live match, not just that `FindVar` returns the right object identity. Only one clean run exists; two earlier attempts hit an unrelated host memory/address-space issue, not a code fault.
 4. **Design mod enable/disable (Goal 7)** before writing code: pick the storage mechanism and write it down, then implement.
 5. **Start Atlas research (Goal 8) as a standalone, read-only task**: read the PC client's Atlas auth flow in `tools/NorthstarLauncher-reference`, write down the exact calls/protocol needed, and only then look for PS4 equivalents. Do not touch `engine.prx`/`client.prx` before the research is written down.
@@ -80,6 +81,7 @@ Every goal above is verified only under shadPS4. TECHNICAL-NOTES.md repeatedly f
 - `CompileList`'s internal object/vtable dependency (Goal 6) was observed populated in 3/3 recent runs but null in one earlier run; the exact readiness condition is still not fully understood, only safely gated against.
 - The `ns_allow_team_changes` ConVar's semantics (`default=0 flags=0`) were chosen conservatively because current upstream Northstar no longer defines this legacy identifier — verify this is still the right default before shipping anything that depends on it.
 - No investigation has started on whether Atlas auth or the server browser are even reachable from a PS4 client's network stack under shadPS4.
+- Compiling a real mod UI script with a typed struct parameter (`ui/menu_ns_modmenu.nut`, using `ModInfo`) via `CompileList` crashes at a real (non-null) address reading an unprofiled internal VM table at `internal_vm+0x40a0`. Not all mod scripts are necessarily affected — only one has been tested — but treat any `-EnableM6ScriptInjectFromMods` script as unverified until profiled. See TECHNICAL-NOTES.md.
 
 ## Safety rules (always apply)
 

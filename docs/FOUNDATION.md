@@ -8,7 +8,7 @@ Join a Northstar server by IP from shadPS4 while the server runs `Northstar.Cust
 
 ## Constraints
 
-- PC VPK archives must not replace PS4 VPK archives. Their chunk layouts differ despite both installations reporting `Titanfall2_v2_0_11_0`.
+- PC VPK archives must not replace PS4 VPK archives. Their chunk layouts differ. The two platforms also use unrelated build-tagging schemes — PC's `build.txt` reports `Titanfall2_v2_0_11_0`, PS4's reports `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM` — validated separately (`expectedPcBuild`/`expectedPs4Build` in `config/local.json`), not compared to each other.
 - The repository contains only original project code, manifests, documentation, and patches. Extracted or rebuilt game data stays in ignored directories.
 - This phase uses static integration only. Runtime mod loading, Atlas, and the server browser are native work — see Goals 1+ in [GOALS.md](GOALS.md).
 - `Northstar.CustomServers` is server-side and is not staged into the PS4 client by default.

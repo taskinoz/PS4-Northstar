@@ -1,5 +1,6 @@
 {
-  "expectedBuild": "Titanfall2_v2_0_11_0",
+  "expectedPcBuild": "Titanfall2_v2_0_11_0",
+  "expectedPs4Build": "R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM",
   "pcGameRoot": "D:\\Games\\Titanfall2",
   "ps4GameRoot": "D:\\PS4\\ShadPS4\\CUSA04013",
   "northstarModsRoot": "D:\\Games\\Titanfall2\\R2Northstar\\mods",

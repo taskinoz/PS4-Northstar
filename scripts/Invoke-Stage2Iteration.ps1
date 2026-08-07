@@ -18,7 +18,8 @@ param(
     [switch]$EnableM6ModMetadata,
     [switch]$EnableM6Scripts,
     [switch]$EnableM6ScriptProbe,
-    [switch]$EnableM6ScriptInject
+    [switch]$EnableM6ScriptInject,
+    [switch]$EnableM6ScriptInjectFromMods
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,7 +40,7 @@ foreach ($required in @($ShadPs4Exe, $eboot)) {
 }
 
 if (-not $SkipBuild) {
-    & (Join-Path $PSScriptRoot 'Build-Stage2Poc.ps1') -EnableDiagnosticConVar:$EnableDiagnosticConVar -EnableTeamChangesConVar:$EnableTeamChangesConVar -EnableDiagnosticUiNative:$EnableDiagnosticUiNative -EnableM6FsOverlay:$EnableM6FsOverlay -EnableM6ModMetadata:$EnableM6ModMetadata -EnableM6ScriptProbe:$EnableM6ScriptProbe -EnableM6ScriptInject:$EnableM6ScriptInject
+    & (Join-Path $PSScriptRoot 'Build-Stage2Poc.ps1') -EnableDiagnosticConVar:$EnableDiagnosticConVar -EnableTeamChangesConVar:$EnableTeamChangesConVar -EnableDiagnosticUiNative:$EnableDiagnosticUiNative -EnableM6FsOverlay:$EnableM6FsOverlay -EnableM6ModMetadata:$EnableM6ModMetadata -EnableM6ScriptProbe:$EnableM6ScriptProbe -EnableM6ScriptInject:$EnableM6ScriptInject -EnableM6ScriptInjectFromMods:$EnableM6ScriptInjectFromMods
     if (-not $?) { throw 'Stage 2 build failed.' }
 }
 if (-not $SkipDeploy) {

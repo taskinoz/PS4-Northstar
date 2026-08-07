@@ -2,7 +2,7 @@
 
 This is the detailed, chronological technical log behind the native runtime port: exact hashes, virtual addresses, byte preimages, run IDs, and the reasoning behind each fix. For current status and what to do next, start at [GOALS.md](GOALS.md) instead — this file is the evidence trail, not the status tracker. Section headings below still say "Milestone N" / "Stage 1" in places; read those as historical labels (they map onto the Goals in GOALS.md) rather than an active framing.
 
-Last verified: 2026-08-07, Titanfall 2 PS4 CUSA04013, build Titanfall2_v2_0_11_0, running under shadPS4.
+Last verified: 2026-08-07, Titanfall 2 PS4 CUSA04013, PS4 build `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM` (PC counterpart `Titanfall2_v2_0_11_0`), running under shadPS4.
 
 ## Current result
 
@@ -532,4 +532,73 @@ it and whether that call site can be reached safely (read-only trace first,
 per the safety rules below), or whether `CompileList` plus a native-closure
 callback (the mechanism verified working in Milestone 5) is the more
 practical path for now.
+
+### Wiring mod `Scripts[]` into `CompileList` (2026-08-07)
+
+`ModInfo` (`native/stage2/src/runtime.cpp`) now stores each mod's actual
+`Scripts[]` entries whose `RunOn` is exactly `"UI"` (`ModInfo::uiScripts`),
+not just a count. `ProbeModMetadata` collects them, mod by mod, into a shared
+static buffer (`gCollectedUiScripts`/`gCollectedUiScriptCount`, declared
+where both `NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA` and
+`NORTHSTAR_PS4_ENABLE_M6_SCRIPT_INJECT` are defined) that `ProbeUiScriptSystem`
+reads later in the same boot. `InitScript` is collected first per mod, ahead
+of that mod's other UI scripts, because it can declare types the other
+scripts reference (see below).
+
+**This collection is always safe and always runs** when both flags above are
+set — it only copies strings and logs (`M6 script inject: N mod UI script(s)
+collected`). **Actually compiling the collected list through `CompileList` is
+a separate, additionally-gated experiment** behind
+`-EnableM6ScriptInjectFromMods` (`NORTHSTAR_PS4_ENABLE_M6_SCRIPT_INJECT_FROM_MODS`),
+because it does not yet work safely:
+
+- `cl_northstar_client_init.nut` (Northstar.Client's `InitScript`) alone
+  compiles cleanly via `CompileList` (`before=152 after=153`, run
+  `20260807-154149`).
+- Adding `ui/menu_ns_modmenu.nut` (RunOn `"UI"`, the mod-list UI panel) to the
+  **same** call — just those two files — reproducibly crashes with a *real*
+  (non-null) faulting address, not the null-vtable case the `CompileList`
+  gate already handles. Reproduced twice (runs `20260807-153420` with 16
+  files and `20260807-154245` isolated to these exact 2 files); both crashed
+  at the identical VA offset from `client.prx`'s base (`0x861269` in the
+  second run — the process differed by exactly the client base shift between
+  runs).
+- Static disassembly of client VA `0x861269` (in `client.prx`, hash
+  `abc6efd2125a2a58d32ad9d23d245a03fd3213a763e407712a575f0bc04e879b`):
+
+      0x86124b: mov rax, [r15+0x2d8]
+      0x861252: mov ecx, [rsi+0x40c0]
+      0x861258: mov rax, [rax+0x50]        ; matches the known uiVm->internal-VM +0x50 pattern
+      0x86125c: mov rbx, [rax+0x40a0]      ; a VM-internal table this project has not seen before
+      0x861263: mov eax, [rsi+0x40c4]
+      0x861269: mov r13d, [rbx+0x38]       ; <== faults: rbx is invalid
+
+  `rax+0x50` matches the already-verified `uiVmToSqVmOffset` pattern
+  (`config/stage2-offsets-CUSA04013.json`), so this is operating on the same
+  internal Squirrel VM object the M5 UI-native work uses — but reading a
+  *different* internal table, at offset `0x40a0`, that has not been profiled.
+  `menu_ns_modmenu.nut` uses `ModInfo` (declared in the `InitScript`) as a
+  **typed function parameter**; the leading hypothesis is that this crash
+  site is a type/struct-registry lookup for that typed parameter, and
+  whatever populates `internal_vm+0x40a0` for the engine's own boot-time
+  compile pass has not been (and perhaps cannot be, this late) reproduced by
+  our late injection.
+- The default combined build (`-EnableM6ModMetadata -EnableM6ScriptProbe
+  -EnableM6ScriptInject`, **without** `-EnableM6ScriptInjectFromMods`) was
+  re-verified safe after adding this gate: it collects and logs 16 mod UI
+  scripts, explicitly declines to inject them, and falls back to the original
+  harmless `ns_m6_probe.gnut` probe (`before=152 after=153`, no crash, run
+  `20260807-154746`). The default inert PRX
+  (SHA-256 `b550e64ff8b782fe837f0dfd1aa613146c77ff3342591999f2fe2418c8b6a2ad`)
+  was restored and boot re-verified clean afterward (run
+  `20260807-154833`).
+
+**Do not enable `-EnableM6ScriptInjectFromMods`** outside a deliberate,
+isolated experiment until `internal_vm+0x40a0` is understood — it is known to
+crash on at least one real mod script. Next step: profile that table the same
+way `t40d0`/`t4120`/`t41b0` were profiled for Milestone 5 (dump its layout
+when the engine's own boot-time compile populates it, before attempting to
+read it from an injected compile), or find a mod UI script with no typed
+struct/class parameters to test whether the crash is specific to typed
+parameters or to something else `menu_ns_modmenu.nut` does.
 

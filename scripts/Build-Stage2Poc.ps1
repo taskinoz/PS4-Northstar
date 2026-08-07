@@ -8,7 +8,8 @@ param(
     [switch] $EnableM6FsOverlay,
     [switch] $EnableM6ModMetadata,
     [switch] $EnableM6ScriptProbe,
-    [switch] $EnableM6ScriptInject
+    [switch] $EnableM6ScriptInject,
+    [switch] $EnableM6ScriptInjectFromMods
 )
 $ErrorActionPreference = 'Stop'
 $toolchainRoot = [IO.Path]::GetFullPath($Toolchain)
@@ -53,6 +54,16 @@ if ($EnableM6ScriptProbe) {
 }
 if ($EnableM6ScriptInject) {
     $runtimeCompileArgs = @('-DNORTHSTAR_PS4_ENABLE_M6_SCRIPT_INJECT=1') + $runtimeCompileArgs
+}
+if ($EnableM6ScriptInjectFromMods) {
+    # EXPERIMENTAL and separately gated: known to crash compiling at least one
+    # real mod UI script (ui/menu_ns_modmenu.nut, a real-address fault inside
+    # client.prx, not the null-vtable case CompileList is otherwise gated
+    # against). Requires -EnableM6ModMetadata -EnableM6ScriptProbe
+    # -EnableM6ScriptInject too. See docs/TECHNICAL-NOTES.md and
+    # docs/GOALS.md (Goal 6) before enabling this outside a deliberate,
+    # isolated experiment.
+    $runtimeCompileArgs = @('-DNORTHSTAR_PS4_ENABLE_M6_SCRIPT_INJECT_FROM_MODS=1') + $runtimeCompileArgs
 }
 & $clang @runtimeCompileArgs
 if ($LASTEXITCODE) { throw "OpenOrbis runtime compile failed: $LASTEXITCODE" }
