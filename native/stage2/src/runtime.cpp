@@ -1110,7 +1110,9 @@ void ProbeCvarInterface(
     void* svCheats = findVar(cvar, "sv_cheats");
     LogFormat("[NorthstarPS4] cvar probe vtable=%p FindVar[16]=%p sv_cheats=%p\n",
         vtable, vtable[16], svCheats);
-#if defined(NORTHSTAR_PS4_ENABLE_DIAGNOSTIC_CONVAR) || defined(NORTHSTAR_PS4_ENABLE_TEAM_CHANGES_CONVAR)
+    // Always validated and resolved now: ns_allow_team_change and
+    // ns_has_agreed_to_send_token below are unconditional, proven-required
+    // registrations, not just the diagnostic/experimental ones.
     const bool constructorMatches = ValidateEnginePreimage(
         engineBase, engineSize, kConVarConstructorVa, kConVarConstructorPreimage,
         sizeof(kConVarConstructorPreimage));
@@ -1129,7 +1131,6 @@ void ProbeCvarInterface(
         void*, const char*, const char*, int, const char*, void*);
     auto constructor = reinterpret_cast<ConVarConstructorFn>(
         engineBase + kConVarConstructorVa);
-#endif
 
 #if defined(NORTHSTAR_PS4_ENABLE_DIAGNOSTIC_CONVAR)
     alignas(16) static std::uint8_t diagnosticConVar[0x90]{};
@@ -1145,20 +1146,62 @@ void ProbeCvarInterface(
     LogFormat("[NorthstarPS4] diagnostic convar disabled at build time\n");
 #endif
 
-#if defined(NORTHSTAR_PS4_ENABLE_TEAM_CHANGES_CONVAR)
+    // ns_allow_team_change and ns_has_agreed_to_send_token are always
+    // registered (not build-flag-gated) because they are proven-required
+    // for basic UI functionality, not experimental: the shipped
+    // ui/menu_ingame.nut and ui/menu_main.nut / ui/panel_mainmenu.nut
+    // unconditionally call GetConVarBool()/GetConVarInt() on these, and the
+    // engine throws a blocking "[UI] ConVar ... is not valid" dialog when
+    // either is missing. Confirmed live 2026-08-07 (first
+    // ns_allow_team_change, then ns_has_agreed_to_send_token) while testing
+    // a real server connection -- see docs/GOALS.md Goal 8 and
+    // docs/TECHNICAL-NOTES.md. `-EnableTeamChangesConVar` is kept as an
+    // accepted but now-redundant build flag for compatibility with existing
+    // scripts/docs.
     alignas(16) static std::uint8_t teamChangesConVar[0x90]{};
-    void* teamChangesRegistered = findVar(cvar, "ns_allow_team_changes");
+    void* teamChangesRegistered = findVar(cvar, "ns_allow_team_change");
     if (teamChangesRegistered == nullptr) {
-        constructor(teamChangesConVar, "ns_allow_team_changes", "0", 0,
+        constructor(teamChangesConVar, "ns_allow_team_change", "0", 0,
             "Allow players to change teams", nullptr);
-        teamChangesRegistered = findVar(cvar, "ns_allow_team_changes");
+        teamChangesRegistered = findVar(cvar, "ns_allow_team_change");
     }
     LogFormat("[NorthstarPS4] team changes convar registration result=%p expected=%p success=%d default=0 flags=0\n",
         teamChangesRegistered, teamChangesConVar,
         teamChangesRegistered == teamChangesConVar ? 1 : 0);
-#else
-    LogFormat("[NorthstarPS4] team changes convar disabled at build time\n");
-#endif
+
+    // ns_has_agreed_to_send_token: NorthstarLauncher registers this as an
+    // int ConVar with string default "0" (== NOT_DECIDED_TO_SEND_TOKEN in
+    // its client/clientauthhooks.cpp; 1 == agreed, 2 == disagreed), flag
+    // FCVAR_ARCHIVE_PLAYERPROFILE on PC. Registered here with flags=0 until
+    // PS4 flag-bit semantics are verified, matching the existing mod-convar
+    // convention (see ProbeModMetadata's ARCHIVE_PLAYERPROFILE note).
+    //
+    // PS4-only default override (2026-08-07): defaulted to "1"
+    // (NS_AGREED_TO_SEND_TOKEN) instead of upstream's "0". Live testing
+    // showed ui/menu_main.nut's NorthstarMasterServerAuthDialog(), the
+    // dialog shown when this convar is unset, does not respond to any
+    // keyboard, mouse, or controller input on this port (confirmed: no
+    // hover/click/keypress reaches it at all, including the native
+    // toggleconsole bind that is otherwise input-independent of the UI
+    // focus system) -- so the dialog is a hard blocker with no way to
+    // dismiss it. Pre-agreeing here skips the dialog entirely (see
+    // menu_main.nut's `if ( !GetConVarBool( "ns_has_agreed_to_send_token" ) )
+    // NorthstarMasterServerAuthDialog()` gate) so players can get past the
+    // main menu. The underlying dialog-input bug is still open -- see
+    // docs/TECHNICAL-NOTES.md -- and this default should be revisited once
+    // that's fixed, since it silently opts every player in to sending their
+    // origin token to the Northstar masterserver without asking.
+    alignas(16) static std::uint8_t agreedToSendTokenConVar[0x90]{};
+    void* agreedToSendTokenRegistered = findVar(cvar, "ns_has_agreed_to_send_token");
+    if (agreedToSendTokenRegistered == nullptr) {
+        constructor(agreedToSendTokenConVar, "ns_has_agreed_to_send_token", "1", 0,
+            "whether the user has agreed to send their origin token to the northstar masterserver",
+            nullptr);
+        agreedToSendTokenRegistered = findVar(cvar, "ns_has_agreed_to_send_token");
+    }
+    LogFormat("[NorthstarPS4] ns_has_agreed_to_send_token convar registration result=%p expected=%p success=%d default=1 flags=0\n",
+        agreedToSendTokenRegistered, agreedToSendTokenConVar,
+        agreedToSendTokenRegistered == agreedToSendTokenConVar ? 1 : 0);
 
 #if defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
     ProbeModMetadata(cvar, findVar, engineBase, engineSize);

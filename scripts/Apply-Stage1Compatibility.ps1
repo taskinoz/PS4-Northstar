@@ -71,7 +71,7 @@ $panelMainMenuUpdated = [regex]::Replace(
 $panelMainMenuUpdated = [regex]::Replace(
     $panelMainMenuUpdated,
     '(?ms)void function OnPlayNSButton_Activate\( var button \)\r?\n\{.*?(?=void function CancelNSLocalAuth\(\))',
-    "void function OnPlayNSButton_Activate( var button )`n{`n`tif ( !Hud_IsLocked( button ) )`n`t`tAdvanceMenu( GetMenu( `"DirectConnectMenu`" ) )`n}`n`n"
+    "void function OnPlayNSButton_Activate( var button )`n{`n`tif ( !Hud_IsLocked( button ) )`n`t`tAdvanceMenu( GetMenu( `"DirectConnectMenu`" ) )`n}`n`nvoid function OnDirectConnectButton_Activate( var button )`n{`n`tif ( !Hud_IsLocked( button ) )`n`t`tAdvanceMenu( GetMenu( `"DirectConnectMenu`" ) )`n}`n`n"
 )
 $panelMainMenuUpdated = [regex]::Replace(
     $panelMainMenuUpdated,

@@ -857,3 +857,266 @@ non-trivial reverse-engineering task (locate candidate functions, verify
 with hash-locked preimages, prove the calling convention with a harmless
 command before attempting `connect`) that hasn't been started.
 
+### The user drove it manually: two missing Northstar ConVars found and fixed (2026-08-07)
+
+With (a) above — the user has direct interactive access to the shadPS4
+window and can drive the in-game direct-connect menu by hand, which this
+project's own tooling cannot do. This unblocked real testing immediately.
+
+**First attempt** hit a blocking UI dialog: `ui/menu_ingame.nut #699 [UI]
+ConVar ns_allow_team_change is not valid`. Reaching `menu_ingame.nut` (the
+in-game/pause menu) at all is itself a good sign — it means the connection
+attempt got past the main menu and direct-connect flow into an actual game
+session. Checked the exact source directly: `grep`ping
+`work/stage1/sparse/frontend/scripts/vscripts/ui/menu_ingame.nut:699` shows
+`Hud_SetLocked( button, !GetConVarBool( "ns_allow_team_change" ) )` — **the
+real shipped script uses the singular `ns_allow_team_change`**, not the
+plural `ns_allow_team_changes` this project had been registering (a
+carry-over guess from a legacy identifier no longer present in current
+NorthstarLauncher source — see the original registration note above). Fixed
+the name in `native/stage2/src/runtime.cpp` (`replace_all` across the whole
+file; verified via `grep` beforehand that the misspelled string appeared
+nowhere else).
+
+**Second attempt** (after rebuilding/redeploying with the corrected name)
+hit a second, different dialog: `ui/menu_main.nut #102 [UI] ConVar
+ns_has_agreed_to_send_token is not valid`. To avoid another round-trip, did
+a systematic sweep instead of fixing one-by-one: extracted every
+`GetConVar(Bool|Int|Float|String)("...")` call across all of
+`work/stage1/sparse` (the actual shipped script content, not assumptions),
+cross-referenced the `ns_`-prefixed subset (Northstar's own naming
+convention — the only ones actually missing so far) against (a) the 18
+ConVars already registered from `Northstar.Client`/`Northstar.Custom`
+`mod.json`, and (b) NorthstarLauncher's natively-registered ConVars
+(`grep -rn 'new ConVar('` across `tools/NorthstarLauncher-reference`, since
+this project's own runtime.cpp only ports a couple of these). Every
+`ns_`-prefixed name shipped in this build's UI content was already covered
+**except** `ns_has_agreed_to_send_token` — confirmed against
+`primedev/client/clientauthhooks.cpp`: an int ConVar, default `"0"`
+(`NOT_DECIDED_TO_SEND_TOKEN`; `1`=agreed, `2`=disagreed),
+`FCVAR_ARCHIVE_PLAYERPROFILE` on PC. One more `ns_`-prefixed reference,
+`ns_auth_allow_insecure` in `ui/atlas_auth.nut`, was checked and found
+**not** currently reachable: `AtlasAuthDialog()` (the only caller) has no
+call site anywhere in `work/stage1/sparse` — Stage 1's compatibility patch
+already keeps this Northstar-native-auth-dependent code path unreached, so
+it doesn't need a registration yet.
+
+**Fix:** both `ns_allow_team_change` and `ns_has_agreed_to_send_token` are
+now registered **unconditionally** in `runtime.cpp` — no longer gated behind
+`-EnableTeamChangesConVar`/experimental flags, because live testing proved
+them required for basic UI functionality (a blocking error dialog without
+them), not experimental. The `constructor`/preimage-gate variables they both
+depend on were promoted out of their old `#if defined(...)` guard to match
+(previously only compiled when a diagnostic/experimental flag was set).
+`-EnableTeamChangesConVar` is still accepted as a build flag for backward
+compatibility but is now a no-op. Verified: default build (no flags) now
+registers both with `success=1`
+(`[NorthstarPS4] team changes convar registration ... success=1`,
+`[NorthstarPS4] ns_has_agreed_to_send_token convar registration ...
+success=1`) and boots clean to the main menu. New default inert PRX
+SHA-256 `89eedb52fb85a9cee9cf71392d70c3cd46c0326191895cfb3629d4184fc2f981`
+(87,584 B).
+
+**Also fixed in passing:** while investigating, found the currently
+installed VPKs no longer matched this project's expected Stage 1 build (the
+user had separately tested VPK modding and restored some files, which
+turned out to be a source of the very Squirrel errors being chased —
+running with genuinely vanilla, unpatched frontend scripts reproduces
+exactly this class of "missing Northstar ConVar/API" error, which is
+precisely what the Stage 1 compatibility patch exists to avoid). Rebuilt and
+redeployed the correct Stage 1 VPKs via the existing
+`Build-AndDeployStage1Vpks.ps1` pipeline; all 6 hashes now match
+`dist/stage1-sparse/manifest.csv` again.
+
+
+## Dialog UI accepts zero input; worked around by pre-agreeing the token dialog (2026-08-07)
+
+After the `ns_allow_team_change`/`ns_has_agreed_to_send_token` ConVar fixes
+above got the user past both blocking-error dialogs, the user drove the
+in-game menu (real hardware input to the shadPS4 window, no automation
+tooling — same manual-driving arrangement as before) and reached
+`NorthstarMasterServerAuthDialog()` — the "Yes"/"No" consent dialog
+`ui/menu_main.nut` opens on first boot when `ns_has_agreed_to_send_token`
+is unset. No input of any kind advanced it:
+
+- Arrow keys, WASD, `B`/`N` (shadPS4's default keyboard-to-pad mapping:
+  `b`→circle, `n`→cross, `w/a/s/d`→left-stick axes, arrows→dpad, per
+  `%APPDATA%/shadPS4/input_config/default.ini`) — no response.
+- Real controller circle/cross — no response.
+- Mouse hover over the buttons (no highlight) and mouse click — no response.
+- The `` ` `` (backtick) key, bound to `toggleconsole` via
+  `autoexec_ns_client.cfg`'s `exec` — no response either.
+
+That last check was the important one: `toggleconsole` is not a
+Northstar-PC-only feature that would need native reimplementation on PS4
+(there is no `RegisterConCommand`/`toggleconsole` anywhere in
+`native/stage2/src/runtime.cpp`, confirmed by grep) — it's a genuine
+engine-native binding. `work/stage1/extracted/frontend/cfg/config_default_console.cfg`
+(the platform-console/`CONSOLE_PROG` default bind file, unmodified, not a
+Stage 1 patch) contains the exact same `bind "`" "toggleconsole"` plus
+`bind "START" "ingamemenu_activate"` — i.e. this is the stock retail
+binding for console builds, and it not firing means **no bound input
+command was executing at all**, not merely a UI-focus problem local to the
+dialog.
+
+Traced the whole dialog/focus call chain to rule out a script-level fix
+before concluding this needs native/live investigation:
+
+- `ui/menu_main.nut`'s `NorthstarMasterServerAuthDialog()` uses the same
+  generic `DialogData`/`AddDialogButton`/`OpenDialog` API as every other
+  dialog in the game (leave-match confirm, connecting dialog, generic
+  server-callback dialogs, etc.) — defined in
+  `work/stage1/extracted/frontend/scripts/vscripts/ui/menu_dialog.nut`.
+- Diffed `menu_dialog.nut`, `_menus.nut`, and
+  `resource/ui/menus/dialog.menu` against `work/stage1/extracted` (the
+  unmodified retail baseline): **byte-identical**. None of these are Stage 1
+  patch targets — this is 100% vanilla code, unmodified since the PC-derived
+  original.
+- `dialog.menu` already has correct `tabPosition`/nav wiring: `Button0` has
+  `tabPosition 1`, and `Button0`–`Button3` all have `navUp`/`navDown` wired
+  to each other in a ring — this is the same lead the user used to fix an
+  analogous issue in their separate Direct-Connect-Menu mod (a from-scratch
+  custom `.menu` file that had *no* `tabPosition` anywhere, so the engine's
+  focus-picker had nothing to grab). Here the target already exists and is
+  already tagged, so adding `tabPosition` isn't an available fix.
+- `OpenDialog()` → `AdvanceMenu(menu)` → `OpenMenuWrapper(menu, true)` →
+  `FocusDefault(menu)` → `FocusDefaultMenuItem(menu)`. `FocusDefaultMenuItem`
+  has **no Squirrel definition anywhere** in the extracted script tree
+  (confirmed by grep) — it's a native (C++) engine call baked into
+  `client.prx`, presumably the thing that actually reads `tabPosition` and
+  calls `Hud_SetFocused` to establish initial input focus.
+- Ruled out a theory that `ActivatePanel()` (in `menu_main.nut`'s
+  `OnMainMenu_Open`, called on the underlying `MainMenuPanel` right after
+  the dialog opens, since PS4 isn't `PC_PROG` and falls into the
+  sign-in-state polling loop instead of returning immediately like PC does)
+  steals focus back from the dialog: `ShowPanel`/`HidePanel`
+  (`_tabs.nut`) only call `Hud_Show`/`Hud_Hide` plus an optional
+  `showFunc`/`hideFunc` thread — no focus calls at all. Not the cause.
+
+Conclusion: this is either (a) a native engine input-focus bug specific to
+this PS4 port (`FocusDefaultMenuItem`/`Hud_SetFocused` not working, or not
+being reached), or (b) input events genuinely aren't reaching the engine's
+command/bind-processing layer at all yet (shadPS4 pad/keyboard HLE, or a
+missing native init step). Distinguishing these needs a live cdb session
+breaking on the engine's input-polling and `FocusDefaultMenuItem`-equivalent
+functions — not yet done. This is the first interactive menu screen this
+project has ever reached (the dialog opens automatically at boot, before
+any player-driven navigation), so there's no prior evidence either way about
+whether UI input works at all on this port.
+
+**Workaround shipped, not a fix:** since this blocks all forward progress
+and the real fix needs a separate live-debugging investigation,
+`ns_has_agreed_to_send_token`'s registered default in `runtime.cpp` was
+changed from `"0"` (`NOT_DECIDED_TO_SEND_TOKEN`) to `"1"`
+(`NS_AGREED_TO_SEND_TOKEN`), so `menu_main.nut`'s
+`if ( !GetConVarBool( "ns_has_agreed_to_send_token" ) )
+NorthstarMasterServerAuthDialog()` gate is never true and the dialog never
+opens. New default inert PRX SHA-256
+`75582481bce8946f6a3d4fdbe61537953bfb7295729b1e83e91abfc34eb67c71`
+(87,584 B — same size as the prior build, single default-string byte
+changed). This is a real product trade-off, not just a testing shortcut:
+it silently opts every player in to sending their origin token to the
+Northstar masterserver, with no chance to decline. Acceptable to unblock
+testing now; must be revisited once the dialog-input bug has an actual fix,
+at which point this default should go back to `"0"`.
+
+**Still open and now higher priority:** the underlying dialog-input bug is
+unfixed and will block the *next* dialog the player reaches too (leave-match
+confirm, connecting-dialog cancel, any error dialog) — the workaround here
+only covers this one specific ConVar-gated dialog by preventing it from ever
+opening, it does not fix dialogs in general.
+
+## DirectConnectMenu registration crash, new main-menu button, and mod scaffold (2026-08-07)
+
+With the auth dialog worked around (see above), the user clicked "Launch
+Northstar" on the main menu and hit a new fatal error:
+
+```
+ui/_menus.nut #874
+[UI] The index "DirectConnectMenu" does not exist
+```
+
+**Root cause:** an earlier session had already added a working direct-connect
+UI flow to the Stage 1 sparse patch -- `menu_direct_connect.nut`
+(`InitDirectConnectMenu`, a `ConnectButton` handler that runs
+`connect <ip:port>`), `resource/ui/menus/direct_connect.menu` (the resource
+file, already has `tabPosition 1` on its text entry), and the "Launch
+Northstar" button's `OnPlayNSButton_Activate` in `panel_mainmenu.nut`
+already called `AdvanceMenu( GetMenu( "DirectConnectMenu" ) )` -- but nobody
+ever added the corresponding `AddMenu( "DirectConnectMenu", ... )` call to
+`_menus.nut`'s `InitMenus()`. Every other menu in the game is registered
+there (`AddMenu( "MainMenu", ... )`, `AddMenu( "LobbyMenu", ... )`, etc.);
+`GetMenu()` (`_menus.nut:872-875`) just indexes `uiGlobal.menus[ menuName ]`,
+so an unregistered name is a hard Squirrel index-not-found error, not a
+soft null. This was presumably always broken and only surfaced now because
+this is the first time input has worked well enough to actually click the
+button (the dialog-input investigation above happened first).
+
+**Fix:** added `AddMenu( "DirectConnectMenu", $"resource/ui/menus/direct_connect.menu", InitDirectConnectMenu )`
+to `work/stage1/sparse/frontend/scripts/vscripts/ui/_menus.nut`'s
+`InitMenus()`, right after the `MainMenu`/`EstablishUserPanel`/`MainMenuPanel`
+block.
+
+**Also added, per user request:** a second, standalone "Direct Connect"
+button next to "Launch Northstar" in `panel_mainmenu.nut` (`file.directConnectButton`,
+`OnDirectConnectButton_Activate`), rather than only reachable through the
+Northstar button, plus a new `MENU_DIRECT_CONNECT` = "Direct Connect" key
+added to `resource/northstar_client_localisation_english.txt` for its label
+(English only -- the other 11 language files were left untouched). That
+localisation file is UTF-16 LE with a BOM (confirmed via `xxd`); edited with
+a small Python script (`io.open(..., encoding='utf-16-le')`) rather than the
+normal text-edit tools, to avoid corrupting the encoding -- a plain-text
+edit through a tool that assumes UTF-8 would have silently mangled every
+multi-byte character in the file.
+
+Rebuilt and redeployed via `Build-AndDeployStage1Vpks.ps1`; all 6 VPK
+hashes re-verified against `dist/stage1-sparse/manifest.csv`.
+
+### Mod scaffold: `Northstar.DirectConnect`
+
+Per user request ("re-write it as a northstar mod"), also built a proper
+Northstar-mod-shaped version of the menu logic at
+`work/stage1/loose/Northstar.DirectConnect/` (mirroring the
+`Northstar.Client`/`Northstar.Custom` loose-mod layout already deployed to
+`D:\PS4\ShadPS4\CUSA04013\mods\`):
+
+- `mod.json`: one script entry, `ui/menu_direct_connect.nut`, `RunOn: "UI"`,
+  `UICallback.Before: "AddDirectConnectMenu"` -- the same convention
+  `Northstar.Client` already uses for `ConnectWithPasswordMenu`
+  (`menu_ns_connect_password.nut`) and `ModListMenu` (`menu_ns_modmenu.nut`):
+  the mod's own `AddDirectConnectMenu()` function calls `AddMenu(...)`
+  itself, since that's a global function any script can call, rather than
+  needing to patch core `_menus.nut`.
+- `scripts/vscripts/ui/menu_direct_connect.nut`: same `InitDirectConnectMenu`/
+  `ConnectButton_Activate` logic as the Stage 1 patch version, plus the new
+  `AddDirectConnectMenu()` entry point.
+- `resource/ui/menus/direct_connect.menu`: identical copy of the working
+  resource file.
+
+Deployed to `D:\PS4\ShadPS4\CUSA04013\mods\Northstar.DirectConnect\` so
+Goal 5's mod-metadata discovery can see it (should bring the discovered-mod
+count from 2 to 3).
+
+**Important: this mod is inert by default and does NOT replace the Stage 1
+patch fix above.** Goal 6 (runtime mod script loading) is still gated behind
+`-EnableM6ScriptInjectFromMods`, off by default, specifically because it's
+unproven/risky for scripts with typed struct parameters (see the
+`menu_ns_modmenu.nut`/`ModInfo` crash investigation). `menu_direct_connect.nut`
+has no typed struct parameters, so it's a plausible low-risk candidate to
+actually test that flag against -- but that hasn't been done. **If mod
+script injection is ever enabled with both this mod and the Stage 1 patch's
+`_menus.nut` registration active at the same time, `AddMenu("DirectConnectMenu", ...)`
+would be called twice and likely crash/assert** -- whichever path is
+adopted long-term, the other one's registration needs to be removed first.
+This is the same static-patch-vs-mod tradeoff already tracked as open in
+GOALS.md's "Immediate next steps" item 6.
+
+The "Direct Connect" main-menu button itself (`panel_mainmenu.nut`) was
+**not** moved into the mod -- it reaches into `panel_mainmenu.nut`'s private
+`file` struct and its dynamically-built combo-button list, which isn't
+something an independent mod script can hook into without a `Before`/`After`
+callback wrapping `InitMainMenuPanel` itself (Northstar.Client doesn't do
+this for its own menu entries either; it uses `AddMenuFooterOption` instead,
+e.g. the Mods list's Y-button footer option). The button stays in the Stage 1
+patch; only the menu-opening logic behind it was duplicated into the mod
+scaffold.
