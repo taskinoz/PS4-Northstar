@@ -4,6 +4,7 @@
   "mods": [
     { "name": "Northstar.Client", "sourceSubdirectory": "Northstar.Client", "destinationSubdirectory": "Northstar.Client" },
     { "name": "Northstar.Custom", "sourceSubdirectory": "Northstar.Custom", "destinationSubdirectory": "Northstar.Custom" },
-    { "name": "Northstar.DirectConnect", "sourceRoot": "mods", "sourceSubdirectory": "Northstar.DirectConnect", "destinationSubdirectory": "Northstar.DirectConnect" }
+    { "name": "Northstar.DirectConnect", "sourceRoot": "mods", "sourceSubdirectory": "Northstar.DirectConnect", "destinationSubdirectory": "Northstar.DirectConnect" },
+    { "name": "Northstar.PS4", "sourceRoot": "mods", "sourceSubdirectory": "Northstar.PS4", "destinationSubdirectory": "Northstar.PS4" }
   ]
 }

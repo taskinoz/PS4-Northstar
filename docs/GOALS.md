@@ -108,7 +108,7 @@ Native mod `Localisation[]` loading through the game's own localize.prx `AddFile
 
 ## Superseded / removed tooling
 
-- `scripts/New-Stage2Workspace.ps1` (removed 2026-08-07): an early standalone tool that hashed `launcher.prx`/`engine.prx`/`client.prx` into a JSON inventory file. No script or doc ever called it — it was superseded by the live module tracker in `native/stage2/src/runtime.cpp` (which resolves the same modules at runtime) and by `scripts/New-Stage2R2Overlay.ps1` for staging. Kept only in git history.
+- `scripts/New-Stage2Workspace.ps1` (removed 2026-08-07): an early standalone tool that hashed `launcher.prx`/`engine.prx`/`client.prx` into a JSON inventory file. No script or doc ever called it — it was superseded by the live module tracker in `launcher/src/runtime.cpp` (which resolves the same modules at runtime) and by `scripts/New-Stage2R2Overlay.ps1` for staging. Kept only in git history.
 
 ## Machine-level tooling (not part of this repo)
 

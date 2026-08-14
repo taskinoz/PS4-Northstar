@@ -7,6 +7,7 @@
   "mods": [
     { "name": "Northstar.Client", "sourceSubdirectory": "Northstar.Client" },
     { "name": "Northstar.Custom", "sourceSubdirectory": "Northstar.Custom" },
-    { "name": "Northstar.DirectConnect", "sourceRoot": "mods", "sourceSubdirectory": "Northstar.DirectConnect" }
+    { "name": "Northstar.DirectConnect", "sourceRoot": "mods", "sourceSubdirectory": "Northstar.DirectConnect" },
+    { "name": "Northstar.PS4", "sourceRoot": "mods", "sourceSubdirectory": "Northstar.PS4" }
   ]
 }

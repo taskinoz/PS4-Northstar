@@ -15,7 +15,8 @@ This repository does not contain Titanfall 2, Northstar release binaries, extrac
 | [`docs/GOALS.md`](docs/GOALS.md) | Current status and next steps — read this first. |
 | [`docs/FOUNDATION.md`](docs/FOUNDATION.md) | The completed static VPK integration phase (Goal 0). |
 | [`docs/TECHNICAL-NOTES.md`](docs/TECHNICAL-NOTES.md) | The detailed native-port lab notebook: hashes, virtual addresses, byte preimages, run history. Read before changing any hash-locked code. |
-| `native/stage2/` | The native OpenOrbis PRX (`northstar_ps4.prx`) source. |
+| `launcher/` | The native OpenOrbis PRX (`northstar_ps4.prx`) source — the PS4 analog of PC Northstar's `NorthstarLauncher`. |
+| `mods/` | Northstar mods mirroring the PC mod layout (`mods/<Name>/mod.json` + `mod/`). `Northstar.Client`/`Northstar.Custom` stage straight from the PC install; PS4-port-specific mods (`Northstar.DirectConnect`, `Northstar.PS4`) live in the repo. |
 | `scripts/` | PowerShell automation: environment checks, VPK build/deploy, native PRX build/deploy/iteration, overlay staging. |
 | `config/` | Project configuration and hash-locked offset/manifest profiles. `config/local.json` (your machine's paths) is gitignored — copy it from `config/project.example.json`. |
 | `tools/` | External toolchains and reference clones, entirely gitignored except [`tools/README.md`](tools/README.md), which lists what each subfolder needs. |
@@ -37,9 +38,9 @@ The currently-installed game boots on top of VPKs patched by this pipeline — i
 .\scripts\Build-AndDeployStage1Vpks.ps1    # rebuild chunk 228 with RSPNVPK, back up, install, verify hashes
 ```
 
-## Native runtime port (Goals 1+, in progress)
+## Launcher (Goals 1+, in progress)
 
-A hash-locked eboot bootstrap loads `northstar_ps4.prx` before Titanfall's own modules under shadPS4; its initializer runs and Titanfall continues to the main menu. See [docs/GOALS.md](docs/GOALS.md) for what's done and what's next, and [docs/TECHNICAL-NOTES.md](docs/TECHNICAL-NOTES.md) before touching the bootstrap, linker script, or runtime discovery code.
+The PS4 launcher (`launcher/`) is the analog of PC Northstar's `NorthstarLauncher`: a hash-locked eboot bootstrap loads `northstar_ps4.prx` before Titanfall's own modules under shadPS4, its initializer runs, and Titanfall continues to the main menu. See [docs/GOALS.md](docs/GOALS.md) for what's done and what's next, and [docs/TECHNICAL-NOTES.md](docs/TECHNICAL-NOTES.md) before touching the bootstrap, linker script, or runtime discovery code.
 
 Build and redeploy the PRX:
 

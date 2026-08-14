@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 project(northstar_ps4 LANGUAGES C CXX)
 
 if(NOT DEFINED ENV{OO_PS4_TOOLCHAIN})
-    message(FATAL_ERROR "OO_PS4_TOOLCHAIN is not configured. Install the OpenOrbis PS4 toolchain and set OO_PS4_TOOLCHAIN before building Stage 2.")
+    message(FATAL_ERROR "OO_PS4_TOOLCHAIN is not configured. Install the OpenOrbis PS4 toolchain and set OO_PS4_TOOLCHAIN before building the launcher.")
 endif()
 
 add_library(northstar_ps4 MODULE src/module.cpp src/runtime.cpp)

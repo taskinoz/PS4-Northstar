@@ -138,7 +138,7 @@ The wrapper and path occupy zero-filled alignment space after the original RX se
 
 OpenOrbis v0.5.4's supplied link.x places .init_array correctly but does not define __init_array_start and __init_array_end. Its crtlib.o expects those names. Without a correction, module_start looks in empty BSS instead of calling C++ constructors.
 
-The project-local native/stage2/link.x defines:
+The project-local launcher/link.x defines:
 
     __init_array_start = .;
     KEEP(*(.init_array .init_array.*));
@@ -339,7 +339,7 @@ Staging tooling:
 - `scripts/New-Stage2R2Overlay.ps1` copies the selected loose files into `CUSA04013\r2\<relative-path>` and records what it staged in `r2\.ns_overlay_staged.json` so `-Clean` removes exactly those files (never the game's own r2 content).
 - 192 files staged (84 Northstar.Client + 108 Northstar.Custom), with a collision audit of 0 against the existing r2 content.
 
-Verification harness (`ProbeFilesystemInterface` in `native\stage2\src\runtime.cpp`, retained flag-guarded behind `-EnableM6FsOverlay`):
+Verification harness (`ProbeFilesystemInterface` in `launcher\src\runtime.cpp`, retained flag-guarded behind `-EnableM6FsOverlay`):
 
 - `sceKernelDlsym(filesystem_stdio.sprx, "CreateInterface")` → `"VFileSystem017"` returns the real IFileSystem; vtable at `fs+0`, vtable2 at `fs+8`; vtable2[0]=Read, [2]=Open, [3]=Close; calls use the address of the `fs+8` field as `this`.
 - In the verified run all four representative staged logical paths opened and read correctly through the GAME pathID, with shadPS4's kernel FS log confirming the resolved `/app0/r2/...` paths: `scripts/vscripts/cl_northstar_client_init.nut` (Client), `resource/northstar_client_localisation_english.txt` (Client), `cfg/autoexec_ns_client.cfg` (Client), `scripts/vscripts/_disallowed_tacticals.gnut` (Custom). Boot reached `module tracker complete engine=1 client=1`.
@@ -405,7 +405,7 @@ this point (152 real UI scripts had already compiled through the same
 `CompileList` by the time our probe's settle loop finished), so the null was
 in the vtable slot specifically, not the object pointer.
 
-**Fix and result.** `ProbeUiScriptSystem` in `native/stage2/src/runtime.cpp`
+**Fix and result.** `ProbeUiScriptSystem` in `launcher/src/runtime.cpp`
 now validates `CompileList`'s 16-byte prologue preimage
 (`kClientCompileListVa` / `kClientCompileListPreimage`) and walks
 `object -> vtable -> vtable[+0x58]` (`kClientCompileListGatePtrVa` = client VA
@@ -542,7 +542,7 @@ practical path for now.
 
 ### Wiring mod `Scripts[]` into `CompileList` (2026-08-07)
 
-`ModInfo` (`native/stage2/src/runtime.cpp`) now stores each mod's actual
+`ModInfo` (`launcher/src/runtime.cpp`) now stores each mod's actual
 `Scripts[]` entries whose `RunOn` is exactly `"UI"` (`ModInfo::uiScripts`),
 not just a count. `ProbeModMetadata` collects them, mod by mod, into a shared
 static buffer (`gCollectedUiScripts`/`gCollectedUiScriptCount`, declared
@@ -874,7 +874,7 @@ real shipped script uses the singular `ns_allow_team_change`**, not the
 plural `ns_allow_team_changes` this project had been registering (a
 carry-over guess from a legacy identifier no longer present in current
 NorthstarLauncher source — see the original registration note above). Fixed
-the name in `native/stage2/src/runtime.cpp` (`replace_all` across the whole
+the name in `launcher/src/runtime.cpp` (`replace_all` across the whole
 file; verified via `grep` beforehand that the misspelled string appeared
 nowhere else).
 
@@ -950,7 +950,7 @@ is unset. No input of any kind advanced it:
 That last check was the important one: `toggleconsole` is not a
 Northstar-PC-only feature that would need native reimplementation on PS4
 (there is no `RegisterConCommand`/`toggleconsole` anywhere in
-`native/stage2/src/runtime.cpp`, confirmed by grep) — it's a genuine
+`launcher/src/runtime.cpp`, confirmed by grep) — it's a genuine
 engine-native binding. `work/stage1/extracted/frontend/cfg/config_default_console.cfg`
 (the platform-console/`CONSOLE_PROG` default bind file, unmodified, not a
 Stage 1 patch) contains the exact same `bind "`" "toggleconsole"` plus
@@ -1154,7 +1154,7 @@ Two changes landed and were verified this session.
 
 ### Native localisation loading via localize.prx `AddFile` (verified end-to-end)
 
-Probe implemented in `native/stage2/src/runtime.cpp` (`ProbeLocaliseInterface`,
+Probe implemented in `launcher/src/runtime.cpp` (`ProbeLocaliseInterface`,
 gated on `-EnableM6Localise` + `-EnableM6ModMetadata`).
 
 localize.prx ABI findings (all file VAs; runtime = base + file VA):
