@@ -2,7 +2,7 @@
 
 This is the detailed, chronological technical log behind the native runtime port: exact hashes, virtual addresses, byte preimages, run IDs, and the reasoning behind each fix. For current status and what to do next, start at [GOALS.md](GOALS.md) instead — this file is the evidence trail, not the status tracker. Section headings below still say "Milestone N" / "Stage 1" in places; read those as historical labels (they map onto the Goals in GOALS.md) rather than an active framing.
 
-Last verified: 2026-08-07, Titanfall 2 PS4 CUSA04013, PS4 build `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM` (PC counterpart `Titanfall2_v2_0_11_0`), running under shadPS4.
+Last verified: 2026-08-14, Titanfall 2 PS4 CUSA04013, PS4 build `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM` (PC counterpart `Titanfall2_v2_0_11_0`), running under shadPS4.
 
 ## Current result
 
@@ -29,7 +29,7 @@ These hashes identify the only retail build supported by the current bootstrap.
 | launcher.prx | 0a866190c6dfa7e61555baed6b671ac15d271394731434589c91cfd0f28302e6 |
 | engine.prx | fa59636b1b5fa66fa936631457b47e49039b0cfbef29e783c2fd082ece3dae37 |
 | client.prx | abc6efd2125a2a58d32ad9d23d245a03fd3213a763e407712a575f0bc04e879b |
-| Current northstar_ps4.prx (default, inert) | f640b1dce71a36c90670434239ab74de5c7ec5de907fa3cf17a4f1e6922445b2 (2026-08-07; older hashes below reflect the default at the time each section was written) |
+| Current northstar_ps4.prx (default, inert) | f640b1dce71a36c90670434239ab74de5c7ec5de907fa3cf17a4f1e6922445b2 (2026-08-07; older hashes below reflect the default at the time each section was written). Localise-enabled build 2026-08-14: `9f03837a338c92741a27a400e71b539c39b5d33164f604ab192751a467d8fc11` (105,440 B, `-EnableM6Localise -EnableM6FsOverlay -EnableM6ModMetadata`) |
 
 Do not apply the eboot patch to any other hash. The script checks the retail hash and byte preimages before writing.
 
@@ -1120,3 +1120,91 @@ this for its own menu entries either; it uses `AddMenuFooterOption` instead,
 e.g. the Mods list's Y-button footer option). The button stays in the Stage 1
 patch; only the menu-opening logic behind it was duplicated into the mod
 scaffold.
+
+## Layout mirror + native localisation milestone (2026-08-14)
+
+Two changes landed and were verified this session.
+
+### Mod layout rework (mirror whole mod dir; r2 overlay from the `mod/` subdir)
+
+- `mods/Northstar.DirectConnect/` is now the canonical, PC-mirrored source for
+  the PS4-specific DirectConnect mod (repo-root `mods/` source root):
+  `mod/mod.json`, `mod/resource/ui/menus/direct_connect.menu`,
+  `mod/scripts/vscripts/ui/menu_direct_connect.nut`.
+- New shared helper `scripts/Resolve-ModSource.ps1` (
+  `Resolve-ModSourceRoot` / `Get-ModSourceDir` / `Get-ModJsonPath`) drives both
+  `New-Stage1Workspace.ps1` and `New-Stage2R2Overlay.ps1`.
+- Stage 2 overlay manifest (`config/stage2-overlay-manifest.json`) is now
+  version 2: `sourceSubdirectory` is the whole PC mod directory *without* its
+  trailing `\mod`, and `sourceRoot` is relative to the repo root (e.g.
+  `mods`). Two-step deploy: (1) mirror the entire PC mod dir into
+  `/app0/mods/<Name>/` (so `mod.json` sits at `mods/<Name>/mod.json` and the
+  r2 overlay source is `mods/<Name>/mod`), then (2) generate the r2 overlay
+  from the source `mod/` subdir. `exclude` is now `*.dll/*.exe/*.so/*.pdb`
+  (`*.json` is no longer excluded, so `mod.json` publishes into the mods root).
+- Stage 1 manifest (`config/stage1-manifest.json`) is version 2 with
+  `Northstar.DirectConnect` added; it uses `Resolve-ModSource.ps1` too.
+- Verified deploy: 194 staged files, 215 mods-mirror files, 4 metadata files.
+  DirectConnect now lands at `mods/Northstar.DirectConnect/mod.json` plus
+  `mod/...`, with r2 overlay entries
+  `r2/resource/ui/menus/direct_connect.menu` and
+  `r2/scripts/vscripts/ui/menu_direct_connect.nut`. `scripts.rson` regenerated
+  (83 blocks appended; 2 expected missing-file warnings for Northstar.Custom
+  gamemodes `sh_gamemode_fw.nut` / `cl_gamemode_fw.nut`).
+
+### Native localisation loading via localize.prx `AddFile` (verified end-to-end)
+
+Probe implemented in `native/stage2/src/runtime.cpp` (`ProbeLocaliseInterface`,
+gated on `-EnableM6Localise` + `-EnableM6ModMetadata`).
+
+localize.prx ABI findings (all file VAs; runtime = base + file VA):
+
+- `AddFile` at VA `0x5c60`, signature
+  `bool(void* this, const char* path, const char* pathId, bool includeFallbackSearchPaths)`.
+  Prologue preimage `55 48 89 e5 41 57 41 56 41 55 41 54 53 48 83 e4`.
+- Instance accessor at VA `0x4f90` (`48 8d 05 e9 82 01 00 c3` = `lea rax,[rip+0x182e9]; ret`)
+  returns `base + 0x1d280`.
+- The singleton **object** lives in `.bss` at `base + 0x1d280`; its first qword
+  is the **vptr**, installed by the module's own init code. The initial
+  read-only copy lives in the rodata segment (seg 1, file offset `0x1c000`):
+  the qword at file offset `0x1c010` is `0x5180`, relocated at runtime to
+  `base + 0x18010`.
+- The vtable is the relocated rodata table at `base + 0x18010`
+  (Itanium layout: `[-2]` offset-to-top `0`, `[-1]` typeinfo `0x18150`,
+  `[0]` first virtual `0x5180`). Slot 9 (`+0x48`) is `0x5c60` = **AddFile
+  itself**; `vtable[9]` is the call `AddFile` makes on its english-immediate
+  `%language%` fallback path (disassembly at `0x5e53`/`0x5e69`).
+- `this + 0x48` is the "fallback search enabled" field. When `0`, `AddFile`
+  takes the fallback path that dispatches through `vtable[9]` (i.e. calls
+  itself -- infinite recursion hazard). The probe therefore saves the byte,
+  forces it to `1` for the duration of its calls (taking the direct path via
+  `0x5f60`), and restores it afterwards.
+- Module-size trap: `sceKernelGetModuleInfo` `segmentInfo[0].size` is only the
+  first segment (localize seg 0 memsz `0x18000`), but the singleton/vtable lie
+  in later segments (`0x1d280` / `0x18010`); the span must be computed as
+  max end over all segments (`0x24000`). The probe now computes this the same
+  way the client span is computed. Without it, the first attempt refused the
+  instance as "out of range" and, after widening, read `*(vptr)` as the vptr
+  (double-deref bug) and rejected `vtable[9]` as out-of-module.
+
+Verified run `work/stage2/iterations/20260814-163721/` (deployed PRX SHA-256
+`9f03837a338c92741a27a400e71b539c39b5d33164f604ab192751a467d8fc11`,
+status success):
+
+    localise probe start handle=0x15 base=0x81d78c000 size=0x24000
+    localise gate addFile=1 accessor=1
+    localise singleton this=0x81d7a9280 vptr=0x81d7a4010 vtable[9]=0x81d791c60 this+0x48=0
+    localise Northstar.Client  file=resource/northstar_client_localisation_%language%.txt result=1
+    localise Northstar.Custom  file=resource/northstar_custom_%language%.txt result=1
+    localise self-test vanilla english result=1
+    localise probe complete files=2 loaded=2
+
+The stock deployed mods already declare `Localisation[]` in their `mod.json`
+(Northstar.Client: `resource/northstar_client_localisation_%language%.txt`;
+Northstar.Custom: `resource/northstar_custom_%language%.txt`), and both loaded
+natively through the game's real `AddFile`. `Northstar.DirectConnect` declares
+none. Localisation tokens were verified earlier to need no additions:
+`MENU_DIRECT_CONNECT` exists in neither the PC nor the deployed localisation,
+and the DirectConnect mod's UI script only references the vanilla `#BACK` /
+`#B_BUTTON_BACK` tokens (both present), so it hardcodes its "Direct Connect"
+label as-is.

@@ -1,0 +1,15 @@
+{
+  "Name": "Northstar.DirectConnect",
+  "Description": "Adds a Direct Connect menu (manual IP:port entry) to the main menu, for connecting to a Northstar server without Atlas/matchmaking support. PS4-port-specific: retail PS4 cannot execute loose .cfg files at boot, so a scripted UI entry point is the only way to trigger a 'connect' console command.",
+  "Version": "0.1.0",
+  "LoadPriority": 0,
+  "Scripts": [
+    {
+      "Path": "ui/menu_direct_connect.nut",
+      "RunOn": "UI",
+      "UICallback": {
+        "Before": "AddDirectConnectMenu"
+      }
+    }
+  ]
+}

@@ -9,7 +9,8 @@ param(
     [switch] $EnableM6ModMetadata,
     [switch] $EnableM6ScriptProbe,
     [switch] $EnableM6ScriptInject,
-    [switch] $EnableM6ScriptInjectFromMods
+    [switch] $EnableM6ScriptInjectFromMods,
+    [switch] $EnableM6Localise
 )
 $ErrorActionPreference = 'Stop'
 $toolchainRoot = [IO.Path]::GetFullPath($Toolchain)
@@ -64,6 +65,12 @@ if ($EnableM6ScriptInjectFromMods) {
     # docs/GOALS.md (Goal 6) before enabling this outside a deliberate,
     # isolated experiment.
     $runtimeCompileArgs = @('-DNORTHSTAR_PS4_ENABLE_M6_SCRIPT_INJECT_FROM_MODS=1') + $runtimeCompileArgs
+}
+if ($EnableM6Localise) {
+    # Native mod Localisation loading through the game's CLocalise::AddFile
+    # (localize.prx VA 0x5c60). Requires -EnableM6ModMetadata for the mod
+    # discovery/parsing it reuses.
+    $runtimeCompileArgs = @('-DNORTHSTAR_PS4_ENABLE_M6_LOCALISE=1') + $runtimeCompileArgs
 }
 & $clang @runtimeCompileArgs
 if ($LASTEXITCODE) { throw "OpenOrbis runtime compile failed: $LASTEXITCODE" }

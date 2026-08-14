@@ -1,8 +1,9 @@
 {
-  "version": 1,
-  "description": "Loose Northstar content staged for PS4 VPK integration. Native DLLs and PC-only runtime files are excluded.",
+  "version": 2,
+  "description": "Loose Northstar content staged for PS4 VPK integration, mirroring the PC mod layout (mod.json + mod/ at the top level). Native DLLs and PC-only runtime files are excluded.",
   "mods": [
-    { "name": "Northstar.Client", "sourceSubdirectory": "Northstar.Client\\mod", "destinationSubdirectory": "Northstar.Client" },
-    { "name": "Northstar.Custom", "sourceSubdirectory": "Northstar.Custom\\mod", "destinationSubdirectory": "Northstar.Custom" }
+    { "name": "Northstar.Client", "sourceSubdirectory": "Northstar.Client", "destinationSubdirectory": "Northstar.Client" },
+    { "name": "Northstar.Custom", "sourceSubdirectory": "Northstar.Custom", "destinationSubdirectory": "Northstar.Custom" },
+    { "name": "Northstar.DirectConnect", "sourceRoot": "mods", "sourceSubdirectory": "Northstar.DirectConnect", "destinationSubdirectory": "Northstar.DirectConnect" }
   ]
 }

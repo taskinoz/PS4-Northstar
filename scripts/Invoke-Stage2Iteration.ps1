@@ -19,7 +19,9 @@ param(
     [switch]$EnableM6Scripts,
     [switch]$EnableM6ScriptProbe,
     [switch]$EnableM6ScriptInject,
-    [switch]$EnableM6ScriptInjectFromMods
+    [switch]$EnableM6ScriptInjectFromMods,
+    [switch]$EnableM6Localise,
+    [switch]$SkipR2ModStage
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,7 +42,7 @@ foreach ($required in @($ShadPs4Exe, $eboot)) {
 }
 
 if (-not $SkipBuild) {
-    & (Join-Path $PSScriptRoot 'Build-Stage2Poc.ps1') -EnableDiagnosticConVar:$EnableDiagnosticConVar -EnableTeamChangesConVar:$EnableTeamChangesConVar -EnableDiagnosticUiNative:$EnableDiagnosticUiNative -EnableM6FsOverlay:$EnableM6FsOverlay -EnableM6ModMetadata:$EnableM6ModMetadata -EnableM6ScriptProbe:$EnableM6ScriptProbe -EnableM6ScriptInject:$EnableM6ScriptInject -EnableM6ScriptInjectFromMods:$EnableM6ScriptInjectFromMods
+    & (Join-Path $PSScriptRoot 'Build-Stage2Poc.ps1') -EnableDiagnosticConVar:$EnableDiagnosticConVar -EnableTeamChangesConVar:$EnableTeamChangesConVar -EnableDiagnosticUiNative:$EnableDiagnosticUiNative -EnableM6FsOverlay:$EnableM6FsOverlay -EnableM6ModMetadata:$EnableM6ModMetadata -EnableM6ScriptProbe:$EnableM6ScriptProbe -EnableM6ScriptInject:$EnableM6ScriptInject -EnableM6ScriptInjectFromMods:$EnableM6ScriptInjectFromMods -EnableM6Localise:$EnableM6Localise
     if (-not $?) { throw 'Stage 2 build failed.' }
 }
 if (-not $SkipDeploy) {
@@ -48,10 +50,12 @@ if (-not $SkipDeploy) {
     if (-not $?) { throw 'Stage 2 deployment failed.' }
 }
 if ($EnableM6Scripts) {
-    & (Join-Path $PSScriptRoot 'New-Stage2R2Overlay.ps1') -Config $configPath
+    & (Join-Path $PSScriptRoot 'New-Stage2R2Overlay.ps1') -Config $configPath -SkipR2ModStage:$SkipR2ModStage
     if (-not $?) { throw 'Overlay staging failed.' }
-    & (Join-Path $PSScriptRoot 'Merge-Stage2ScriptsRson.ps1') -Config $configPath -Probe:$EnableM6ScriptProbe
-    if (-not $?) { throw 'Scripts.rson merge failed.' }
+    if (-not $SkipR2ModStage) {
+        & (Join-Path $PSScriptRoot 'Merge-Stage2ScriptsRson.ps1') -Config $configPath -Probe:$EnableM6ScriptProbe
+        if (-not $?) { throw 'Scripts.rson merge failed.' }
+    }
 }
 if (-not (Test-Path -LiteralPath $prx -PathType Leaf)) {
     throw "Installed Stage 2 PRX not found: $prx"

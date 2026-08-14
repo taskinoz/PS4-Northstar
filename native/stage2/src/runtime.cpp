@@ -110,6 +110,27 @@ constexpr std::uint8_t kClientCompileListPreimage[] = {
 constexpr std::uintptr_t kClientCompileListGatePtrVa = 0xb2f0d0;
 constexpr std::uintptr_t kClientCompileListGateVtableSlot = 0x58;
 #endif
+#if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
+// PS4 localize.prx (CUSA04013 2017-12-05 build). CLocalise::AddFile is called
+// directly (this=rdi, fileName=rsi, pathId=rdx, includeFallbackSearchPaths=ecx);
+// it resolves a %language% token internally and loads the file through the engine
+// filesystem GAME search paths (which include /app0/r2, the staging overlay).
+// The singleton instance pointer lives in .bss at kLocalizeInstanceVa and is
+// returned by the trivial accessor at kLocalizeAccessorVa (`lea rax,[rip+...];
+// ret`). Windows localize.dll AddFile (RVA 0x6D80) shares the same structure;
+// see tools/NorthstarLauncher-reference/primedev/client/modlocalisation.cpp for
+// the equivalent PC hook that calls AddFile(path, nullptr, false).
+constexpr std::uintptr_t kLocalizeAddFileVa = 0x5c60;
+constexpr std::uintptr_t kLocalizeInstanceVa = 0x1d280;
+constexpr std::uintptr_t kLocalizeAccessorVa = 0x4f90;
+constexpr std::uint8_t kLocalizeAddFilePreimage[] = {
+    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
+    0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x83, 0xe4,
+};
+constexpr std::uint8_t kLocalizeAccessorPreimage[] = {
+    0x48, 0x8d, 0x05, 0xe9, 0x82, 0x01, 0x00, 0xc3,
+};
+#endif
 
 
 
@@ -800,6 +821,7 @@ bool ReadFileIntoBuffer(const char* path, char* buffer,
 }
 
 constexpr std::size_t kMaxModUiScripts = 32;
+constexpr std::size_t kMaxModLocalisationFiles = 16;
 
 struct ModConVarInfo {
     char name[64];
@@ -823,6 +845,12 @@ struct ModInfo {
     // their CompileList context index is identified the same way.
     std::int32_t uiScriptCount = 0;
     char uiScripts[kMaxModUiScripts][96];
+    // Localisation[] file paths (PC mod.json key, e.g.
+    // "resource/northstar_client_localisation_%language%.txt"). Fed to the
+    // game's CLocalise::AddFile so mod tokens load through the native
+    // localise interface instead of the engine VPK bake.
+    std::int32_t localisationCount = 0;
+    char localisationFiles[kMaxModLocalisationFiles][160];
 };
 
 struct ModDiscovery {
@@ -908,6 +936,29 @@ bool ParseModMetadata(const char* json, ModInfo& out) noexcept {
                         sizeof(out.uiScripts[0]) - 1);
                     out.uiScripts[out.uiScriptCount][sizeof(out.uiScripts[0]) - 1] = '\0';
                     ++out.uiScriptCount;
+                }
+            }
+            elem = JsonSkipWs(JsonSkipValue(elem));
+            if (*elem == ',') elem = JsonSkipWs(elem + 1);
+            else break;
+        }
+    }
+
+    const char* const localisationValue = JsonFindMember(json, "Localisation");
+    if (localisationValue != nullptr) {
+        const char* elem = JsonSkipWs(localisationValue);
+        if (*elem == '[') elem = JsonSkipWs(elem + 1);
+        while (elem != nullptr && *elem != ']' &&
+            out.localisationCount <
+                static_cast<std::int32_t>(kMaxModLocalisationFiles)) {
+            if (*elem == '"') {
+                char file[160]{};
+                if (JsonExtractString(elem, file, sizeof(file))) {
+                    std::strncpy(out.localisationFiles[out.localisationCount], file,
+                        sizeof(out.localisationFiles[0]) - 1);
+                    out.localisationFiles[out.localisationCount]
+                        [sizeof(out.localisationFiles[0]) - 1] = '\0';
+                    ++out.localisationCount;
                 }
             }
             elem = JsonSkipWs(JsonSkipValue(elem));
@@ -1704,11 +1755,79 @@ void ProbeUiScriptSystem(
 }
 #endif
 #if defined(NORTHSTAR_PS4_ENABLE_M6_FS_OVERLAY)
+namespace {
+using FsOpenFn = void* (*)(void*, const char*, const char*, const char*, std::int64_t);
+using FsReadFn = std::int32_t (*)(void*, void*, std::int32_t, void*);
+using FsCloseFn = void (*)(void*, void*);
+
+// Mod search-path overlay. The game's IBaseFileSystem secondary vtable lives
+// at fs+8 and the engine dispatches open/read/close through it (slot 2 = open,
+// 0 = read, 3 = close, proven by the probe below). We copy the whole vtable
+// into writable memory, swap slot 2 for a resolution hook, and repoint fs+8.
+// The hook serves mod files from their own /app0/mods/<Name>/mod dir first
+// (last-discovered mod has highest priority, mirroring PC AddSearchPath
+// semantics where the last-registered path wins), then falls through to the
+// engine's original search paths (loose /app0/r2 + VPK mounts). This replaces
+// the old "dump mod content into r2" staging: mods now live and load from
+// their own folder exactly like PC R2Northstar/mods/<Name>/mod.
+constexpr std::size_t kFsVtableCopySlots = 256;
+constexpr std::size_t kMaxModRoots = 16;
+constexpr std::size_t kModRootCapacity = 128;
+
+std::uintptr_t g_fsVtableCopy[kFsVtableCopySlots]{};
+char g_modRoots[kMaxModRoots][kModRootCapacity]{};
+std::int32_t g_modRootCount = 0;
+FsOpenFn g_originalFsOpen = nullptr;
+void* g_fsSelf = nullptr;
+
+std::size_t NormalizeRequestedPath(const char* in, char* out, std::size_t capacity) noexcept {
+    if (in == nullptr) {
+        out[0] = '\0';
+        return 0;
+    }
+    const char* p = in;
+    while (*p == '/' || *p == '\\') ++p;
+    std::size_t n = 0;
+    for (; *p != '\0' && n + 1 < capacity; ++p) {
+        out[n++] = (*p == '\\') ? '/' : *p;
+    }
+    out[n] = '\0';
+    return n;
+}
+
+void* ModSearchPathOpen(void* self, const char* fileName, const char* mode,
+    const char* pathID, std::int64_t flags) noexcept {
+    const bool readOnly = mode != nullptr &&
+        std::strchr(mode, 'w') == nullptr && std::strchr(mode, 'a') == nullptr &&
+        std::strchr(mode, '+') == nullptr;
+    if (readOnly && fileName != nullptr) {
+        char normalized[256]{};
+        const std::size_t pathLength =
+            NormalizeRequestedPath(fileName, normalized, sizeof(normalized));
+        if (pathLength > 0) {
+            for (std::int32_t i = g_modRootCount - 1; i >= 0; --i) {
+                const std::size_t rootLength = std::strlen(g_modRoots[i]);
+                if (rootLength + 1 + pathLength >= 384) continue;
+                char candidate[384]{};
+                std::memcpy(candidate, g_modRoots[i], rootLength);
+                candidate[rootLength] = '/';
+                std::memcpy(candidate + rootLength + 1, normalized, pathLength);
+                candidate[rootLength + 1 + pathLength] = '\0';
+                // NOTE: access() is a shadPS4 stub that always returns 0, so
+                // probe existence with open/close (real kernel FS) instead.
+                const int fd = open(candidate, O_RDONLY);
+                if (fd < 0) continue;
+                close(fd);
+                return g_originalFsOpen(g_fsSelf, candidate, mode, pathID, flags);
+            }
+        }
+    }
+    return g_originalFsOpen(g_fsSelf, fileName, mode, pathID, flags);
+}
+} // namespace
+
 void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
     using CreateInterfaceFn = void* (*)(const char*, int*);
-    using OpenFn = void* (*)(void**, const char*, const char*, const char*, std::int64_t);
-    using ReadFn = std::int32_t (*)(void**, void*, std::int32_t, void*);
-    using CloseFn = void (*)(void*, void*);
 
     void* createInterfaceAddress = nullptr;
     const int dlsymResult =
@@ -1738,21 +1857,56 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
         LogFormat("[NorthstarPS4] fs overlay vtable[%d]=%p\n",
             slot, vtable[slot]);
     }
-
-    auto open = reinterpret_cast<OpenFn>(vtable2[2]);
-    auto read = reinterpret_cast<ReadFn>(vtable2[0]);
-    auto close = reinterpret_cast<CloseFn>(vtable2[3]);
-    LogFormat("[NorthstarPS4] fs overlay vtable2[0]=%p vtable2[2]=%p vtable2[3]=%p vtable2[10]=%p\n",
-        vtable2[0], vtable2[2], vtable2[3], vtable2[10]);
     for (std::int32_t slot = 0; slot < 12; ++slot) {
         LogFormat("[NorthstarPS4] fs overlay vtable2[%d]=%p\n",
             slot, vtable2[slot]);
     }
     void* const fsFieldAddr =
         reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(fs) + 8);
+    auto originalOpen = reinterpret_cast<FsOpenFn>(vtable2[2]);
+    auto originalRead = reinterpret_cast<FsReadFn>(vtable2[0]);
+    auto originalClose = reinterpret_cast<FsCloseFn>(vtable2[3]);
+    LogFormat("[NorthstarPS4] fs overlay vtable2[0]=%p vtable2[2]=%p vtable2[3]=%p vtable2[10]=%p\n",
+        vtable2[0], vtable2[2], vtable2[3], vtable2[10]);
+
+    // Discover mods and install the mod search-path overlay (only when at
+    // least one mod root exists; otherwise the game's open dispatch is left
+    // untouched).
+    ModDiscovery discovery{};
+    CollectModNames(discovery);
+    g_modRootCount = 0;
+    for (std::int32_t i = 0; i < discovery.count && g_modRootCount < kMaxModRoots; ++i) {
+        std::snprintf(g_modRoots[g_modRootCount], sizeof(g_modRoots[0]),
+            "/app0/mods/%s/mod", discovery.names[i]);
+        LogFormat("[NorthstarPS4] fs overlay mod root[%d]=%s\n",
+            g_modRootCount, g_modRoots[g_modRootCount]);
+        ++g_modRootCount;
+    }
+    if (g_modRootCount > 0) {
+        g_fsSelf = fsFieldAddr;
+        g_originalFsOpen = originalOpen;
+        for (std::size_t slot = 0; slot < kFsVtableCopySlots; ++slot) {
+            g_fsVtableCopy[slot] = reinterpret_cast<std::uintptr_t>(vtable2[slot]);
+        }
+        g_fsVtableCopy[2] = reinterpret_cast<std::uintptr_t>(&ModSearchPathOpen);
+        auto vtable2PointerAddress = reinterpret_cast<std::uintptr_t>(fs) + 8;
+        *reinterpret_cast<void**>(vtable2PointerAddress) =
+            reinterpret_cast<void*>(g_fsVtableCopy);
+        const void* const readBack =
+            *reinterpret_cast<void* const*>(vtable2PointerAddress);
+        LogFormat("[NorthstarPS4] fs overlay vtable2 repointed to %p (readback %p) roots=%d\n",
+            reinterpret_cast<void*>(g_fsVtableCopy), readBack, g_modRootCount);
+    } else {
+        LogFormat("[NorthstarPS4] fs overlay no mods, search-path overlay not installed\n");
+    }
+
+    // Probe through the repointed (hooked) interface so results reflect mod
+    // search-path resolution instead of the pre-hook function pointer.
+    auto activeVtable2 = *reinterpret_cast<void***>(
+        reinterpret_cast<std::uintptr_t>(fs) + 8);
+    auto open = reinterpret_cast<FsOpenFn>(activeVtable2[2]);
     auto tryOpen = [&](const char* tag, const char* fileName) {
-        void* const handle = open(reinterpret_cast<void**>(fsFieldAddr),
-            fileName, "rb", "GAME", 0);
+        void* const handle = open(fsFieldAddr, fileName, "rb", "GAME", 0);
         if (handle == nullptr) {
             LogFormat("[NorthstarPS4] fs overlay open %-12s %-40s failed\n",
                 tag, fileName);
@@ -1760,13 +1914,12 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
         }
         char buffer[80]{};
         const std::int32_t bytesRead =
-            read(reinterpret_cast<void**>(fsFieldAddr), buffer,
-                sizeof(buffer) - 1, handle);
+            originalRead(fsFieldAddr, buffer, sizeof(buffer) - 1, handle);
         buffer[sizeof(buffer) - 1] = '\0';
         LogFormat("[NorthstarPS4] fs overlay open %-12s %-40s handle=%p read=%d bytes=%.*s\n",
             tag, fileName, handle, bytesRead,
             bytesRead > 0 ? bytesRead : 0, buffer);
-        close(fs, handle);
+        originalClose(fs, handle);
     };
 
     const struct { const char* tag; const char* file; } probePaths[] = {
@@ -1775,10 +1928,115 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
             "resource/northstar_client_localisation_english.txt" },
         { "client-cfg", "cfg/autoexec_ns_client.cfg" },
         { "custom-nut", "scripts/vscripts/_disallowed_tacticals.gnut" },
+        { "base-ui-menus", "scripts/vscripts/ui/_menus.nut" },
+        { "abs-init",
+            "/app0/mods/Northstar.Client/mod/scripts/vscripts/cl_northstar_client_init.nut" },
     };
     for (const auto& probe : probePaths) {
         tryOpen(probe.tag, probe.file);
     }
+}
+#endif
+#if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
+// Loads each mod's Localisation[] array through the game's native localise
+// interface (CLocalise::AddFile) so mod tokens resolve exactly like base game
+// localisation instead of depending on the VPK bake. Mirrors the PC hook in
+// modlocalisation.cpp: AddFile(instance, path, nullptr, false), where path
+// keeps the %language% token and the game substitutes the current language.
+void ProbeLocaliseInterface(OrbisKernelModule localizeHandle,
+    std::uintptr_t localizeBase, std::size_t localizeSize) noexcept {
+    using AddFileFn = bool (*)(void*, const char*, const char*, bool);
+    LogFormat("[NorthstarPS4] localise probe start handle=0x%x base=%p size=0x%zx\n",
+        localizeHandle, reinterpret_cast<void*>(localizeBase), localizeSize);
+
+    const bool addFileMatches = ValidateEnginePreimage(localizeBase,
+        localizeSize, kLocalizeAddFileVa, kLocalizeAddFilePreimage,
+        sizeof(kLocalizeAddFilePreimage));
+    const bool accessorMatches = ValidateEnginePreimage(localizeBase,
+        localizeSize, kLocalizeAccessorVa, kLocalizeAccessorPreimage,
+        sizeof(kLocalizeAccessorPreimage));
+    LogFormat("[NorthstarPS4] localise gate addFile=%d accessor=%d\n",
+        addFileMatches ? 1 : 0, accessorMatches ? 1 : 0);
+    if (!addFileMatches || !accessorMatches) {
+        LogFormat("[NorthstarPS4] localise refused: profile preimage mismatch\n");
+        return;
+    }
+    if (kLocalizeInstanceVa > localizeSize) {
+        LogFormat("[NorthstarPS4] localise refused: instance VA out of range\n");
+        return;
+    }
+    // The singleton object lives in .bss at localizeBase + kLocalizeInstanceVa;
+    // its first qword is the vptr installed by the module's own init code and
+    // points to the relocated vtable in the rodata segment. AddFile is reached
+    // through vtable slot 9 (+0x48), which the loader relocates to a file VA
+    // inside the module (observed to be AddFile itself, 0x5c60).
+    const std::uintptr_t thisAddr = localizeBase + kLocalizeInstanceVa;
+    const std::uintptr_t vptr = *reinterpret_cast<const std::uintptr_t*>(thisAddr);
+    const bool vptrInModule = vptr >= localizeBase &&
+        vptr - localizeBase < localizeSize;
+    bool slotInModule = false;
+    std::uintptr_t addFileSlot = 0;
+    if (vptrInModule) {
+        addFileSlot = *reinterpret_cast<const std::uintptr_t*>(vptr + 0x48);
+        slotInModule = addFileSlot >= localizeBase &&
+            addFileSlot - localizeBase < localizeSize;
+        LogFormat("[NorthstarPS4] localise singleton this=%p vptr=%p vtable[9]=%p this+0x48=%u\n",
+            reinterpret_cast<void*>(thisAddr), reinterpret_cast<void*>(vptr),
+            reinterpret_cast<void*>(addFileSlot),
+            *reinterpret_cast<const std::uint8_t*>(thisAddr + 0x48));
+    }
+    if (!vptrInModule || !slotInModule) {
+        LogFormat("[NorthstarPS4] localise refused: vtable chain invalid vptrInModule=%d slotInModule=%d\n",
+            vptrInModule ? 1 : 0, slotInModule ? 1 : 0);
+        return;
+    }
+    const auto addFile = reinterpret_cast<AddFileFn>(addFileSlot);
+
+    // AddFile routes through vtable slot 9 (its own address) when this+0x48 is
+    // zero; force the field to 1 so the direct path is taken, then restore it.
+    std::uint8_t* const fallbackField =
+        reinterpret_cast<std::uint8_t*>(thisAddr + 0x48);
+    const std::uint8_t savedFallback = *fallbackField;
+    *fallbackField = 1;
+
+    ModDiscovery discovery{};
+    CollectModNames(discovery);
+    std::int32_t totalFiles = 0;
+    std::int32_t loadedFiles = 0;
+    for (std::int32_t i = 0; i < discovery.count; ++i) {
+        char path[160]{};
+        std::snprintf(path, sizeof(path), "/app0/mods/%s/mod.json",
+            discovery.names[i]);
+        static char jsonBuffer[kModJsonBufferSize];
+        std::size_t jsonSize = 0;
+        if (!ReadFileIntoBuffer(path, jsonBuffer,
+                sizeof(jsonBuffer) - 1, jsonSize)) {
+            LogFormat("[NorthstarPS4] localise mod metadata read failed: %s\n", path);
+            continue;
+        }
+        ModInfo mod{};
+        if (!ParseModMetadata(jsonBuffer, mod)) {
+            LogFormat("[NorthstarPS4] localise mod metadata parse failed: %s\n", path);
+            continue;
+        }
+        for (std::int32_t f = 0; f < mod.localisationCount; ++f) {
+            const bool ok = addFile(reinterpret_cast<void*>(thisAddr),
+                mod.localisationFiles[f], nullptr, false);
+            LogFormat("[NorthstarPS4] localise %s file=%s result=%d\n",
+                mod.name, mod.localisationFiles[f], ok ? 1 : 0);
+            ++totalFiles;
+            if (ok) ++loadedFiles;
+        }
+    }
+    {
+        const bool ok = addFile(reinterpret_cast<void*>(thisAddr),
+            "resource/northstar_client_localisation_english.txt", nullptr, false);
+        LogFormat("[NorthstarPS4] localise self-test vanilla english result=%d\n",
+            ok ? 1 : 0);
+    }
+    *fallbackField = savedFallback;
+    LogFormat("[NorthstarPS4] localise probe complete files=%d loaded=%d\n",
+        totalFiles, loadedFiles);
 }
 #endif
 void* ModuleTracker(void*) noexcept {
@@ -1790,6 +2048,11 @@ void* ModuleTracker(void*) noexcept {
     OrbisKernelModule vstdlibHandle = static_cast<OrbisKernelModule>(-1);
     OrbisKernelModule engineHandle = static_cast<OrbisKernelModule>(-1);
     OrbisKernelModule fsHandle = static_cast<OrbisKernelModule>(-1);
+#if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
+    OrbisKernelModule localizeHandle = static_cast<OrbisKernelModule>(-1);
+    std::uintptr_t localizeBase = 0;
+    std::size_t localizeSize = 0;
+#endif
     std::uintptr_t engineBase = 0;
     std::uintptr_t clientBase = 0;
     std::size_t clientSpan = 0;
@@ -1835,6 +2098,26 @@ void* ModuleTracker(void*) noexcept {
                     std::strstr(info.name, "filesystem_stdio") != nullptr) {
                     fsHandle = handles[i];
                 }
+#if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
+                if (infoResult == 0 && std::strstr(info.name, "localize") != nullptr) {
+                    localizeHandle = handles[i];
+                    if (info.segmentCount > 0) {
+                        localizeBase = reinterpret_cast<std::uintptr_t>(
+                            info.segmentInfo[0].address);
+                        for (std::uint32_t segment = 0;
+                            segment < info.segmentCount && segment < 4; ++segment) {
+                            const auto segmentAddress = reinterpret_cast<std::uintptr_t>(
+                                info.segmentInfo[segment].address);
+                            const auto segmentEnd =
+                                segmentAddress + info.segmentInfo[segment].size;
+                            if (segmentEnd > localizeBase &&
+                                segmentEnd - localizeBase > localizeSize) {
+                                localizeSize = segmentEnd - localizeBase;
+                            }
+                        }
+                    }
+                }
+#endif
                 if (infoResult != 0 || !IsTarget(info.name)) continue;
                 const bool isEngine = std::strstr(info.name, "engine.prx") != nullptr ||
                     std::strstr(info.name, "engine.sprx") != nullptr;
@@ -1890,6 +2173,13 @@ void* ModuleTracker(void*) noexcept {
     LogFormat(
         "[NorthstarPS4] module tracker complete engine=%d client=%d\n",
         engineSeen ? 1 : 0, clientSeen ? 1 : 0);
+#if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
+    if (localizeHandle != static_cast<OrbisKernelModule>(-1) && localizeBase != 0) {
+        ProbeLocaliseInterface(localizeHandle, localizeBase, localizeSize);
+    } else {
+        LogFormat("[NorthstarPS4] localise probe skipped: localize module unavailable\n");
+    }
+#endif
     if (clientBase != 0) {
         ProbeUiVm(clientBase, clientSpan);
     }

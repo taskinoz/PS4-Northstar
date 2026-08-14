@@ -13,6 +13,7 @@ $vanillaPath = [System.IO.Path]::GetFullPath($VanillaScriptsRson)
 foreach ($required in @($configPath, $manifestPath, $vanillaPath)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Required file not found: $required" }
 }
+. (Join-Path $PSScriptRoot 'Resolve-ModSource.ps1')
 $settings = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 $manifestData = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 $ps4GameRoot = if ([System.IO.Path]::IsPathRooted($settings.ps4GameRoot)) { [System.IO.Path]::GetFullPath($settings.ps4GameRoot) } else { throw "ps4GameRoot must be absolute in $configPath" }
@@ -33,7 +34,7 @@ $skipped = @()
 $emitted = 0
 
 foreach ($mod in $manifestData.mods) {
-    $modJsonPath = Join-Path $settings.northstarModsRoot (Join-Path $mod.name 'mod.json')
+    $modJsonPath = Get-ModJsonPath -Settings $settings -Mod $mod -RepositoryRoot $repositoryRoot
     if (-not (Test-Path -LiteralPath $modJsonPath -PathType Leaf)) { throw "mod.json not found for '$($mod.name)': $modJsonPath" }
     $modJson = Get-Content -LiteralPath $modJsonPath -Raw | ConvertFrom-Json
 

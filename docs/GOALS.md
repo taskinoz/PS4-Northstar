@@ -63,6 +63,10 @@ Depends on real Atlas (Goal 8), not just insecure direct-connect. No PS4-side in
 
 Every goal above is verified only under shadPS4. TECHNICAL-NOTES.md repeatedly flags shadPS4 and real PS4 behavior as related but distinct targets — module list contents, base addresses, and kernel call behavior can all differ. This also requires a jailbroken PS4 with an existing kernel exploit/homebrew loader chain, which is out of scope until the native runtime work is stable under the emulator.
 
+## Goal 11 — Native mod localisation loading ✅ complete (probe verified)
+
+Native mod `Localisation[]` loading through the game's own localize.prx `AddFile` (VA `0x5c60`). The singleton object lives at `localize base + 0x1d280`; its vptr (installed by module init) points to the relocated rodata vtable at `base + 0x18010`, whose slot 9 (`+0x48`) is `AddFile` itself. Verified 2026-08-14 (run `work/stage2/iterations/20260814-163721`): the stock deployed mods' `Localisation[]` entries (`resource/northstar_client_localisation_%language%.txt`, `resource/northstar_custom_%language%.txt`) both loaded with `result=1`, plus a vanilla-english self-test `result=1` — `files=2 loaded=2`, clean boot. Full ABI details, the `this+0x48` fallback-field forcing, and the module-segment-extent fix are in TECHNICAL-NOTES.md. Gated behind `-EnableM6Localise` + `-EnableM6ModMetadata` (off in the default inert build).
+
 ## Immediate next steps (priority order)
 
 1. **Test a real insecure server connection end-to-end — in progress, real progress made.** Loose `.cfg` files can't be used to auto-trigger `connect` on retail PS4 (see TECHNICAL-NOTES.md), but the user drove the in-game direct-connect menu by hand and reached an actual in-game session against a real server. That surfaced two blocking UI bugs, both found and fixed the same way (grep the actual shipped script content for every `GetConVar*` call, cross-reference against what's registered) rather than fixing one-by-one via trial and error:
