@@ -1499,6 +1499,59 @@ user's next test, this retry behavior -- and whether it's a shadPS4/engine
 netchannel quirk rather than anything this project's own launcher code
 controls -- is the next thing to investigate.
 
+### Re-tested 2026-08-17 19:30: identical rejection despite ns_auth_allow_insecure reportedly set server-side
+
+A second live test (`nslog2026-08-17 19-30-38.txt`), after the user set
+`ns_auth_allow_insecure 1` directly in the dedicated server's own console
+(confirmed not a restart-reset scenario -- typed after the server was
+already running, no restart since), produced the **identical** failure
+signature: player connects, spawns, dropship intro starts, then ~4s later
+(`19:31:59`, vs ~11s in the first test) gets kicked with the same
+"Authentication Failed." / "NetChannel removed." pair, twice.
+
+This is mechanically significant: `CheckAuthentication`'s literal first
+statement is `if (Cvar_ns_auth_allow_insecure->GetBool()) return true;` --
+if that cvar were genuinely `1` in the running server process at connect
+time, this rejection *cannot* happen, full stop, regardless of any other
+state (duplicate account, remote auth data, etc.). Since it happened again
+under conditions that should have ruled out the "console-set-then-restart"
+explanation, either (a) the value didn't actually take for a reason not yet
+identified (wrong console/process, typo, a second unaccounted-for
+server instance), or (b) there's a second code path producing the exact
+same "Authentication Failed." string that hasn't been found in the
+reference source yet (only one match with a trailing period was found,
+in `serverauthentication.cpp`; two other matches without a trailing period
+exist in `masterserver.cpp` but format the string differently in the
+console print). **Next step, not yet done:** get the live value of
+`ns_auth_allow_insecure` printed directly from the dedicated server's
+console (typing the bare convar name with no value prints its current
+setting) at the moment of a test, to conclusively confirm whether it's
+reading `1` or `0` server-side.
+
+Also newly visible in this log: the dedicated server's own attempt to
+register itself with the local test Atlas instance is failing --
+```
+[19:32:04] [error] Couldn't find request id in response
+[19:32:09] [info] Attempting to register the local server to the master server.
+[19:32:19] [error] Couldn't find request id in response
+[19:32:19] [warning] Reached max ms server registration attempts.
+```
+Traced to Atlas's `/server/add_server` handler (`tools/Atlas-reference/pkg/api/api0/server.go`):
+on success it responds with `{"success":true,"id":...,"serverAuthToken":...}`,
+but several rejection paths (`respFail`) omit `"id"` entirely, which is
+exactly what NorthstarLauncher's "Couldn't find request id in response"
+log line detects. The specific rejection likely at play here:
+`handleServerUpsert` runs `probeUDP()` -- Atlas actively sends a
+connectionless "connect" probe packet to the dedicated server's own game
+UDP port and only finalizes registration (and includes `"id"`) if that
+probe succeeds. If there's a firewall or NAT gap between the Atlas host and
+the dedicated server's UDP game port, this fails silently in exactly this
+shape. Not blocking direct-connect testing (this only affects server-list
+registration, i.e. the browser), but relevant once Goal 13's real server
+browser work resumes -- worth checking connectivity from the Atlas
+machine to the dedicated server's UDP port directly (e.g. a raw UDP probe
+tool) before assuming it's a code bug.
+
 ## scripts.rson merge insertion-order bug (found and fixed 2026-08-17)
 
 While investigating the above, a live client log (`launch18.log`) separately
