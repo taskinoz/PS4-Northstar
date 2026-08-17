@@ -1121,6 +1121,153 @@ e.g. the Mods list's Y-button footer option). The button stays in the Stage 1
 patch; only the menu-opening logic behind it was duplicated into the mod
 scaffold.
 
+## Two more compile-time crashes, then a live connection that stalls on handshake (2026-08-08)
+
+This directly continues the DirectConnectMenu section above and predates the
+"Layout mirror" milestone below by 6 days -- it was done in a session whose
+notes never made it into this file before now (the code changes did land,
+via a later bulk commit; only the writeup was missing). Recorded now,
+2026-08-14, from that session's transcript, for continuity.
+
+### `menu_direct_connect.nut` was never actually compiled -- moved into `_menus.nut`
+
+After the fix above, clicking "Launch Northstar" no longer hit the
+`GetMenu("DirectConnectMenu")` runtime error, but the game now sat at the
+Respawn loading screen forever with no error dialog at all. shadPS4's own
+stdout (not the sparse `shadps4.log`, which only captures a config summary --
+capture full output with `> file 2>&1` on the launch command instead) had
+the real answer:
+
+    FatalError: ui/_menus.nut: UI SCRIPT COMPILE ERROR: Undefined variable "InitDirectConnectMenu"
+
+This fires before any menu/dialog system exists to display it, so the whole
+game hangs with zero visible feedback -- the same failure class as the
+runtime "index does not exist" error, just one step earlier and worse
+(unrecoverable instead of "just" a blocking error box).
+
+**Root cause:** `menu_direct_connect.nut` sat in `work/stage1/sparse/frontend/scripts/vscripts/ui/`
+next to every other working UI script, with a correct `global function
+InitDirectConnectMenu` forward declaration -- but it turns out **which
+`ui/*.nut` files actually get compiled into the UI script VM is a native,
+hardcoded list inside `client.sprx`, not a content-editable manifest.**
+Physically shipping a file in that directory does not make the engine
+compile it. This had been invisible because nothing previously referenced
+the bare identifier `InitDirectConnectMenu` at compile time -- only a
+runtime string lookup (`GetMenu("DirectConnectMenu")`), which fails
+"softly" (a catchable-ish index error) rather than aborting the whole
+compile. The `AddMenu( ..., InitDirectConnectMenu )` call added in the fix
+above was the first thing to reference the bare identifier, which is what
+exposed this.
+
+**Fix:** moved `InitDirectConnectMenu` and its `ConnectButton_Activate`
+handler (renamed `DirectConnect_ConnectButton_Activate` to avoid any
+ambiguity) directly into `_menus.nut` itself -- proven to be on the real
+compile list, since `InitMenus()` demonstrably runs. Deleted the now-dead
+`menu_direct_connect.nut` from the sparse tree. Forward-declared
+`InitDirectConnectMenu` alongside the other `global function` declarations
+at the top of `_menus.nut`; defined both functions at the bottom of the
+file with a small `directConnectFile` struct for state (renamed from `file`
+to avoid colliding with any future top-level `file` struct in the same
+file). Rebuilt, redeployed, verified via full-log capture that `FatalError`
+no longer appears and the game reaches the main menu.
+
+**Lesson for any future "new menu from a mod" work:** a brand-new `.nut`
+file is *not* automatically part of the compiled UI bundle just because
+it's in the right directory. Either fold new logic into a file already
+proven on the compile list (what this fix does), or route it through the
+real mod-script-injection path (`CompileList`, Goal 6) once that's stable
+-- do not assume directory presence is sufficient.
+
+(This also means the `Northstar.DirectConnect` mod scaffold's own
+`menu_direct_connect.nut`, loaded via `mod.json`'s `UICallback.Before`
+mechanism, is a *different* code path -- Goal 6's `CompileList` injection,
+not the native hardcoded UI list -- so it isn't subject to this same gap.
+It remains untested/inert per Goal 6's status.)
+
+### Second compile-time crash, deeper in: `AddServerToClientStringCommandCallback`
+
+With that fixed, the user connected to a real Northstar dedicated server
+(server-side saw the connection) and got past the main menu into an actual
+level load (`mp_forwardbase_kodai`) -- then hung again, no error on screen.
+Same diagnostic approach (full stdout capture) found:
+
+    FatalError: sh_damage_types.nut: CLIENT SCRIPT COMPILE ERROR: Undefined variable "AddServerToClientStringCommandCallback"
+
+`AddServerToClientStringCommandCallback` is called from three `mp_common`
+scripts (`sh_damage_types.nut`, `sh_message_utils.gnut`,
+`sh_custom_scoreboard_columns.gnut`) to register a handler for custom
+string commands a Northstar server can push to the client. It is **not** a
+vanilla engine native -- it's a Northstar-ecosystem Squirrel helper whose
+native companion is NorthstarLauncher's own C++ hook
+(`primedev/scripts/client/scriptservertoclientstringcommand.cpp`,
+`ns_script_servertoclientstringcommand` ConCommand ->
+`NSClientCodeCallback_RecievedServerToClientStringCommand`). Neither the
+Squirrel-side registration helper nor that native ConCommand/dispatch path
+exist anywhere in this port (confirmed by grep across `work/stage1`,
+`tools/NorthstarLauncher-reference`, and the mod folders -- no definition
+found anywhere, only call sites).
+
+**Fix:** added a genuine no-op stub, `AddServerToClientStringCommandCallback( string commandName, void functionref( array<string> ) callbackFunc )`,
+to `work/stage1/sparse/mp_common/scripts/vscripts/_custom_codecallbacks_client.gnut`
+(forward-declared alongside the file's existing `AddCallback_On*`
+declarations; confirmed no prior definition or name collision anywhere in
+the sparse tree). Registered callbacks are accepted and silently dropped --
+any gameplay feature a server drives purely through this channel (certain
+custom scoreboard columns, custom HUD messages) will not function on this
+PS4 client. If that turns out to matter, the real fix is implementing the
+native `ns_script_servertoclientstringcommand` ConCommand and
+`NSClientCodeCallback_RecievedServerToClientStringCommand` dispatch in
+`launcher/src/runtime.cpp`, not expanding this stub.
+
+**This class of bug (a Northstar-ecosystem Squirrel helper that's simply
+undefined on this port) should be assumed to recur.** Both compile errors
+found so far were only discovered by actually pushing further into the
+connect flow, live, with full stdout capture -- there is no static way
+found yet to enumerate every such gap up front. Reusing the grep-the-real-
+script-content method (per Immediate next steps item 1's original two
+ConVar fixes) proactively, before the next live test, would likely be
+cheaper than finding them one hang at a time. `AddCallback_OnClientConnected`,
+used right next to the missing function in `sh_damage_types.nut`, is a
+genuine vanilla engine native and does NOT need a stub -- don't stub
+functions that already work.
+
+### Live connection now reaches level load, then stalls with no error at all
+
+With both compile errors fixed, the user connected again: server confirmed
+the connection, client progressed through the main-menu boot and into
+loading `mp_forwardbase_kodai` (opened VPK chunks `000`-`003` of that map's
+content), then went completely idle -- no more asset loads, no script
+messages, no `FatalError`, nothing -- for multiple minutes of real time
+(confirmed via periodic `UpdatePlayTime` log deltas a full minute apart
+with zero intervening progress).
+
+Attached `cdb.exe` **non-invasively** (`-p <pid> -pv`, dumps state without
+suspending/killing the target; detached cleanly with `qd` afterward,
+leaving the stuck session running and undisturbed) and pulled `~*kb` (every
+thread's stack) from the already-hung process. Every thread checked --
+`MainThrd`, `RenderThread`, `IOJob0`, `VPKMasterCacheThread`, `GlobPool0`,
+`SDLTimer` -- was parked in a legitimate blocking wait
+(`WaitForSingleObjectEx` / `SleepConditionVariableSRW`), not spinning and
+not deadlocked on a lock. This is a materially different signature from
+both compile-error hangs above (those never got far enough for any thread
+to reach a normal wait state at all).
+
+**Interpretation:** with every local worker thread idle and nothing being
+actively streamed or compiled, this does not look like a missing local
+asset. It looks like the client is blocked waiting for the **next step of
+the server's connect/signon sequence** (Source engine's connect flow is
+multi-message after the initial UDP handshake: challenge/response, then
+the server pushing stringtables/precache tables/entity baselines) and that
+next message either never arrives or arrives but isn't being processed.
+
+**Not yet done / next step:** check the dedicated server's own console/log
+on the far side of the connection for the same time window -- does it show
+the client stuck at a particular signon stage, repeated retransmits, or an
+error the PS4 client never sees? That's the other half of this handshake
+and wasn't available from the PS4 client's own logs. This is the actual
+open item blocking Goal 8's success criteria (a real match, not just a
+server-acknowledged connection) and is not yet resolved as of this note.
+
 ## Layout mirror + native localisation milestone (2026-08-14)
 
 Two changes landed and were verified this session.
@@ -1208,3 +1355,16 @@ none. Localisation tokens were verified earlier to need no additions:
 and the DirectConnect mod's UI script only references the vanilla `#BACK` /
 `#B_BUTTON_BACK` tokens (both present), so it hardcodes its "Direct Connect"
 label as-is.
+
+## Real Northstar mod-loading architecture: scripts.rson + hook dispatch (2026-08-15)
+
+Full narrative, the 8 issues found/fixed en route, and the local test-Atlas
+setup are written up in `docs/GOALS.md` under **Goal 12** and **Goal 13** --
+not duplicated here to avoid drift between the two documents. Short pointer
+for anyone starting from this file: the new tool is
+`scripts/Build-Stage1ModIntegration.ps1`; it replaces the old hand-patched
+Northstar.Client copy with the genuine PC mod, using `scripts.rson` (baked
+into the VPK, not r2-overlaid) as the real compile list and a generated
+`UICallback` hook-dispatch block in `_menus.nut` in place of
+NorthstarLauncher's native hook dispatch. `ServerCallback`/`ClientCallback`
+dispatch is not yet built (needed for `Northstar.Custom`).
