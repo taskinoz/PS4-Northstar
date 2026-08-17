@@ -28,6 +28,45 @@ global function AddCallback_OnPreSendMessage
 // so this copy wins over Northstar.Client's for this one shared path.
 global function AddServerToClientStringCommandCallback
 
+// NSChatWriteRaw is a genuine NorthstarLauncher native (ADD_SQFUNC, CLIENT
+// context, primedev/scripts/client/clientchathooks.cpp) that writes text
+// directly into the local chat HUD via LocalChatWriter. This port doesn't
+// register it as a native, so every call site in this same file's own
+// OnReceivedMessage (chat message formatting) hit an unrecoverable
+// boot-time "CLIENT SCRIPT COMPILE ERROR: Undefined variable" the moment a
+// real chat message was ever processed -- confirmed live 2026-08-17
+// connecting to a real server; shadPS4/this port doesn't surface the
+// FatalError on screen at all, so it just looks like a silent freeze on
+// connect rather than an error (see docs/TECHNICAL-NOTES.md). Stubbed here
+// as a no-op so those call sites compile; chat text silently doesn't
+// appear. If chat turns out to matter, the real fix is implementing the
+// native in launcher/src/runtime.cpp (mirroring LocalChatWriter's
+// behavior), not expanding this stub.
+global function NSChatWriteRaw
+
+// NSChatWrite, NSChatWriteLine, and NSSendMessage are three more real
+// NorthstarLauncher CLIENT natives used by this same file's chat-formatting
+// code, plus by Northstar.Client's client/cl_chat.gnut
+// (primedev/scripts/client/clientchathooks.cpp -- add a fully-formatted
+// line/text to the CHudChat HUD; primedev/client/chatcommand.cpp -- sends
+// the local player's own chat message onward, normally forwarding to the
+// server). Same missing-native class of bug as NSChatWriteRaw above, found
+// in the same pass (compilation stops at the first undefined variable, so
+// these were only discovered once NSChatWriteRaw was stubbed). Stubbed as
+// no-ops for the same reason: chat display/sending silently does nothing
+// rather than crashing the whole client script VM. Declared here rather
+// than in cl_chat.gnut itself because this file compiles first --
+// Northstar.Client's mod.json lists _custom_codecallbacks_client.gnut
+// (Path index 62) before client/cl_chat.gnut (Path index 66), and that
+// relative order carries into the merged scripts.rson (Build-Stage1ModIntegration.ps1
+// creates each mod's rson entries in its own Scripts[] order; Northstar.PS4's
+// override of this file wins on file *content* via LoadPriority 99, but
+// its rson *entry position* is created at Northstar.Client's point in the
+// merge, since dedup keeps only the first-seen entry for a given path).
+global function NSChatWrite
+global function NSChatWriteLine
+global function NSSendMessage
+
 // this is global due to squirrel bridge v3 making native not be able to find non-global funcs properly
 // temp fix (surely it will get replaced), do not use this function please (although there isnt rly a downside to it?)
 global function CHudChat_ProcessMessageStartThread
@@ -214,6 +253,30 @@ void function AddCallback_OnPreSendMessage( ClClient_PreMessageStruct functionre
 }
 
 void function AddServerToClientStringCommandCallback( string commandName, void functionref( array<string> ) callbackFunc )
+{
+	// PS4 Northstar.PS4 stub -- see the comment above the forward
+	// declaration at the top of this file. Intentionally a no-op.
+}
+
+void function NSChatWriteRaw( int context, string text )
+{
+	// PS4 Northstar.PS4 stub -- see the comment above the forward
+	// declaration at the top of this file. Intentionally a no-op.
+}
+
+void function NSChatWrite( int context, string text )
+{
+	// PS4 Northstar.PS4 stub -- see the comment above the forward
+	// declaration at the top of this file. Intentionally a no-op.
+}
+
+void function NSChatWriteLine( int context, string text )
+{
+	// PS4 Northstar.PS4 stub -- see the comment above the forward
+	// declaration at the top of this file. Intentionally a no-op.
+}
+
+void function NSSendMessage( string message, bool isIngame, bool isTeam )
 {
 	// PS4 Northstar.PS4 stub -- see the comment above the forward
 	// declaration at the top of this file. Intentionally a no-op.

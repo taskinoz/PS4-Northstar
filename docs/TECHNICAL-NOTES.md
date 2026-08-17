@@ -1552,6 +1552,98 @@ browser work resumes -- worth checking connectivity from the Atlas
 machine to the dedicated server's UDP port directly (e.g. a raw UDP probe
 tool) before assuming it's a code bug.
 
+## Found the real cause of "frozen on connect": stale /app0/mods overlay shadowing every VPK fix all session (2026-08-17)
+
+The user's own theory turned out to be exactly right ("I think this might
+be a vscript error where its missing some scripts... I can try update the
+mods to test that theory"). Capturing the **client's** own log during a
+live connect attempt (not just the server's, which is all that had been
+checked up to this point) showed a genuine boot-time FatalError that
+shadPS4/this port simply never surfaces on screen:
+
+```
+FatalError: _custom_codecallbacks_client.gnut: CLIENT SCRIPT COMPILE ERROR: Undefined variable "NSChatWriteRaw"
+```
+
+Traced `NSChatWriteRaw`, `NSChatWrite`, `NSChatWriteLine`, and `NSSendMessage`
+(CLIENT variant) to genuine NorthstarLauncher natives
+(`primedev/scripts/client/clientchathooks.cpp`,
+`primedev/client/chatcommand.cpp`) this port has never implemented --
+same missing-native class of bug as `AddServerToClientStringCommandCallback`
+earlier. Stubbed all four as no-ops in `mods/Northstar.PS4/mod/scripts/vscripts/_custom_codecallbacks_client.gnut`,
+following the same forward-declare-then-define pattern, with one added
+subtlety: `NSChatWrite`/`NSChatWriteLine`/`NSSendMessage` are also used by
+Northstar.Client's own `client/cl_chat.gnut`, and Northstar.Client's
+mod.json lists `_custom_codecallbacks_client.gnut` (Scripts[] index 62)
+before `client/cl_chat.gnut` (index 66) -- since `Build-Stage1ModIntegration.ps1`
+generates each mod's rson entries in its own Scripts[] order and rson-entry
+*position* for an overridden path comes from whichever mod is processed
+first (dedup keeps the first-seen entry; only file *content* comes from
+the highest-LoadPriority mod), this ordering already guaranteed the stub
+declarations compile before `cl_chat.gnut` uses them.
+
+**Rebuilt, redeployed the VPK, and the exact same FatalError happened
+again on retest.** Extracting `_custom_codecallbacks_client.gnut` directly
+from the deployed VPK proved the fix genuinely was baked in (`grep -c
+NSChatWriteRaw` = 12, correct). This contradiction -- fix confirmed present
+in the deployed VPK, but the exact same undefined-variable error still
+firing at runtime -- led to finding the real cause: **a second, entirely
+separate mod-deployment path**, `scripts/New-Stage2R2Overlay.ps1`
+(Goal 5's native `/app0/mods/<Name>/mod` search-path overlay,
+`launcher/src/runtime.cpp`'s `ModSearchPathOpen` hook), which had last been
+run on 2026-08-11/14 -- **before almost all of this session's Goal 12 work**
+-- and was never refreshed since. `D:\PS4\ShadPS4\CUSA04013\mods\Northstar.Client\mod\...`
+still held the original, unmodified PC file (confirmed via direct
+inspection: 7 matches for the old undefined natives, 0 stub content), and
+`D:\PS4\ShadPS4\CUSA04013\mods\Northstar.PS4\mod.json` on disk didn't even
+have a `Scripts[]` array yet (an old version, predating every fix from this
+session). This live overlay silently wins over VPK-baked content --
+confirmed by reading `launcher/src/runtime.cpp`'s `ModSearchPathOpen` hook
+(~line 1764): it replaces the engine's filesystem vtable's open slot to
+serve mod files from their own `/app0/mods/<Name>/mod` directory *first*,
+falling through to the engine's original search paths (loose `/app0/r2` +
+VPK mounts) only if no mod root has the file. Every fix made earlier this
+session that touched a file also present in this stale overlay (which,
+given the overlay mirrors entire mods, is basically everything Northstar.Client/PS4
+touch) was being silently shadowed by 6-day-old content the whole time --
+the scripts.rson ordering fix, the auth investigation, all of it was
+working against VPK content the live game was never actually reading for
+these paths.
+
+Confirmed the resolution order is priority-correct before relying on it:
+`ModSearchPathOpen` iterates `g_modRoots[]` **in reverse discovery order**
+(`for (i = g_modRootCount - 1; i >= 0; --i)`, `runtime.cpp` ~line 1808),
+i.e. the *last-discovered* mod is checked *first* -- mirroring PC's
+`AddSearchPath` semantics where the last-registered path wins.
+`CollectModNames` discovers mods either via `opendir("/app0/mods")` (whose
+enumeration order happened to already be alphabetical in testing, putting
+Northstar.PS4 last) or by falling back to reading `/app0/mods/.ns_mod_manifest`
+(explicitly written in `config/stage2-overlay-manifest.json`'s `mods[]`
+array order: Client, Custom, DirectConnect, PS4 -- PS4 last either way).
+So Northstar.PS4 (LoadPriority 99) reliably ends up checked first at
+runtime, which is correct -- the bug was purely that its overlay copy of
+this file didn't exist/wasn't current, not a resolution-order problem.
+
+**Fix:** re-ran `New-Stage2R2Overlay.ps1 -Clean -SkipR2ModStage` (matching
+how it was originally deployed -- `-SkipR2ModStage` is required; without it
+the script instead dumps mod content flatly into `/app0/r2`, a different,
+older mechanism this port isn't using). Verified boot-clean afterward
+(`[NorthstarPS4] fs overlay mod root[3]=/app0/mods/Northstar.PS4/mod`,
+`fs overlay vtable2 repointed... roots=4`, zero `FatalError` matches,
+reached `MAINMENU`).
+
+**Process takeaway for future sessions:** this port has *two* independent
+content-delivery paths that can each silently shadow the other --
+VPK-baked content (`work/stage1/sparse` -> `Build-AndDeployStage1Vpks.ps1`
+-> `D:\...\vpk_ps4`) and the live `/app0/mods` search-path overlay
+(`mods/` in this repo -> `New-Stage2R2Overlay.ps1 -SkipR2ModStage` ->
+`D:\...\mods`). **Any change to a mod's script content needs both
+redeployed together**, or the overlay (which wins at runtime for any path
+it covers) will silently serve stale content indefinitely with no error of
+any kind. Consider folding `New-Stage2R2Overlay.ps1 -SkipR2ModStage` into
+the same rebuild step as `Build-Stage1ModIntegration.ps1` +
+`Build-AndDeployStage1Vpks.ps1` so this can't drift apart again.
+
 ## scripts.rson merge insertion-order bug (found and fixed 2026-08-17)
 
 While investigating the above, a live client log (`launch18.log`) separately
