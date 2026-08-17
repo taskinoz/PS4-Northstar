@@ -272,13 +272,23 @@ foreach ($entry in ($modsWithPriority | Sort-Object Priority, { $_.Mod.name })) 
 # single scripts.rson -- verified: sh_damage_types.nut, a CLIENT-context
 # mp_common file, is listed in this exact frontend-resident scripts.rson).
 $vanilla = [System.IO.File]::ReadAllText($vanillaPath)
-$marker = '// DEVSCRIPTS CONTENT'
-$markerIndex = $vanilla.LastIndexOf($marker)
-$insertIndex = if ($markerIndex -ge 0) { $markerIndex } else { $vanilla.Length }
+# Insert mod blocks right before the FIRST vanilla "When:" block (i.e. right
+# after the header comment), not before '// DEVSCRIPTS CONTENT' near the end
+# of the file. Squirrel has no forward declaration for types/structs, and a
+# not-yet-compiled global referenced by an earlier-compiled file fails as
+# "Undefined variable" rather than resolving lazily -- vanilla content early
+# in this file (e.g. sh_damage_types.nut, ~line 191) can reference
+# mod-provided globals (e.g. AddServerToClientStringCommandCallback from
+# Northstar.Client/Northstar.PS4), so mod blocks must compile before ANY
+# vanilla block that might depend on them. Each generated block is a
+# self-contained "When: ... Scripts: [...]" unit, so relocating the whole
+# group to the top is syntactically safe.
+$firstWhenMatch = [System.Text.RegularExpressions.Regex]::Match($vanilla, '(?m)^When:')
+$insertIndex = if ($firstWhenMatch.Success) { $firstWhenMatch.Index } else { $vanilla.Length }
 $allBlocks = @()
 foreach ($target in $rsonBlocksByTarget.Keys) { $allBlocks += $rsonBlocksByTarget[$target] }
 if ($allBlocks.Count -eq 0) { throw "No scripts.rson blocks were generated; nothing to merge." }
-$merged = $vanilla.Substring(0, $insertIndex) + ($allBlocks -join $crlf) + $vanilla.Substring($insertIndex)
+$merged = $vanilla.Substring(0, $insertIndex) + ($allBlocks -join $crlf) + $crlf + $vanilla.Substring($insertIndex)
 $rsonDestination = Join-Path $sparseRoot 'frontend\scripts\vscripts\scripts.rson'
 if ($PSCmdlet.ShouldProcess($rsonDestination, "Write merged scripts.rson ($($allBlocks.Count) blocks)")) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $rsonDestination) -Force | Out-Null

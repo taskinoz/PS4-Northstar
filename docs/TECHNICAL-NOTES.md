@@ -1368,3 +1368,167 @@ into the VPK, not r2-overlaid) as the real compile list and a generated
 `UICallback` hook-dispatch block in `_menus.nut` in place of
 NorthstarLauncher's native hook dispatch. `ServerCallback`/`ClientCallback`
 dispatch is not yet built (needed for `Northstar.Custom`).
+
+## Auth token systems context (from Northstar Discord, relayed 2026-08-17) and a live PS4-specific lead
+
+Not from this project's own investigation -- relayed by the user from the
+Northstar Discord's reverse-engineering channel, but directly relevant and
+worth recording verbatim in spirit:
+
+- Titanfall 2's client has **at least four separate token/auth concepts**:
+  Origin token (PC/EA), Durango token (Xbox), a "3P" token (**third-party,
+  i.e. console platform auth -- confirmed "unused on PC"**), and a Nucleus
+  token (EA's internal matchmaking API token, sent to *every* server the
+  client connects to). These are easy to conflate; even NorthstarLauncher's
+  own code reportedly mislabels the Nucleus token as "P3PToken" ("3P" backwards)
+  at the point it's referenced, which caused real confusion in that Discord
+  thread too.
+- Per that thread, Northstar's client-side code overwrites the Nucleus
+  token before it's sent to a server (presumably because sending a player's
+  real EA-issued token to an arbitrary, potentially untrusted Northstar
+  server would leak more than intended). Grepped for this in
+  `tools/NorthstarLauncher-reference` (Nucleus/P3PToken/3pToken/ThirdParty) --
+  **no matches at all**, so either this override lives somewhere this
+  checkout doesn't have, or it happens without any C++-side involvement
+  (e.g. purely via a native engine ConVar or callback vanilla code already
+  drives, that Northstar's PC build simply doesn't need to touch).
+- Separately (not from Discord, general Source-engine knowledge and this
+  thread): connecting to a loopback address (127.0.0.1/localhost) on PC
+  bypasses real networking entirely -- client and server share a process
+  and use a direct buffer, no socket at all, unless
+  `net_usesocketsforloopback` forces real socket logic even for loopback.
+  Not directly relevant to this project's testing so far (the tested
+  dedicated server is a real LAN IP, not loopback), but worth knowing if a
+  same-machine client+server test is ever attempted.
+
+**Live PS4-specific lead worth testing:** "3P is for console" means this is
+*exactly* the token path a retail PS4 build would actually exercise (PSN
+auth), as opposed to Northstar's PC-centric Origin/Nucleus-override
+machinery. shadPS4's own boot log confirms the game genuinely loads
+`libSceNpAuth` (the real PS4 SDK library for this) at startup -- but every
+`sceNpGetOnlineId`/`sceNpGetNpId` call observed so far returns
+`SIGNED_OUT` (`user_id=1000 shadnet_enabled=false signed_in=false`), since
+shadPS4 has no real PSN account signed in. If the client's native connect
+flow tries to fetch a 3P/PSN auth token as part of the signon handshake and
+that fails silently because of the SIGNED_OUT state, a server could
+plausibly wait forever on a token that never arrives -- which would fit the
+2026-08-08 network-handshake-stall finding (every client thread legitimately
+parked, not spinning, not crashed) far better than a missing-asset theory
+does. Not yet confirmed: no `sceNpAuth*` (as opposed to `sceNpGetOnlineId`/
+`sceNpGetNpId`) calls have been observed in any captured log yet, but none
+of those logs are from an actual connection attempt -- next real connection
+test should specifically watch for `sceNpAuth` activity during the stall,
+not just `sceNpGetOnlineId`.
+
+## Real dedicated-server log: root cause of the connect-then-freeze report (2026-08-17)
+
+The user reported "I've connected with and without ns insecure and its
+frozen on connection at the moment, the server is stuck on connecting" and
+shared a real PC NorthstarLauncher dedicated-server log
+(`nslog2026-08-17 18-42-11.txt`, 1766 lines). The relevant window:
+
+```
+[18:44:04] [SCRIPT SV] Player connect started: entity (1: player The_taskinoz [1])---UID:1000108120826
+[18:44:05] [SCRIPT UI] UICodeCallback_LevelInit: mp_forwardbase_kodai
+[18:44:05] [SCRIPT SV] Player client script initialization complete: entity (1: player The_taskinoz [1])
+[18:44:06] [SCRIPT SV] started intro!
+[18:44:06] [SCRIPT SV] starting dropship intro!
+...
+[18:44:17] [NORTHSTAR] shadPS4's (uid 1) connection was rejected: "Authentication Failed."
+[18:44:17] [NORTHSTAR] Player  disconnected: "NetChannel removed."
+[18:44:17] [NORTHSTAR] shadPS4's (uid 1) connection was rejected: "Authentication Failed."
+[18:44:17] [NORTHSTAR] Player  disconnected: "NetChannel removed."
+[18:44:21] [SCRIPT SV] intro finished!
+[18:48:05] [NORTHSTAR] Player shadPS4 disconnected: "#DISCONNECT_TIMEDOUT"
+```
+
+**This is not a client-side freeze.** The player fully connects, finishes
+client script init, and starts playing the dropship intro -- then ~11s
+later gets rejected with "Authentication Failed." (appearing twice, in a
+pattern consistent with a retried/duplicate connect attempt racing the
+original), and the "frozen" appearance the user sees is almost certainly
+the client falling back to a connecting/stuck state after the server tears
+its connection down mid-session, followed eventually by a 4-minute
+`#DISCONNECT_TIMEDOUT` cleanup.
+
+Traced the exact rejection in `tools/NorthstarLauncher-reference`:
+`serverauthentication.cpp`'s `h_CBaseClient__Connect` (line ~284) calls
+`CheckAuthentication`, whose very first check is:
+
+```cpp
+bool ServerAuthenticationManager::CheckAuthentication(CBaseClient* pPlayer, uint64_t iUid, char* pAuthToken)
+{
+    ...
+    // if we don't need auth this is valid
+    if (Cvar_ns_auth_allow_insecure->GetBool())
+        return true;
+    ...
+    // don't allow duplicate accounts
+    if (IsDuplicateAccount(pPlayer, sUid.c_str()))
+        return false;
+    ...
+}
+```
+
+`ns_auth_allow_insecure` is registered `FCVAR_GAMEDLL` and is read **only
+by the dedicated server process** -- it gates whether the server accepts a
+connection without a masterserver-issued token at all. Getting a genuine
+"Authentication Failed." rejection is only possible when this cvar is
+**false** on the server at that moment; if it were true, `CheckAuthentication`
+returns `true` unconditionally on the very first line, before the
+duplicate-account check (`IsDuplicateAccount`) is ever reached.
+
+**Conclusion / action for the user:** since the rejection happened
+regardless of the client-side `ns_auth_allow_insecure` toggle, that toggle
+was never reaching the place that matters. `ns_auth_allow_insecure` must be
+set directly on the **PC dedicated server's own config or console**
+(e.g. `autoexec_ns_server.cfg`, or typed into the server's own console, or
+passed as `+ns_auth_allow_insecure 1` on its launch command line), not on
+the PS4 client -- setting it PS4-side has no effect on this check at all.
+This project's native Atlas masterserver client (Goal 13) doesn't exist yet
+to supply a real per-connection auth token the server could otherwise
+validate via `m_RemoteAuthenticationData`, so insecure mode is the only way
+to get a clean connection until Goal 13 lands.
+
+Secondary, lower-priority observation: the double "Authentication Failed." /
+"NetChannel removed." pair is consistent with the PS4 client re-sending a
+full connect handshake ~11s after an already-successful connect (the
+original connection was live long enough to run client script init and
+start the dropship intro). If insecure mode alone doesn't fully resolve the
+user's next test, this retry behavior -- and whether it's a shadPS4/engine
+netchannel quirk rather than anything this project's own launcher code
+controls -- is the next thing to investigate.
+
+## scripts.rson merge insertion-order bug (found and fixed 2026-08-17)
+
+While investigating the above, a live client log (`launch18.log`) separately
+showed `FatalError: sh_damage_types.nut: CLIENT SCRIPT COMPILE ERROR:
+Undefined variable "AddServerToClientStringCommandCallback"` -- a regression
+of a bug already fixed earlier (see "Two more compile-time crashes..."
+above). The stub was confirmed present in both the staged source tree
+(`grep -c` returned 3 matches in
+`work/stage1/sparse/mp_common/scripts/vscripts/_custom_codecallbacks_client.gnut`)
+and the deployed VPK (hash matched `dist/stage1-sparse/manifest.csv`
+exactly), ruling out a stale-deploy explanation.
+
+Root cause: `Build-Stage1ModIntegration.ps1`'s final `scripts.rson` merge
+step inserted all mod-provided blocks immediately before the vanilla
+`// DEVSCRIPTS CONTENT` marker, which sits near the very end of the vanilla
+file. Vanilla content much earlier in the file --
+`sh_damage_types.nut` at ~line 191, in a `"SERVER || CLIENT"` block --
+references the mod-provided `AddServerToClientStringCommandCallback` global.
+Squirrel has no forward declaration for a not-yet-compiled global; a file
+compiled before the global it references exists fails immediately with
+"Undefined variable", it does not resolve lazily. This is the exact same
+class of bug as the earlier `InitScript`-ordering fix within a single mod's
+own blocks, but at the whole-merge level across mods and vanilla content.
+
+Fix: mod blocks are now inserted right after the header comment, before the
+**first** vanilla `When:` block, rather than before `// DEVSCRIPTS CONTENT`.
+Each generated block is already a self-contained `When: "..." Scripts:
+[...]` unit, so relocating the whole group to the top of the file is
+syntactically safe -- RSON has no enclosing root structure, just a flat
+sequence of independently-compiled `When:`/`Scripts:` blocks. Verified in
+the redeployed VPK: `_custom_codecallbacks_client.gnut` now appears at line
+82 of the merged `scripts.rson`, `sh_damage_types.nut` at line 269 (was
+previously the reverse, with mod content past line 1000).
