@@ -3092,3 +3092,70 @@ than leaving them beside the rpak.
 Note also that none of this would have fixed the twin-B shotgun: both mod rpaks
 contain zero `mdl_`/`rmdl` assets, and the model it wants is absent from PC and
 PS4 alike.
+
+## Source console: present in the build, but not typeable (2026-09-18)
+
+The console is **not stripped**. `client.prx` carries `CGameConsole`,
+`IGameConsole`, `CGameConsoleDialog`, `CConsoleDialog`, `CConsolePanel` and
+`IConsoleDisplayFunc`, exposes them as `GameConsole004`, and holds both the
+`toggleconsole` command and the `con_enable` convar. `engine.prx` has
+`Con_Init()` and `Con_Shutdown()`. Northstar's `autoexec_ns_client.cfg` already
+binds a key to `toggleconsole` and this port already serves it.
+
+**There is no way to type.** `sceKeyboard` and `sceIme` return zero hits across
+every module, so neither a USB keyboard nor the system on-screen keyboard can
+reach the guest. (`TextboxConsoleKeyboard` in engine.prx is an ordinary vgui
+TextEntry resource key, not keyboard support.) Any console-like feature on this
+platform has to get its input from somewhere other than typing.
+
+**Engine command execution is still unsolved.** `IVEngineClient` is registered
+as `VEngineClient013`; its 48-entry vtable was dumped at runtime. Slot 26
+(`engine+0x470a0`) is `ServerCmd`: it formats with `"cmd %s"` into a 255-byte
+buffer, tokenizes with `CCommand::Tokenize` at `engine+0x204b70`, then calls
+`engine+0xf0870`. It is the only slot touching either.
+
+`engine+0x204b70` is confirmed good: it zeroes the CCommand itself (`[0]`,
+`[8]`, `[0x10]`), takes `(CCommand*, const char*)`, and resolves its break set
+(`{}()':`) through its own rip-relative reference, so a caller supplies only
+storage.
+
+`engine+0xf0870` is **not** local execution, which the `cmd ` prefix should have
+given away: ServerCmd ships a command to the server. Two probes agree - `echo`
+produced no output, and `exec` of a missing file produced no filesystem request
+at all, which is what a network send does with nothing connected. Local
+execution would need `Cbuf_AddText`/`Cmd_ExecuteString`; engine.prx has
+`Cbuf_Init()`/`Cbuf_Shutdown()` only as profiler strings and no
+`Unknown command` string to anchor the dispatcher. `runtime_console.inl` keeps
+the addresses behind `kConsoleCommandsEnabled = false`.
+
+**None of that is on the critical path.** `ClientCommand()` is a Squirrel native
+that already works - `Northstar.DirectConnect` calls it to connect to a server,
+which is proven on this port - and this module can already call Squirrel
+functions with arguments through `FindFunction` (client+0x685cf0), `PushObject`
+(client+0x6875f0) and `sq_call` (client+0x6876c0). Command execution should go
+through Squirrel. See `docs/IDEAS.md`.
+
+## Deployed profiles drift, and nothing detected it (2026-09-18)
+
+`New-NorthstarProfile.ps1` throws when its output directory exists, so a
+deployed profile can never be refreshed, and the hash manifest it writes
+(`profile-files.json`) is left in the staging directory rather than deployed.
+The result was silent drift: the deployed `Northstar.Custom` held 117 of its 125
+files, missing all eight `.mdl` files, so the twin-B shotgun rendered as the
+Source error model while the engine's failed opens for
+`w_shotgun_doublebarrel.mdl` sat in the log unread.
+
+`Sync-NorthstarProfile.ps1` updates a deployment in place: it compares every
+source file by hash, copies what is missing or changed, verifies each copy,
+reports stale files (pruning only on request) and deploys the manifest so the
+next run can report drift. Repository mods override PC ones of the same folder
+name. A dry run against the current deployment reports 818 PC-sourced files in
+sync and flags that `Northstar.PS4` has never been deployed at all.
+
+**This is emulator-shaped.** On hardware `/app0` is the read-only application
+image, so mods cannot be copied in after install: they are baked into the PKG,
+and anything updatable has to live in writable storage - `/data`, which this
+port already uses for `scripts.rson`, merged KeyValues and save data. The
+durable fix is to make the mods root a search path (`/data` first, then
+`/app0`) rather than the single hardcoded `kModsRoot` literal it is today. A
+directory junction would work on the emulator and has no hardware equivalent.

@@ -37,6 +37,10 @@ VmLifecycle* RuntimeLifecycleFor(int context) noexcept {
 // PC ignores each mod callback's result and always runs the rest; only the
 // engine's own callback decides the return value. A mod whose callback is
 // declared but never defined must not stop the mods that load after it.
+// Defined in runtime_console.inl, which is included later in the same unit.
+void RunConsoleSelfTest() noexcept;
+void DrainConsoleCommandFile() noexcept;
+
 bool DispatchLifecycle(VmLifecycle& state, void* owner, const char* callback) noexcept {
     auto original = reinterpret_cast<bool (*)(void*, const char*)>(g_runtimeClientBase + 0x679d40);
     state.started = true;
@@ -53,6 +57,10 @@ bool DispatchLifecycle(VmLifecycle& state, void* owner, const char* callback) no
     }
     uiapi::DrainPendingLoads(owner);
     LogFormat("[NorthstarPS4] %s lifecycle completed\n", state.name);
+    // Late enough that the engine's command system is up, and it runs again on
+    // every map and menu change, which is what gives queued commands a tick.
+    RunConsoleSelfTest();
+    DrainConsoleCommandFile();
     return result;
 }
 

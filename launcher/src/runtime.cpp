@@ -1752,6 +1752,7 @@ std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noex
 
 #include "runtime_vpks.inl"
 #include "runtime_rpaks.inl"
+#include "runtime_console.inl"
 
 void* ModOpenEx(void* self, const char* fileName, const char* mode,
     std::uint32_t flags, const char* pathID, char** resolved) noexcept {
@@ -2272,6 +2273,7 @@ void* ModuleTracker(void*) noexcept {
         ProbeCvarInterface(vstdlibHandle, engineBase, engineSize);
         if (engineHandle != static_cast<OrbisKernelModule>(-1)) {
             ProbeRegistrationExports(engineHandle, vstdlibHandle);
+            ProbeEngineClientInterface(engineHandle, engineBase, engineSize);
         }
     } else {
         LogFormat("[NorthstarPS4] cvar probe skipped: vstdlib handle unavailable\n");
