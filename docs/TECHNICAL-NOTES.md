@@ -1677,3 +1677,1418 @@ sequence of independently-compiled `When:`/`Scripts:` blocks. Verified in
 the redeployed VPK: `_custom_codecallbacks_client.gnut` now appears at line
 82 of the merged `scripts.rson`, `sh_damage_types.nut` at line 269 (was
 previously the reverse, with mod content past line 1000).
+
+
+## 2026-09-06: clean archives, native filesystem and first global native
+
+Client SHA256 `abc6efd2125a2a58d32ad9d23d245a03fd3213a763e407712a575f0bc04e879b`; filesystem SHA256 `4d6b7b653c1d9cde01b2f0634d11a06d8b986dded4374b87ca330100e4969266`.
+
+All addresses below are this PS4 build's module-relative VAs, discovered from local disassembly. Executable sections have file offset VA+0x4000. Runtime mutation gates validate addresses and preimages.
+
+- Filesystem primary vtable VA 0x70eb0, secondary 0x713f0. Primary slot 76 OpenEx is 0xd4a0; secondary Open 0xd480 adjusts this by -8 and delegates. OpenEx ABI `(self, path, mode, uint32 flags, pathID, resolvedPath**)`. Copy retains the preceding two RTTI words and 166 function slots.
+- Primary slot 97 ReadFromCache is 0x67f0. Client compile function 0x6783f0 calls primary offset 0x308; false falls back through ReadFile/OpenEx. Bypass only when an enabled loose override exists. This resolves duplicate UICodeCallback_MouseMovementCapture caused by mixed cached vanilla and mod scripts.
+- Constant table is sharedState+0x40d8 (tag 0x0a000020, pointer +0x40e0), sharedState=HSQVM+0x50. Intern 0x6a96a0 uses stringtable sharedState+0x4048. Table insertion 0x6ab3e0 returns bool in AL. VM owner global 0x1afbfb8, HSQVM=owner+8. First manifest access precedes owner creation; InitScript access has a live UI VM.
+- Global native registration 0x67a3c0 actually takes `(CSquirrelVM*, record*, classTree*, textualTypes, instance)`. Retail call 0x6718f6 passes null classTree, textualTypes=1, instance=0. Do not use the Windows three-argument signature. Record size 0x68 with textual return/arguments at +0x18/+0x20 and callback +0x60.
+- Verified bool return stack layout against 0x682137..0x6821dc: HSQVM top +0x68, stack pointer +0x70, 16-byte objects, bool tag 0x1000008. Replacing a reference releases the old object (refcount +8, destructor vtable+0x10). Runtime callback invocation remains untested; compile-time native symbol/type registration succeeded.
+- Native lifecycle callback dispatch candidate 0x679d40: UI caller 0x31df24, client map caller 0x768386. **Read-only profiling only; not hooked.**
+
+Latest probe `work/stage2/iterations/20260906-030006/shad-new-lines.log`: registered NSIsMasterServerAuthenticated; next compile failure NSTryAuthWithLocalServer. PRX SHA256 `aec370a131d91c362e5326ca189342189b88808d7758fd57d75321a1ae932c8a`. The installed PRX was subsequently restored to the non-injecting bootstrap. No native-only full menu or map acceptance has passed.
+
+
+## 2026-09-17: deferred native signatures and UI callback hook
+
+The typed-return natives must be registered after `cl_northstar_client_init.nut` has declared ModInfo/ServerInfo/MasterServerAuthResult. Before declaration, the PS4 signature resolver gave NSGetModInformation return type `var`, causing a typed-assignment compile error. Deferred registration at the observed panel_mainmenu read resolves that error for the current core mods; this is still a core-mod-specific timing trigger, not a general VM lifecycle integration.
+
+Verified PS4 Squirrel helpers: string push 0x682e00, new array 0x683330, append 0x6835e0, new struct 0x684970, seal field 0x684b00, raise error 0x682a60. The runtime validates helper preimages before exposing callbacks. Invocation of the new struct-returning APIs still awaits completion of UI compilation.
+
+UI call at 0x31df24 has preimage `e8 17 be 35 00` targeting 0x679d40. The experimental hook changes only its rel32 displacement, refuses out-of-range targets, and leaves the original callback function untouched. Callback metadata is parsed fully before mutation. The main-thread registration point patches the containing 16 KiB page then restores RX. The controlled boot logged 15 callbacks installed and successful protection restoration, but never reached execution: compilation stopped at missing NSFetchVerifiedModsManifesto. No Before/After execution, InitScriptCallback, Destroy, client or server callback proof is claimed.
+
+Enabled-state persistence is under writable guest `/data/northstar_ps4/enabledmods.json`, with temporary-file flush/fsync/rename and original app0 profile fallback. NSReloadMods explicitly raises a restart-required error after saving; there is no live script VM replacement. Host tests cover preservation of unrelated settings and callback parsing. Network functions remain explicitly offline/error adapters; authentication, downloads and server-list transport are not ported.
+
+
+## 2026-09-17: Safe I/O, JSON and the completed UI lifecycle
+
+Client SHA256 `abc6efd2125a2a58d32ad9d23d245a03fd3213a763e407712a575f0bc04e879b` throughout. All VAs below are module-relative in that client.prx, found by local disassembly and each gated on an exact byte preimage before use.
+
+**Call stack, for per-mod save isolation.** The client's own callstack printer at 0x67f062-0x67f0bf reads `sqvm+0x38` `_callstack`, `sqvm+0x40` `_callstacksize`, indexes `_callstack[size - level - 1]` with a 0x48-byte CallInfo, checks `ci+0x20` for `OT_FUNCPROTO` (0x8002000), takes the funcproto from `ci+0x28`, and reads its source `SQString*` from `proto+0x40` guarded by `OT_STRING` (0x8000010) at `proto+0x38`; characters live at `SQString+0x30`. The funcname pair is `proto+0x48`/`proto+0x50`. `CallingSource` performs the same reads and nothing else - no engine call and no writes - which is why PC's `sq_stackinfos` never had to be located.
+
+**Script call with arguments.** The engine's own dispatcher at 0x679280 shows the sequence: push the function object, push `this`, push each argument, then call. Derived entry points:
+
+- 0x685cf0 `FindFunction(sqvm, name, SQObject* out, const char* signature)`; returns negative when absent, and a null `signature` skips signature validation (`test r13,r13; je` at 0x685d97).
+- 0x6875f0 `PushObject(sqvm, uint64 packedTag, void* value)`; increments the refcount itself.
+- 0x6876c0 `sq_call(sqvm, params, retval, raiseerror)`; on success it pops `params` entries (loop at 0x687740) and leaves the closure, which the caller pops, as 0x679570 does.
+- The VM root table object is at `sqvm+0xb8` (pushed from `rax+0xb8` at 0x67944a).
+
+**Squirrel containers, for JSON.** `sq_newtable(sqvm)` is 0x683230 (pushes `OT_TABLE` 0x0a000020). `SQTable` layout confirmed at the insert routine 0x6ab480: `+0x38` nodes, `+0x40` node count (a power-of-two mask), node stride 0x28 with `val` at +0x00, `key` at +0x10 and `next` at +0x20. `SQArray` is `+0x30` values and `+0x38` used slots, confirmed by the one-million bound check at 0x683650. The insert at 0x6ab3e0 does **not** take a reference: the client increments the refcount itself before calling (0x684555), so the runtime does the same and then pops the stack entry, transferring ownership.
+
+**Callback dispatch semantics.** PC's `CallScriptInitCallbackHook` ignores the result of every Before and After mod callback and always runs the rest; only the engine's own callback supplies the return value. The PS4 hook now matches. This is what unblocked the last three After callbacks: `NSUpdateGameStateUIStart` is declared in Northstar.Client's `mod.json` but defined in no installed script, and the previous abort-on-failure behaviour stopped `AddColorPickerMenu`, `AtlasAuthDialog` and `InitialiseArenaLoadouts` from ever running.
+
+Boot `work/stage2/iterations/20260917-134347/shad-new-lines.log`, PRX SHA256 `830102e32f74b0a3fb8d74415ab595137486ec95b8dbd5eb9518ddee897a78f2`: UI compilation completes, all 16 UI callbacks dispatch in load order and `UI lifecycle completed` is reached. A 152-second follow-up run stayed up with no crash and no script errors. The only parse errors belong to the mod's own `colorsliders.menu`, which ends with an XML-style `<!-- ... -->` comment that Source KeyValues cannot parse; PC hits the same thing and the file is not edited. All 1,069 recorded VPK and mod files rehashed unchanged after these runs.
+
+Not claimed: no CLIENT or SERVER VM lifecycle, no per-frame drain for the deferred script-call queue (PC uses `CHostState::FrameUpdate`; results currently land at the next UI code callback), no `NSLoadFile` exercised by real mod content, and no map load.
+
+
+## 2026-09-17: CLIENT VM lifecycle, and why no C++ static initializer runs
+
+**Context values.** The VM initializer hooked at 0x6717af receives PC's
+`ScriptContext` values: 0 SERVER, 1 CLIENT, 2 UI. Only UI (2) appears during
+menu boot; a CLIENT VM is created on map load and `server.prx` is not even in
+the loaded module list until a server is hosted.
+
+**CLIENT call sites.** All five callers of the code-callback dispatcher
+0x679d40 were resolved by their name argument:
+
+| VA | callback | context |
+|----|----------|---------|
+| 0x31df24 | `UICodeCallback_UIInit` | UI (hooked) |
+| 0x768386 | `ClientCodeCallback_MapSpawn` | CLIENT (hooked) |
+| 0x34ed2d, 0x768487 | `ClientCodeCallback_SetupRumble` | CLIENT |
+| 0x768465 | `ClientCodeCallback_SaveResumed` | CLIENT |
+
+`ClientCodeCallback_MapInit` and `ClientCodeCallback_MyScriptInit` dispatch
+through a second entry point at 0x679e80 instead. Only the two hooked names
+are the ones PC's `bShouldCallCustomCallbacks` lets custom callbacks run for,
+so the hook set matches PC exactly. The client VM owner is the global at
+0x19d4fe8; the UI owner global is 0x1afbfb8.
+
+**VM teardown.** Four call sites release `owner->sqvm` through 0x6787a0: the
+three already known UI paths (0x1441ce, 0x31e02a, 0x33559a, all clearing
+0x1afbfb8) and the CLIENT path at 0x2e7813, whose surrounding block
+(0x2e77f2-0x2e7834) loads and then clears 0x19d4fe8. All four now route
+through one destroy hook that matches the owner against each context's state.
+
+**`sq_pushasset` is 0x682f40** (the function after `sq_pushstring`, storing
+tag 0x8000400), which makes `StringToAsset` a real implementation rather than
+a stub.
+
+**This module runs no C++ dynamic initializers.** `Build-Stage2Poc.ps1`
+deliberately patches `DT_INIT` to point straight at `NorthstarPs4Init`,
+because shadPS4 starts `DT_INIT` but never calls OpenOrbis's hidden
+`module_start`. That bypasses the crt code that would walk `.init_array`, so
+**only that one constructor ever runs**. Every other global in this module
+must be constant-initialized.
+
+This surfaced as a hard-to-read crash. A new
+`VmLifecycle{"UI", "UICallback", ...}` global had a `std::vector` member,
+which makes the whole aggregate initializer *dynamic* rather than constant, so
+the struct was left zero-filled and its `metadataKey` was null by the time
+`ParseScriptCallbacks` used it: an access violation inside this module
+immediately after the first `mod.json` was read, with nothing in the log to
+point at the cause. Existing globals like `std::string authFailure` and
+`std::vector<CatalogEntry> catalog` survive only because a zero-filled libc++
+`string`/`vector` happens to be a valid empty one. The fix was to move the
+vectors into their own zero-initialized globals and keep the struct's
+initializer constant. Two earlier suspicions (engine-thread stack exhaustion
+from the ~25 KiB metadata buffers) were wrong, though the buffers were moved
+out of those frames anyway and that change was kept.
+
+Boot after the fix: `work/stage2/iterations/20260917-142801/shad-new-lines.log`,
+PRX SHA256 `829a4f59b082760fd8d4e331a920f89c4ebbbed4e3d95e0e426e39308496cbaa`.
+Both lifecycle hooks installed with protection restored (`va=31df24` and
+`va=768386`, both `protection=0`), 15 UI and 27 CLIENT callback entries
+loaded, UI startup unchanged. **The CLIENT path is installed but unproven:**
+nothing in this run created a CLIENT VM, so no CLIENT InitScript compile,
+native registration or callback dispatch has executed yet. That needs a map
+load.
+
+
+## Northstar.DirectConnect: the menu had no entry point (2026-09-17)
+
+The mod registered `DirectConnectMenu` through its `UICallback.Before` but
+nothing ever opened it. The button that used to open it lived in the Stage 1
+sparse VPK patch of `panel_mainmenu.nut`, and the 2026-08-07 notes above
+already record that it was deliberately *not* moved into the mod, because it
+reached into `panel_mainmenu.nut`'s private `file` struct. That patch is
+retired, and under Northstar `panel_mainmenu.nut` now comes from
+Northstar.Client anyway, so the button no longer exists in any form.
+
+Fixed with the pattern Northstar.Client uses for its own Mods entry: a second
+`UICallback.After` (`AddDirectConnectMenu_MainMenuFooter`) that calls
+`AddMenuFooterOption( GetMenu( "MainMenu" ), ... )`. `Before` is too early for
+this - `GetMenu( "MainMenu" )` is only valid once UIInit has finished - which
+is exactly why Northstar splits its own registration the same way.
+
+**BUTTON_X is free on the main menu under Northstar.** `menu_main.nut` guards
+its only BUTTON_X footer option (inbox accept) with `#if VANILLA`, and this
+runtime registers `VANILLA = 0`, so it is compiled out. BUTTON_Y is taken by
+Northstar's Mods list and BUTTON_A is the console select prompt. Note also
+that `_footer.nut`'s `InitFooterOptions` wires footer *click* handlers only
+under `#if PC_PROG`, so on PS4 a footer option is reachable by its physical
+button, not by clicking it.
+
+The per-option `conditionCheckFunc` argument of `AddMenuFooterOption` is left
+null deliberately: `menu_main.nut` gates its console footer options on
+`IsConsoleSignedIn`, and shadPS4 reports `SIGNED_OUT` for every
+`sceNpGetOnlineId` call, so copying that gate would have hidden the option
+permanently.
+
+The mod now ships its own `MENU_DIRECT_CONNECT` token in a UTF-16 LE
+localisation file rather than depending on `Northstar.PS4`, which is not part
+of the installed profile. Boot confirms
+`localise Northstar.DirectConnect file=resource/northstar_directconnect_localisation_%language%.txt result=1`,
+4 mods discovered (was 3), 106 declared scripts (was 105), and both
+`AddDirectConnectMenu` and `AddDirectConnectMenu_MainMenuFooter` dispatching
+without a "callback not found". Whether the option renders and navigates is
+not verified here; that needs someone at the screen.
+
+
+## First CLIENT VM: init works, InitScript was compiled twice (2026-09-17)
+
+The user reached a real connect through the Direct Connect menu, twice (MP
+lobby and an in-progress game), against a PC dedicated server with
+`ns_auth_allow_insecure 1`. Both froze. The log shows why, and it is not the
+auth path this time.
+
+**What worked.** A CLIENT VM was created for the first time
+(`VM initialized context=1 owner=0x22e5c4900 result=1`) and the whole CLIENT
+lifecycle plumbing ran: 27 non-deferred natives registered, the InitScript
+compiled, 3 deferred natives registered, `CLIENT VM native initialization
+complete`. All 30 CLIENT natives registered, including
+`NSChatWrite`/`NSChatWriteLine`/`NSChatWriteRaw`/`NSSendMessage`, whose
+absence was the documented cause of the earlier "frozen on connect" report.
+
+**What broke.**
+
+```
+FatalError: cl_northstar_client_init.nut: CLIENT SCRIPT COMPILE ERROR: Redefinition of enumeration "eDiscordGameState"
+```
+
+`BuildRuntimeManifest` emits an `initBlocks` entry declaring every mod's
+`InitScript`, and that entry was `When: "SERVER || CLIENT"` whenever the VM
+init hook was installed. That was correct while `RuntimeVmInit` only handled
+UI: UI compiled the InitScript from the hook, and the manifest covered SERVER
+and CLIENT. Extending `RuntimeVmInit` to CLIENT made CLIENT compile it twice -
+once from the hook at VM creation, once from the manifest during the engine's
+own boot compile pass - and the second pass is a hard Squirrel fatal.
+
+`cl_northstar_client_init.nut` is Northstar.Client's `InitScript` only; it is
+not in its `Scripts[]`, and the generated manifest contained exactly one
+declaration of it. So this was purely the hook and the manifest overlapping.
+
+Fixed by narrowing the block to `When: "SERVER"` once the hook is installed.
+The invariant is now written next to the code: the manifest may only declare
+the contexts `RuntimeVmInit` does not hook, and when SERVER is eventually
+hooked this block goes away entirely rather than gaining another context.
+
+`ClientCodeCallback_MapSpawn` was never reached, so CLIENT Before/After
+dispatch is still unproven - the fatal happened first. PRX after the fix:
+`2f3f57022e1816d70ae4e3ee1e02f7eb4c96571a855f99be1368f46921fea513`.
+
+
+## Log capture: the Qt launcher truncates shad_log.txt (2026-09-17)
+
+Two rounds of hands-on testing were reported and neither could be diagnosed,
+because the evidence no longer existed by the time the log was read.
+`shadps4.log` records how the Qt launcher starts the emulator:
+
+```
+main: Run: ["...shadPS4.exe", "--game", "D:/PS4/ShadPS4/CUSA04013\eboot.bin"]
+```
+
+No `--log-append`, so `shad_log.txt` is truncated on every launch. Any crash
+or hang that is investigated after the game has been relaunched has already
+lost its log. `Invoke-Stage2Iteration.ps1` passes `--log-append` and archives
+the new lines, which is why automated probes are always diagnosable and manual
+sessions were not.
+
+`scripts/Start-NorthstarSession.ps1` covers the manual case: it passes
+`--log-append`, never terminates the game (an automated probe kills it on a
+pattern match, which is wrong for a play session), waits for the window to be
+closed, and archives that session's lines plus a `result.json` under
+`work/stage2/sessions/<timestamp>-<label>/`. The result records the installed
+PRX SHA256 and the build record alongside markers for
+`UI lifecycle completed`, `VM initialized context=1`,
+`CLIENT lifecycle completed` and the first fatal line.
+
+Recording the PRX hash per session is deliberate: an earlier retest in this
+same sequence reproduced a fixed bug exactly, because the rebuilt PRX had
+never been deployed - the deploy had failed on a file lock while the game held
+the PRX open, and relaunching the game does not replace it. A session whose
+hash does not match the build under test is the most misleading artefact in
+this workflow.
+
+### Two hypotheses ruled out while waiting for a usable log
+
+- **Double compilation.** Every declaration in the generated manifest was
+  evaluated against every context/mode combination plus every assignment of
+  the free tokens each expression uses (`GAMEMODE_*`, `MAP_*`, `DEV`, ...):
+  856 distinct paths, **0** that can compile twice in one VM. The 12 paths
+  declared more than once are all vanilla's own mutually exclusive pairs
+  (`CLIENT && SP` vs `CLIENT && MP`, `SERVER` vs `CLIENT`, ...). The
+  InitScript collision fixed earlier was the only instance of that bug class.
+- **Missing CLIENT natives.** All 54 scripts the installed mods declare for
+  the CLIENT context reference only natives this runtime registers into that
+  VM. (An earlier pass reported 28 scripts; that count came from a regex over
+  `mod.json` that missed roughly half the entries. The conclusion held, the
+  number did not.)
+
+Note that `Northstar.Custom` declares `gamemodes/sh_gamemode_fw.nut` and
+`gamemodes/cl_gamemode_fw.nut`, which do not exist in the mod folder. That is
+not a packaging fault: both are stock `mp_common` scripts and the mod
+re-declares them so they compile in MP. The filesystem hook finds no mod
+override and falls through to the game archives, which is correct.
+
+
+## Live stall captured during a connect: same signature as 2026-08-08 (2026-09-17)
+
+First session captured with `Start-NorthstarSession.ps1`, read while the game
+was still hung. Evidence preserved in
+`work/stage2/sessions/20260917-174522-session/`.
+
+**Sequence.** UI startup completed normally, then a healthy level load:
+`menu_act01.bik`, the `client_mp_common.bsp.pak000_*` chunks,
+`mp_forwardbase_kodai_loadscreen.rpak`, `ps4_all.starpak`, and
+`client_mp_forwardbase_kodai.bsp.pak000_000`-`003`. It then streamed
+materials and stopped partway through, last request
+`materials/models/mendoko/interior/mendoko_ui_decals/mendoko_ui_decals_col.vtf`.
+No fatal, no script error, no crash. Over 200,000 further log lines contain
+no filesystem activity at all, only idle polling.
+
+**Thread state - and a correction.** Every worker thread except `MainThrd`
+and `chatserver:Net_FrameLoop` stops producing log lines within ~1,300 lines
+of each other. That was first written up here as those threads "parking",
+which the log does not actually support: `RenderThread`,
+`shadPS4:GpuCommandProcessor` and the rest only log discrete events
+(memory maps, file opens), so silence means no *loggable* event, not a
+blocked thread. The 2026-08-08 note established real parking with `cdb`
+thread stacks; nothing equivalent was captured here.
+
+**The emulator stub spam is a frame clock, not a symptom.** `UpdatePlayTime`
+lines are one per wall-clock minute, so the rate of `sceVoiceGetPortAttr`
+from `MainThrd` can be measured against them:
+
+| window | voice polls | file opens | rate |
+|--------|-------------|------------|------|
+| menu idle (35s)   | 2108 | 19   | ~60/s |
+| loading (60s)     | 1316 | 7221 | ~22/s |
+| stalled (60s)     | 3514 | 19   | ~59/s |
+| stalled (60s)     | 3493 | 0    | ~58/s |
+
+`sceVoiceGetPortAttr` is a once-per-frame poll: 60/s at an idle menu,
+dropping to 22/s while the loader is actually working, and back to a steady
+~58-59/s during the stall. `sceHttpWaitRequest` from the chat server tracks
+the same curve. **The client is therefore running a full 60 fps frame loop
+throughout the stall** - it is not frozen, deadlocked or starved. Neither
+stub is implicated in the hang; both are useful as a frame clock precisely
+because they are unconditional per-frame calls.
+
+**This is the 2026-08-08 stall, not a regression.** That note records the
+same map, the same VPK chunk range, the same "completely idle, no more asset
+loads, no script messages, no FatalError" outcome, and the same
+`UpdatePlayTime` minute-deltas with zero intervening progress - observed
+under the retired Stage 1 VPK architecture, long before any of the runtime
+mod loading, CLIENT lifecycle or manifest work. The one recorded difference
+is that `cdb` showed MainThrd parked in a blocking wait then, whereas here it
+still polls; `sceVoiceGetPortAttr` is a stub that logs on every call, so a
+main thread pumping voice inside a wait loop is consistent with both.
+
+**The 3P/PSN auth-token theory is disproven.** The relayed Discord lead
+(recorded above) predicted the client might block fetching a console auth
+token, and explicitly asked for a real connection attempt to be checked for
+`sceNpAuth*` activity during the stall, since no earlier log came from an
+actual connect. This log does, and contains **zero** `sceNpAuth*` calls
+anywhere. The only `Np` traffic during the stall is `sceNpGetOnlineId`
+returning `SIGNED_OUT`, which begins at the main menu (29 lines after
+`UI lifecycle completed`), not at the connect, and so is ordinary background
+polling rather than part of the signon path. `sceVoiceGetPortAttr` from
+`MainThrd` likewise starts at the menu, so it is not a connect-time wait
+either.
+
+**Squirrel `print()` does not reach shadPS4 stdout.** `Northstar.DirectConnect`
+prints `[DIRECT-CONNECT]: connecting to '<server>'` before issuing the
+`connect` command and that string appears nowhere in the log, while this
+module's own `LogFormat` output does, because it calls
+`sceKernelDebugOutText` directly. Script-side prints cannot be used as
+diagnostic markers on this port.
+
+**The client log cannot see the netchannel.** The only `sceNet*` entries in
+the whole log are `sceNetInit`, `sceNetPoolCreate` and `sceNetCtlInit`;
+shadPS4 does not log per-packet socket traffic for this title. Combined with
+the frame-rate finding above - a healthy client, rendering normally, with no
+local work left to do - the remaining explanation is the one the 2026-08-08
+note reached: the client is waiting on the next step of the server's
+connect/signon sequence.
+
+**Still the open item, unchanged since 2026-08-08:** the other half of this
+handshake is only visible from the dedicated server's log for the same time
+window. Nothing further can be concluded from the client side alone.
+
+
+## First full CLIENT lifecycle, then a crash in VM teardown (2026-09-17)
+
+A connect to the lobby produced the port's first complete CLIENT script
+lifecycle, and then an access violation on the way out. Both halves are
+useful.
+
+**The CLIENT lifecycle ran.** `ClientCodeCallback_MapSpawn` dispatched for
+the first time: 19 Before callbacks (`Progression_Init`,
+`Sh_GamemodeChamber_Init`, `Sh_GamemodeHidden_Init`, `SNSMode_Init`,
+`SHCreateGamemodeFW_Init`, `Sh_GamemodeGG_Init`, `Sh_GamemodeTT_Init`,
+`Sh_GamemodeInfection_Init`, `Sh_GamemodeArena_Init`, `Sh_GamemodeKR_Init`,
+`Sh_GamemodeFastball_Init`, `Sh_GamemodeHideAndSeek_Init`,
+`ShGamemodeCTFComp_Init`, `Sh_GamemodeTFFA_Init`,
+`FirstPersonSequenceForce1P_Init`, `BleedoutDamage_PreInit`,
+`MessageUtils_ClientInit`, `Testing_Init`,
+`Client_CustomScoreboardColumns_Init`) followed by the After set
+(`InitialiseArenaLoadouts`, `RiffInstagib_Init`, `CustomAirAccelVars_Init`,
+`Promode_Init`, `BleedoutDamage_Init`, `CustomOOBTimer_Init`,
+`ClassicRodeo_InitPlaylistVars`, `CustomPilotCollision_InitPlaylistVars`, ...)
+and `CLIENT lifecycle completed`. `NSUpdateGameStateClientStart` is declared
+by Northstar.Client but defined nowhere, the CLIENT-side twin of
+`NSUpdateGameStateUIStart`; it is logged and skipped, as PC does.
+
+**The crash.** The final two lines were this module's own
+`CLIENT VM lifecycle state cleared` followed by
+`Unhandled Exception code 0xc0000005 at 0x960636e4`. client.sprx segment[0]
+was at `0x959c4000`, so the faulting VA is `0x69f6e4`:
+
+```
+0069f6c0  push rbp; mov rbp,rsp; ...
+0069f6ca  mov  r15, rdi                      ; SQString*
+0069f6dc  mov  rcx, qword ptr [r15 + 0x18]   ; its shared-state back-pointer
+0069f6e0  mov  rax, qword ptr [r15 + 0x28]
+0069f6e4  mov  r9,  qword ptr [rcx + 0x4048] ; <-- fault, the string table
+0069f6eb  movsxd rcx, dword ptr [r9 + 0xc]   ; then hash % bucket count,
+0069f6ef  div  rcx                           ; and a bucket-chain walk
+```
+
+That is SQString release unlinking a string from the intern table, and it
+faulted because `string+0x18` did not hold a valid `SQSharedState*`.
+
+**Cause: `RegisterRuntimeConstants` never took ownership of its keys.** It
+interned `VANILLA` and the four `NS_VERSION_*` names and inserted them into
+the constants table without writing the shared-state back-pointer or taking
+a reference. `SQString::Create` (0x6a96a0) does neither itself - disassembly
+to its first `ret` contains no access to `+0x18` at all - and every engine
+caller does both immediately after interning (`sq_pushstring` 0x682e00, the
+script-function lookup 0x685cf0, the native registrar 0x684630). The table
+therefore held unowned keys with a garbage `+0x18`, and releasing them at
+teardown dereferenced it.
+
+**Why it surfaced only now.** The bug predates this session's work, but was
+unreachable: the constants table is only released when its VM is destroyed,
+the UI VM lives for the whole session, and until this run no CLIENT VM had
+ever been created *and* destroyed on this port. Extending
+`RegisterRuntimeConstants` to the CLIENT context made a destroyed VM
+possible for the first time, which exposed it.
+
+Fixed by setting `keyString[0x18] = sharedState` and incrementing the
+refcount before the insert, matching the engine's own pattern. PRX
+`e9fdbbc7368043254307e9d3ecc9284deddf2e4e3ba0c41b31a2816661ca3124`; UI
+startup still reaches `UI lifecycle completed` and the five constants still
+register. **The fix is not yet confirmed against the case that broke:** that
+needs another connect followed by leaving the map, so a CLIENT VM is created
+and destroyed again.
+
+This crash is unrelated to the connect stall documented above. The stall is a
+healthy client at 60 fps waiting on the server; this was a teardown fault on
+the way out of a map.
+
+
+## shadPS4 updated: runtime compatibility re-verified, stub surface unchanged (2026-09-17)
+
+The emulator was updated in place under the launcher's `Pre-release` folder,
+which is the path both `Invoke-Stage2Iteration.ps1` and
+`Start-NorthstarSession.ps1` already use, so no script changes were needed.
+It is a different build: the launcher's own log moved its `main:` call site
+from `main.cpp:125` to `main.cpp:145`/`150`.
+
+**Nothing in this runtime depends on the emulator build**, because every gate
+validates bytes in the game's own PRX files rather than anything shadPS4
+provides. Re-verified on the new build anyway, since the hooks do depend on
+`sceKernelMprotect` and `sceKernelGetModuleInfo` behaving: boot reached
+`UI lifecycle completed` in 26.8 s with `OpenEx profile gate match=1`,
+`OpenEx hook installed roots=4`, `localise gate addFile=1 accessor=1`,
+`VM init hook installed protection=0`, `VM destroy hooks installed count=4
+protection=0`, and both lifecycle call sites patched
+(`va=31df24`, `va=768386`, both `protection=0`). No preimage mismatch. The
+`IsSelfFile: Not a SELF file. Magic mismatch` lines are shadPS4's loader
+distinguishing SELF from plain ELF and are unrelated to this module's gates.
+
+**The stub surface is essentially unchanged.** Stubs called during a 27 s
+boot: `sceVoiceGetPortAttr` 1160 times, then single init-time calls to
+`sceVoiceInit`, `sceVoiceStart`, `sceVoiceCreatePort`,
+`sceVoiceSetThreadsParams`, `sceVoiceConnectIPortToOPort`,
+`sceGameLiveStreamingInitialize`, `sceNpRegisterStateCallbackForToolkit`,
+`sceNetCtlInit`, `sceKernelGetProcessType`, `__sys_regmgr_call`,
+`sceVideoOutSetWindowModeMargins`, `sceSystemServiceParamGetString`,
+`scePadInit` and `sceCoredumpRegisterCoredumpHandler`. Voice is still not
+implemented, which is why `sceVoiceGetPortAttr` continues to dominate the
+log at roughly one call per frame. As established above that is a frame
+clock rather than a fault, so this does not change any open item.
+
+Whether the update changes the connect stall is untested and is worth a
+retest, since a networking change there would be invisible from this
+module's own gates.
+
+
+## Teardown fix confirmed, and the out-of-sync disconnect identified (2026-09-17)
+
+A five-session log captured a connect to `mp_lobby`. Two results.
+
+### The VM teardown crash is fixed
+
+The last session ran the exact path that faulted before and completed it:
+
+```
+314791  VM initialized context=1            (CLIENT VM created)
+326708  CLIENT lifecycle completed          (MapSpawn dispatched)
+327645  CLIENT VM lifecycle state cleared   (CLIENT VM destroyed - no crash)
+328072  UI VM lifecycle state cleared
+328103  VM initialized context=2            (new UI VM)
+336804  UI lifecycle completed              (back at the menu)
+```
+
+The only `Unhandled Exception` in the whole log is at line 147998, in an
+earlier session that predates the deploy. Between `CLIENT lifecycle completed`
+and teardown the client loaded `resource/UI/HudVoice.res` and the GPU thread
+compiled in-game graphics and compute pipelines, so it was rendering the
+lobby, not merely loading it. It then left cleanly, released both VMs,
+created a fresh UI VM and returned to the menu. This is the furthest this
+port has reached.
+
+### `#DISCONNECT_OUT_OF_SYNC` is a remote-function-table checksum mismatch
+
+The on-screen "out of sync" error is not printed to stdout, so it does not
+appear in the log at all. It comes from `client.prx`. The string
+`#DISCONNECT_OUT_OF_SYNC` is at VA `0x90b286`, immediately adjacent to
+`RemoteFunctionCall` (`0x90b29e`) and `RemoteFunctionCallsChecksum`
+(`0x90b2b1`).
+
+A registrar at `0x43e680` installs two network message handlers on the object
+at `0x15f2950`:
+
+| message | handler |
+|---------|---------|
+| `RemoteFunctionCall` | `0x43dae0` |
+| `RemoteFunctionCallsChecksum` | `0x43e520` |
+
+The server's checksum lands in the global at `0x1e44b34`, and two sites
+compare against it and disconnect on mismatch:
+
+```
+0043dea0  mov eax, dword ptr [r14 + 0x2fc]   ; the client's own table checksum
+0043dea7  cmp eax, dword ptr [rip + ...]     ; vs the server's, at 0x1e44b34
+0043dead  je  0x43decc                       ; equal: continue
+0043deaf  mov rdi, qword ptr [rip + ...]     ; engine interface at 0xb2f0a0
+0043deb6  lea rsi, [rip + ...]               ; #DISCONNECT_OUT_OF_SYNC
+0043dec3  call qword ptr [rax + 0xc8]        ; Disconnect(reason)
+```
+
+with the same comparison repeated at `0x43e64c` on the receive path.
+
+**Interpretation.** The client and server each checksum their registered
+remote-function-call table, and Titanfall drops the client when they differ.
+That table is a product of which scripts were compiled and in what order, and
+this port compiles a *generated* `scripts.rson`
+(`initBlocks + original + modBlocks`) whose contents and ordering are this
+runtime's own construction, not PC Northstar's. A mismatch is therefore the
+expected outcome rather than a surprise, and it only became reachable now
+that the CLIENT VM compiles and registers remote functions at all.
+
+Northstar's own `Northstar.CustomServers/mod/scripts/vscripts/lobby/_private_lobby.gnut:91`
+carries a matching comment - `// GameRules_SetGameMode( args[0] ) // can't do
+this here due to out of sync errors with new clients` - confirming this error
+class is familiar on PC too.
+
+**Next step:** make the CLIENT VM's remote-function table match what a PC
+Northstar server builds. That means reconciling the generated manifest's
+script set and ordering with PC's, and identifying exactly which declarations
+feed `[r14+0x2fc]`. Not attempted yet.
+
+
+## Client profile was two Northstar versions behind the server (2026-09-17)
+
+After the `#DISCONNECT_OUT_OF_SYNC` finding the server was moved to the
+stable release, and the client then hung in endless loading. The cause of the
+mismatch turned out to be straightforward and worth recording, because
+nothing in the client log makes it visible.
+
+The installed PS4 profile was carrying **`0.0.0.1+dev`** builds of all three
+core mods while the PC source (and therefore the server) was on **`1.31.13`**.
+Comparing the two trees file by file:
+
+| mod | identical | differing | only in the release |
+|-----|-----------|-----------|---------------------|
+| Northstar.Client | 84 | 3 | 0 |
+| Northstar.Custom | 124 | 1 | 0 |
+| Northstar.CustomServers | 493 | 3 | 110 |
+
+The 110 missing files are 88 `.nm` navmeshes and 22 `.ain` AI graphs -
+server-side AI data that a client never compiles, so not checksum-relevant.
+The seven differing files are: all four `mod.json`,
+`ui/menu_ns_serverbrowser.nut`, `ui/menu_private_match.nut`,
+`cfg/autoexec_ns_server.cfg` and `gamemodes/_hardpoints.gnut`. The release
+also declares one script the dev copy does not,
+`sh_custom_scoreboard_columns.gnut` in Northstar.Custom. (The apparent
+`sh_northstar_http_requests.gnut` difference is only JSON whitespace.)
+
+A differing declared script set is exactly what changes the compiled script
+set, and therefore the remote-function-call table the previous note traced
+`#DISCONNECT_OUT_OF_SYNC` to. **Client and server must run identical mod
+versions**, which is easy to lose track of here because the PS4 profile is a
+*copy* of the PC mods rather than the same directory.
+
+Repackaged with `New-NorthstarProfile.ps1` from the updated source and
+verified: 818 files byte-identical to the PC mods, all three core mods now
+`1.31.13`. `Northstar.DirectConnect` was re-added by hand afterwards rather
+than through `-IncludePs4CompatibilityMods`, because that switch would also
+install `Northstar.PS4`, whose script stubs have been replaced by native
+adapters and whose extra scripts would change the compiled set again.
+DirectConnect declares a single `RunOn: "UI"` script, which cannot contribute
+to a remote-function table. The previous profile is preserved at
+`work/stage2/deploy-backups/20260917-184731-R2Northstar-pre-1.31.13`.
+
+Boot verified afterwards: 4 mods discovered at the expected versions,
+manifest regenerated (106 scripts), `UI lifecycle completed`, and the CLIENT
+native scan still reports no unregistered natives across the 54 CLIENT-context
+scripts the newer mods declare.
+
+**Unresolved and worth separating:** the endless-loading stall reproduces on
+`mp_forwardbase_kodai` and stops at the same asset every time
+(`materials/models/mendoko/interior/mendoko_ui_decals/mendoko_ui_decals_col.vtf`),
+whereas `mp_lobby` loaded, ran the full CLIENT lifecycle and rendered. Whether
+the version mismatch also caused that stall is untested - every stall so far
+predates the profile update.
+
+
+## Playable attrition, and three now-separate failures (2026-09-17)
+
+With client and server both on `1.31.13` the out-of-sync disconnect is gone
+and **attrition connects and plays**. That is the project's first real match.
+What remains splits into three distinct problems rather than one.
+
+### 1. Attrition: playable, with occasional crashes
+
+No captured log yet. Needs a `Start-NorthstarSession.ps1` run that reproduces
+one, since the crash is the only one of the three with no diagnosis at all.
+
+### 2. Fastball: hangs on the loading screen
+
+Every stall captured so far was loading `mp_forwardbase_kodai` and stopped at
+the same asset,
+`materials/models/mendoko/interior/mendoko_ui_decals/mendoko_ui_decals_col.vtf`,
+with the client still running a full 60 fps frame loop. Attrition now loads a
+map successfully, so the loader is not broken in general.
+
+**The decisive control has not been run:** every failure so far is
+gamemode *and* map confounded. Attrition on `mp_forwardbase_kodai`, or
+fastball on whatever map attrition succeeded on, would separate "fastball's
+custom content" from "this particular map". Worth doing before any code is
+written for it.
+
+### 3. Private lobby: persistence is not available to the client
+
+The dialog is a script error at `ui/menu_private_match.nut#378`, which is:
+
+```squirrel
+while ( player.GetPersistentVarAsInt( "initializedVersion" ) < PERSISTENCE_INIT_VERSION )
+    WaitFrame()
+```
+
+`GetPersistentVarAsInt` raises `Persistent data not available`. That string is
+at client.prx VA `0x8e7e2f`, beside the rest of the persistence accessor's
+error set (`Blank var name not allowed`, `Invalid var name '%s'`,
+`Specified var is a struct`). The guard that reaches it is at `0x2f89e2`:
+
+```
+002f89e2  mov  rdi, qword ptr [rip + ...]  ; engine interface singleton 0xb2f0a0
+002f89e9  xor  esi, esi                    ; client index 0 - the "#0" in the message
+002f89f1  call qword ptr [rax + 0xb60]     ; IsPersistentDataAvailable(0)
+002f89f7  test al, al
+002f89f9  je   0x2f8ad0                    ; false -> "Persistent data not available"
+```
+
+That is the same singleton the out-of-sync disconnect path uses
+(`0xb2f0a0`, called through `[rax+0xc8]`), so it is a central engine
+interface rather than anything this port installs.
+
+**Where persistence is meant to come from.** Northstar.CustomServers'
+`autoexec_ns_server.cfg` documents the tradeoff on the cvar itself:
+`ns_auth_allow_insecure 0 // keep this to 0 unless you want to allow people to
+join without masterserver auth/persistence`. Insecure mode therefore has no
+masterserver pdata by design. PC compensates server-side:
+`serverauthentication.cpp` sets `m_iPersistenceReady = READY_INSECURE` with
+the comment *"actual placeholder persistent data is populated in script with
+InitPersistentData()"*, and Northstar.CustomServers calls
+`InitPersistentData( player )` from `CodeCallback_OnClientConnectionCompleted`
+(`mp/_base_gametype_mp.gnut:146`), before its `IsLobby()` branch, so a lobby
+should receive placeholder pdata like any other mode.
+
+So either that server-side initialisation is not running for this connection,
+or its result is not reaching the PS4 client in time for `OnLobbyMenu_Open`.
+Attrition playing successfully suggests pdata does arrive in a normal match,
+which points at the lobby reading it earlier than it becomes available.
+Distinguishing the two needs the server's log for a lobby connect; the client
+cannot see which.
+
+Note this is **not** the SERVER-context persistence native gap tracked in
+"Remaining native work" item 3 (`NSIsWritingPlayerPersistence`,
+`NSEarlyWritePlayerPersistenceForLeave`). Those run in the server's own VM on
+the PC host and are unrelated to a PS4 client reading its own pdata.
+
+
+## Why the fastball icon is missing: custom modes reach the UI by a CLIENT->UI call (2026-09-17)
+
+The lobby persistence error resolved itself once client and server matched.
+The remaining observation - fastball has no icon when switching gamemodes -
+turns out to depend on a cross-VM call, which is worth writing down because
+nothing about it is visible in the log.
+
+The registration chain for any custom gamemode is:
+
+1. `gamemodes/sh_gamemode_fastball.gnut` (`( CLIENT || SERVER ) && MP`) runs
+   `Sh_GamemodeFastball_Init`, which only *registers* a callback via
+   `AddCallback_OnCustomGamemodesInit`. This is confirmed to run: it appears
+   in the CLIENT Before callback list.
+2. Northstar's override of `gamemodes/sh_gamemodes.gnut` calls
+   `PrivateMatchModesInit()` and `InitCustomGamemodes()` inside
+   `#if SERVER || CLIENT`, which fires those callbacks, so
+   `CreateGamemodeFastball` runs and calls `AddPrivateMatchMode( "fastball" )`.
+3. `AddPrivateMatchMode` in `lobby/sh_lobby.gnut` appends to its own list and
+   then mirrors the result into the other VM:
+
+```squirrel
+void function AddPrivateMatchMode( string mode )
+{
+    if ( !file.modes.contains( mode ) )
+        file.modes.append( mode )
+    #if CLIENT
+        // call this on ui too so the client and ui states are the same
+        RunUIScript( "AddPrivateMatchMode", mode )
+    #endif
+}
+```
+
+4. The UI menus (`ui/menu_mode_select.nut`, `ui/menu_ns_serverbrowser.nut`,
+   `ui/menu_stats_maps.nut`, all Northstar.Client) list modes from
+   `GetPrivateMatchModes()`, which just returns that mirrored list.
+
+So the UI never registers custom gamemodes itself - neither
+`sh_gamemode_fastball.gnut` nor `sh_gamemodes_custom.gnut` is compiled in UI,
+both being `(CLIENT || SERVER) && MP`. The mode list exists in the UI VM only
+because the CLIENT VM pushed it there through `RunUIScript`. A missing mode in
+the menu therefore means one of steps 2-3 did not complete.
+
+`RunUIScript` is the engine's own native at client VA `0x767b10`. This module
+validates its preimage in `ProbeUiVm` but never hooks or replaces it, so it is
+running vanilla engine code.
+
+**This cannot be narrowed further from the current logs**, because every
+diagnostic in that chain is a Squirrel `print()` - including
+`InitCustomGamemodes`'s own - and script prints do not reach shadPS4 stdout on
+this port (established earlier: `Northstar.DirectConnect`'s
+`[DIRECT-CONNECT]` print never appears while this module's `LogFormat` does,
+because the latter calls `sceKernelDebugOutText` directly).
+
+**Next step, and it unblocks more than this issue:** route the engine's script
+print path into `sceKernelDebugOutText` so Squirrel `print`/`printt` output
+lands in the log. That would immediately show whether `InitCustomGamemodes`
+ran, and would give script-level visibility for the fastball load hang and the
+attrition crashes as well. The engine's own error printing (`FatalError:`,
+`Error: [N] KeyValues Error:`) already reaches stdout, so a usable sink
+exists; what is missing is the connection from the script print native to it.
+
+
+## Script output now reaches the log (2026-09-17)
+
+Squirrel `print`, `printl`, `printt` and `Msg` produced nothing in the module
+log, which blocked diagnosis of the fastball load hang, the attrition crashes
+and the missing gamemode icon alike, since every useful marker in those paths
+is a script print.
+
+**Where script output goes.** The Squirrel base library registers `print` at
+VA `0x6d0b30`; its registration entry is at `0xa83ea8` and names the string at
+`0x92ddc5`. The native ends:
+
+```
+006d0b84  mov  rax, qword ptr [rbx + 0x50]    ; sqvm -> SQSharedState
+006d0b88  mov  rcx, qword ptr [rax + 0x4350]  ; SQSharedState::_printfunc
+006d0b8f  test rcx, rcx
+006d0b92  je   0x6d0ba2                       ; null: returns silently
+006d0b94  lea  rsi, [rip + ...]               ; "%s"
+006d0ba0  call rcx                            ; printfunc(vm, "%s", text)
+```
+
+Everything funnels through it: `printl( text )` is `print( text + "\n" )`,
+`printt( ... )` joins its arguments and calls `printl`, and `Msg` calls
+`print` (`ui/init.nut`, `ui/_threads.nut`). Mods use `printt` 999 times,
+`print` 154 and `printl` 71, so one sink covers all of it.
+
+**A prediction that was wrong, and the correction.** The expectation was that
+`_printfunc` would be null, making prints silently discarded. It is not: the
+first run reported `previous=0x9603fae0`, which is engine code. Script output
+was never being dropped - it was going to the engine's own console sink, which
+does not reach shadPS4 stdout the way this module's `sceKernelDebugOutText`
+output does. The implementation therefore **tees**: it logs the formatted text
+and then forwards to the previous function, so the in-game console keeps
+working. Had the original been replaced outright, console output would have
+been silently removed to gain log output.
+
+**Implementation** (`launcher/src/runtime_script_print.inl`). Installing a
+`_printfunc` is a data write into the VM's own shared state, so no call site is
+patched and the engine's `print` implementation runs unchanged. It is gated on
+two preimages: `0x6d0b30` for the native itself and `0x6d0b84` for the sink
+read, the latter chosen because it literally encodes both offsets the hook
+depends on (`mov rax,[rbx+0x50]`, `mov rcx,[rax+0x4350]`). A mismatch refuses
+and logs rather than writing a function pointer into an unknown field. One
+entry per `SQSharedState` is recorded with the context label captured at
+install time, so lines are tagged without reaching into lifecycle globals.
+Installation happens in `RegisterRuntimeConstants` immediately after the shared
+state is resolved and before constant or native registration, so script output
+is available even when the rest of setup fails.
+
+**Verified.** Boot log now contains lines such as:
+
+```
+[NorthstarPS4] UI script print installed shared=0x202589ac0 previous=0x9603fae0
+[NorthstarPS4] [UI script] SAVEGAME try is valid savegame
+[NorthstarPS4] [UI script] mvp - 13
+```
+
+PRX `7784da5b55dc851ff7469dad5a54176a14ef5d218ee1ef735d91a824a9289474`; UI
+startup unchanged, host tests pass. Only 16 script lines appear at the menu,
+which is expected - the value is during a connect, where `InitCustomGamemodes`
+and the gamemode registration chain print, and where the hang and crash live.
+
+
+## Root cause of the custom-gamemode out-of-sync: client GAMETYPE is wrong (2026-09-17)
+
+The script print sink paid for itself on its first real connect. A lobby
+connect now yields, from the client's own scripts:
+
+```
+[UI script]     [DIRECT-CONNECT]: connecting to '192.168.0.145:37015'
+[UI script]     UICodeCallback_LevelLoadingStarted:
+[UI script]     UICodeCallback_UpdateLoadingLevelName: mp_lobby
+[UI script]     UICodeCallback_LevelInit: mp_lobby
+[CLIENT script] InitCustomGamemodes
+[CLIENT script] GAMETYPE: tdm
+[CLIENT script] MAX_TEAMS: 2
+[CLIENT script] InitCustomNetworkVars
+[UI script]     UICodeCallback_ErrorDialog: Out of sync with server.
+[UI script]     UICodeCallback_LevelShutdown: mp_lobby
+```
+
+Three findings, in order of importance.
+
+**1. `InitCustomGamemodes` does run on the client.** The custom-gamemode
+registration chain is intact, so the missing fastball icon is *not* caused by
+that hub failing. It must be the `RunUIScript( "AddPrivateMatchMode", mode )`
+step or something past it. That is now a separate, narrower question.
+
+**2. The client's `GAMETYPE` is `tdm`.** `_settings.nut`'s `Settings_Init`
+resolves it from the engine:
+
+```squirrel
+#if SERVER
+    if ( GameRules_GetGameMode() == "" )
+        GameRules_SetGameMode( "tdm" )   // note: SERVER only
+#endif
+GAMETYPE = GameRules_GetGameMode()
+printl( "GAMETYPE: " + GAMETYPE )
+```
+
+The `tdm` fallback is compiled `#if SERVER`, so a client reporting `tdm` is
+reporting what the engine actually holds for it, not a script-side default.
+
+**3. That is exactly what breaks the checksum.** Custom gamemodes gate their
+remote-function registration on `GAMETYPE`:
+
+```squirrel
+void function FastballRegisterNetworkVars()
+{
+    if ( GAMETYPE != GAMEMODE_FASTBALL )
+        return
+    Remote_RegisterFunction( "ServerCallback_FastballUpdatePanelRui" )
+    Remote_RegisterFunction( "ServerCallback_FastballPanelHacked" )
+    Remote_RegisterFunction( "ServerCallback_FastballRespawnPlayer" )
+}
+```
+
+With the server on fastball and the client believing `tdm`, the server
+registers three remote functions the client does not. The remote-function-call
+table checksum traced earlier therefore differs, and `0x43dea0` disconnects
+with `#DISCONNECT_OUT_OF_SYNC` - the dialog now visible in the log as
+`UICodeCallback_ErrorDialog: Out of sync with server.`
+
+**This also explains why attrition works and fastball does not.** Attrition
+and TDM are vanilla modes: they register no custom network vars, so the table
+matches whatever the client believes the gamemode is. Only modes that call
+`AddCallback_OnRegisteringCustomNetworkVars` are sensitive to a wrong
+`GAMETYPE`, and every one of those is a Northstar custom mode. It is
+consistent with Northstar's own comment at
+`lobby/_private_lobby.gnut:91` - `// GameRules_SetGameMode( args[0] ) //
+can't do this here due to out of sync errors with new clients`.
+
+**Next step:** find how a client is supposed to learn the server's gamemode
+before `Settings_Init` runs, and why this port ends up with `tdm`.
+`GameRules_GetGameMode()` is an engine call, and PC Northstar does not patch
+it, so the value should arrive over the connection. A cheap discriminator
+first: connect to the working attrition server and read the `GAMETYPE:` line.
+If it also says `tdm`, the client never receives the gamemode at all and the
+vanilla modes were only ever passing by luck; if it says `at`, the value does
+arrive and something about the lobby or custom modes is specific.
+
+### Correction and refinement (same day, after two more lobby connects)
+
+The section above concluded that a wrong client `GAMETYPE` was the root cause.
+That was stated with more confidence than the evidence supports, and two more
+captured connects refine it.
+
+Both reached `mp_lobby` and both reported `GAMETYPE: tdm`, and a third connect
+to a different port timed out, so **no reading has yet been taken from the
+attrition server that works**. The discriminator that section asked for was
+not obtained.
+
+More importantly, `tdm` in a lobby may well be *correct on both sides*.
+Northstar deliberately does not set the game mode there - that is the whole
+point of the `_private_lobby.gnut:91` comment, `// GameRules_SetGameMode(
+args[0] ) // can't do this here due to out of sync errors with new clients`.
+If the server is also `tdm` in the lobby, then neither side registers custom
+network vars and `GAMETYPE` cannot be what differs. The reasoning in the
+previous section is sound *only* if the server's gamemode differs from the
+client's, which is unverified.
+
+The timeline also does not fit a connect-time rejection:
+
+```
+330753  VM initialized context=1
+341022  [CLIENT script] GAMETYPE: tdm
+342566  CLIENT lifecycle completed
+342780  [UI script] UICodeCallback_LevelInit: mp_lobby
+        [UI script] menu_PrivateLobbyMenu menu opened     <- the lobby worked
+343498  [UI script] UICodeCallback_ErrorDialog: Out of sync with server.
+        [UI script] UICodeCallback_LevelShutdown: mp_lobby
+```
+
+The client loaded the lobby and successfully opened `PrivateLobbyMenu` before
+being disconnected. That points at the second of the two checksum comparison
+sites found earlier - `0x43e64c`, on the handler for an incoming
+`RemoteFunctionCallsChecksum` message - rather than the connect-time check at
+`0x43dea0`. In other words the server sent a checksum *after* the client was
+already in the lobby, and that is what did not match.
+
+**What is actually established:** the disconnect is a remote-function-table
+mismatch that arrives after a successful lobby load, and vanilla-mode matches
+are unaffected. **What is not:** whether the two sides disagree about
+`GAMETYPE`, and whether the mismatching table comes from a gamemode change in
+the lobby or from this port compiling a different script set than the server.
+Both remain open, and the client log alone cannot separate them.
+
+### The print hook table was too small, and it cost a test round
+
+The session that followed produced a clean behavioural pattern from the user:
+vanilla modes work, custom modes do not. Connecting to the lobby with
+**attrition** selected loaded the map; with **fastball** selected it
+disconnected out of sync; connecting while the server was mid-match on
+**fastball** or **gun game** connected but never entered the game, and ending
+the server's match redirected to the lobby and then disconnected out of sync.
+
+The log appeared to show something dramatic for those custom-mode connects:
+three CLIENT VMs were created and reached `CLIENT lifecycle completed` while
+printing *nothing at all* - no `InitCustomGamemodes`, no `GAMETYPE:`. That
+looked like client script init dying early for custom modes.
+
+It was not. It was this module's own instrumentation:
+
+```
+26682  | UI script print installed     shared=0x20258c5a0
+81618  | CLIENT script print installed shared=0x20a039d80
+94510  | UI script print installed     shared=0x2033e0dc0
+259151 | UI script print installed     shared=0x20258b320
+330754 | CLIENT script print installed shared=0x20a0351e0
+343753 | UI script print installed     shared=0x2033de980
+446472 | CLIENT script print installed shared=0x20a69e420
+503865 | script print hook table full
+559286 | script print hook table full
+641871 | script print hook table full
+```
+
+`kMaxScriptPrintHooks` was 4 and `InstallScriptPrint` refused once full. Every
+VM creation allocates a fresh `SQSharedState`, and entries were never released
+when a VM died, so after seven VMs the table was exhausted and the three
+connects that mattered captured no script output whatsoever. **No conclusion
+can be drawn from their silence.**
+
+Fixed three ways: the table is now 16 entries; `RemoveScriptPrint` releases the
+entry from the destroy hook while the shared state is still valid, which also
+prevents mislabelling a later VM the allocator hands the same address; and a
+full table now evicts its oldest entry instead of refusing, since a stale
+entry can only refer to an already-freed shared state. PRX
+`adbff109ec58f7e38ec9f35b2248fd6fe98608581b208c34a4ce14bc40daaee9`.
+
+The behavioural pattern the user established stands on its own and is the more
+useful result: **every failing case is a Northstar custom gamemode and every
+working case is a vanilla one**, which is consistent with the
+remote-function-table mechanism and folds the "fastball hangs on loading"
+symptom into it - that connect reached the server and never entered the game,
+rather than failing to load content.
+
+
+## Root cause of every custom-gamemode failure: KeyValues patches are never applied (2026-09-17)
+
+The client receives the server's gamemode correctly. A lobby connect now
+reports `[CLIENT script] GAMETYPE: aitdm`, not the `tdm` default, which kills
+the "the client never learns the gamemode" hypothesis outright.
+
+The real gap is that **this port does not implement Northstar's KeyValues
+patch mechanism at all**, so the client runs the stock playlist file while the
+PC server runs a merged one.
+
+`Northstar.Custom/keyvalues/playlists_v2.txt` is an 879-line patch that
+defines every custom gamemode: `arena`, `chamber`, `ctf_comp`, `fastball`,
+`gg`, `hidden`, `hs`, `inf`, `kr`, `sns`, `tffa`, `tt`.
+`Northstar.CustomServers` ships another. Neither is ever read. The engine asks
+for `playlists_v2.txt`, the filesystem overlay checks each mod root and every
+one misses:
+
+```
+3 path = /app0/R2Northstar/mods/Northstar.Client/mod/playlists_v2.txt        -> failed
+3 path = /app0/R2Northstar/mods/Northstar.Custom/mod/playlists_v2.txt        -> failed
+3 path = /app0/R2Northstar/mods/Northstar.CustomServers/mod/playlists_v2.txt -> failed
+3 path = /app0/R2Northstar/mods/Northstar.DirectConnect/mod/playlists_v2.txt -> failed
+```
+
+then falls through to the vanilla file. The overlay roots are
+`<mod>/mod`, and KeyValues patches live in `<mod>/keyvalues`, a *sibling* of
+`mod/` and therefore outside every served root. It is not a path bug: these
+files are not meant to be served directly at all.
+
+**What PC does.** `ModManager::TryBuildKeyValues`
+(`mods/compiled/modkeyvalues.cpp`) writes a generated KeyValues file that
+`#base`-includes each enabled mod's patch - later mods first - alongside a
+copy of the original, and serves that in place of the requested file. The
+engine's own KeyValues loader performs the merge through `#base`.
+
+**This explains the entire custom-gamemode pattern** that was previously split
+across three symptoms:
+
+- custom modes missing from the Modes menu, and no fastball icon: the client's
+  playlist has no such gamemodes
+- "the gamemode menu loads weirdly": the menu is built from a playlist missing
+  those entries
+- connecting to a custom-mode match connects but never enters the game: the
+  client cannot resolve a gamemode it has no playlist entry for
+- out of sync on custom modes: playlist vars drive gamemode setup, so the two
+  sides do not agree
+- attrition and TDM work: they are in the stock playlist
+
+It also retires the map-versus-gamemode control that kept being requested -
+the variable was never the map.
+
+**The fix has a precedent in this codebase.** `BuildRuntimeManifest` already
+generates a merged `scripts.rson` into `/data/northstar_ps4/` and serves it
+from the `OpenEx` hook. A KeyValues equivalent is the same shape: detect a
+request for a file some enabled mod patches, generate a `#base` wrapper plus
+copies of the patches into the writable guest directory, and serve that. The
+one new requirement is that the `#base` targets resolve relative to the
+generated file, so the patch copies must sit beside it.
+
+Listed in "Remaining native work" item 3 as "generated KeyValues/assets";
+this is the first evidence of what it actually costs.
+
+
+## KeyValues patches implemented (2026-09-17)
+
+`launcher/src/runtime_keyvalues.inl`, wired into the `OpenEx` hook. Same shape
+as `BuildRuntimeManifest`: generate into the writable guest directory and serve
+the generated file, never touching mod sources or game archives.
+
+**Behaviour, matching `ModManager::TryBuildKeyValues`.** At filesystem-hook
+install time each enabled mod's `keyvalues/` tree is scanned recursively and
+the relative paths recorded. When the engine later requests one of those paths,
+the runtime writes into `/data/northstar_ps4/kv/`:
+
+- `mod_patch_<n>_<leaf>` - a copy of each mod's patch, **highest priority
+  first**, because `#base` does not override keys that already exist, so the
+  earliest include wins
+- `mod_original_<leaf>` - a copy of the engine's own file, read through
+  `g_originalFsOpenEx` so this module's hook is bypassed and the vanilla
+  content is what gets copied
+- `<leaf>` - the wrapper, which `#base`-includes the patches, then the
+  original last, then declares an empty root object
+
+The root object name is parsed out of the original the way PC does it: skip
+whitespace, `//` comments and `#` directives to the first identifier.
+
+**Verified end to end.** Boot discovers nine patches across the installed mods -
+`playlists_v2.txt`, `resource/fontfiletable.txt`,
+`scripts/aisettings/npc_pilot_elite.txt` and five `scripts/weapons/*.txt` -
+none of which were ever applied before. The playlist builds and is served:
+
+```
+keyvalues patch mod_patch_0_playlists_v2.txt <- .../Northstar.Custom/keyvalues/playlists_v2.txt (15295 bytes)
+keyvalues patch mod_patch_1_playlists_v2.txt <- .../Northstar.CustomServers/keyvalues/playlists_v2.txt (118 bytes)
+keyvalues built playlists_v2.txt root=playlists patches=2 original=360403 bytes
+keyvalues served: playlists_v2.txt
+```
+
+and the generated wrapper is exactly the PC shape:
+
+```
+// AUTOGENERATED: MOD PATCH KV
+#base "mod_patch_0_playlists_v2.txt"
+#base "mod_patch_1_playlists_v2.txt"
+#base "mod_original_playlists_v2.txt"
+playlists
+{
+}
+```
+
+Critically, **the engine resolved every `#base` target**, each opened once from
+`/data/northstar_ps4/kv/` with no failures. It resolved them relative to the
+*served* file's directory rather than the requested path, so the generated
+files are found without the requested path mattering; the prefix match on
+`mod_patch_`/`mod_original_` in the hook is retained as a fallback in case a
+different caller resolves them the other way.
+
+The merged patch defines `arena`, `chamber`, `fastball`, `gg` and the rest, so
+the client's playlist now contains the custom gamemodes the server has. PRX
+`49723ea33fb4eaf6b3f7ae3b7edadcfb61e871ce62a8a6c8bd94c7b09699c21c`. UI startup
+unchanged, host tests pass, **zero VPKs modified**.
+
+**Baseline note.** The mod integrity check now reports 7 changed files against
+`mods-before.json`: the four `mod.json`, `ui/menu_ns_serverbrowser.nut`,
+`ui/menu_private_match.nut`, `cfg/autoexec_ns_server.cfg` and
+`gamemodes/_hardpoints.gnut`. Those are exactly the deliberate `0.0.0.1+dev` ->
+`1.31.13` profile update, not drift. A fresh baseline for the current profile
+is recorded at `work/native-loading/mods-1.31.13.json` (823 files);
+`mods-before.json` is kept as the dev-mod record. The VPK baseline is untouched
+and still reports zero changes, which is the invariant that matters.
+
+**Not yet proven:** that this fixes the custom-gamemode failures. The playlist
+now contains them, but whether the Modes menu lists them, whether a fastball
+match loads, and whether the out-of-sync disconnect is gone all need a live
+connect.
+
+### The #base delegation does not work on this engine, and how the test missed it
+
+Serving the generated wrapper broke boot: `FatalError: Failed to load playlist
+data`, no main menu. The wrapper declares an empty root object and expects all
+content to arrive through `#base`; this engine build read the wrapper and
+**never opened a single `#base` target**, so the playlist came back empty.
+
+**The verification in the previous section was wrong.** It claimed the engine
+resolved every `#base` target, citing three opens of the generated files. The
+flags tell the real story:
+
+```
+path = /data/northstar_ps4/kv/mod_original_playlists_v2.txt flags = 0x601   <- this module writing
+path = /data/northstar_ps4/kv/mod_patch_0_playlists_v2.txt  flags = 0x601   <- this module writing
+path = /data/northstar_ps4/kv/mod_patch_1_playlists_v2.txt  flags = 0x601   <- this module writing
+path = /data/northstar_ps4/kv/playlists_v2.txt              flags = 0x601   <- this module writing
+path = /data/northstar_ps4/kv/playlists_v2.txt              flags = 0x0     <- the engine reading
+```
+
+Only the wrapper was ever read. `flags = 0x601` is a create/write open by this
+module; the engine's read is `flags = 0x0`. **An open in this log is not
+evidence of the engine reading a file until its flags are checked.**
+
+**The boot test also could not have caught it.** The success pattern was
+`UI lifecycle completed`, and `Invoke-Stage2Iteration.ps1` terminates the
+process the moment the pattern matches. The playlist load happens *after* UI
+lifecycle completion, so the run was declared a success and killed before the
+fatal error could appear. Any check that stops at the first good marker cannot
+detect a failure that comes later.
+
+Fixed for future runs by testing against a marker that is genuinely late in
+boot and by making the fatal itself a failure pattern:
+
+```
+-SuccessPattern 'UICodeCallback_ActivateMenus: menu_MainMenu'
+-FailurePattern 'Failed to load playlist data|SCRIPT COMPILE ERROR|SIGSEGV|...'
+```
+
+That marker is a script print, so it only became usable once the script print
+sink existed.
+
+**Current state.** `kKeyValuesServeGenerated` is `false`: discovery and
+generation still run and still log, but nothing is served, so behaviour is
+identical to before the feature existed. Boot verified to the real main menu
+with zero playlist errors, PRX
+`ad979da26ae16fbcb1fc5fdad419e5fc60a4a86d5fb86bde55e5bd6d5fde66fa`.
+
+**What the real fix has to be.** The merge cannot be delegated to the engine
+through `#base`; this module has to perform it and emit one complete file.
+That means a KeyValues parser and a recursive merge with Northstar's
+precedence (a patch overrides the original, and higher-priority mods override
+lower). The existing discovery, patch enumeration, original retrieval and
+root-name parsing are all still correct and reusable - only the "write a
+wrapper and hope" step is wrong. It is also worth checking whether the engine
+honours `#base` anywhere at all before assuming the mechanism is simply
+absent, since PC relies on it for every patched KeyValues file.
+
+### Does #base work on this engine? Yes - but not in the playlist loader
+
+Checked against the game's own shipped data, which is stronger evidence than
+any probe: 231 vanilla files rely on `#base`, so the directive is genuinely
+supported. Where they live is the useful part:
+
+| directory | vanilla files using #base |
+|-----------|---------------------------|
+| `scripts/aisettings` | 128 |
+| `scripts/players/mp` | 69 (`.set`) |
+| `resource/ui/menus` | 17 |
+| `scripts/weapons` | 14 |
+| `scripts/screens` | 2 |
+| `resource/ui` | 1 |
+
+for example `scripts/weapons/melee_titan_punch_fighter.txt` opens with
+`#base "melee_titan_punch.txt"`. Those loaders must therefore process it.
+
+**No vanilla playlist uses `#base`, and no `resource/*.txt` does either.**
+Combined with the observed failure - the engine read the generated wrapper and
+opened none of its includes - the conclusion is that `playlists_v2.txt` is
+parsed by a loader that does not implement the directive, rather than the
+directive being absent from the build.
+
+Mapping that onto the nine patches the installed mods ship:
+
+| patch | `#base` viable |
+|-------|----------------|
+| `scripts/weapons/*.txt` (6 files) | yes, proven by vanilla |
+| `scripts/aisettings/npc_pilot_elite.txt` | yes, proven by vanilla |
+| `resource/fontfiletable.txt` | unproven - no `resource/*.txt` uses it |
+| `playlists_v2.txt` | **no** |
+
+So the cheap path covers seven of nine, and the one that actually gates the
+custom gamemodes is the one it cannot cover. The playlist still needs this
+module to parse and merge KeyValues itself and emit a single complete file.
+
+## KeyValues merged in-module; custom gamemodes load (2026-09-17)
+
+`launcher/include/northstar_ps4/keyvalues.h` parses, merges and serialises
+Valve KeyValues, and `runtime_keyvalues.inl` now emits one complete merged file
+per patched path instead of a `#base` wrapper. Verified boot with PRX SHA256
+`71867f6a5a981b9bfc63039a26e7f3260ab2f8ddbc0095f03e7de037c9b0d7dc`:
+`playlists_v2.txt` merges to 348,560 bytes from a 360,403-byte original plus
+two patches, `Gamemodes` goes from 21 entries to 35, and the client reaches
+`GAMETYPE: fastball` on `mp_forwardbase_kodai` - the first custom gamemode to
+load on this port.
+
+Three things had to be right, and two of them were only found by checking the
+real files rather than reasoning about the format.
+
+**The engine reads a served file short if it is larger than the original.**
+The first working merge produced a 372,535-byte playlist and died with
+`FatalError: KeyValues Error: Error reading token in file playlists`. Byte
+360,403 of the merged file - exactly the original's length - lands mid-value
+inside `LocalizedStrings/lang/Tokens/PL_amped_tacticals_desc`, which is the
+breadcrumb the error printed. Hooking `Size(fileName, pathID)` (primary
+filesystem vtable slot 135, `filesystem_stdio.prx` + `0xde20`) did **not** fix
+it: the hook installs and is never called for this file, so the size comes from
+somewhere still unidentified. The merged file is therefore written without
+indentation, which costs nothing and saves about 24 KB, and
+`BuildKeyValuesPatch` refuses to serve any merge larger than its original,
+falling back to vanilla rather than producing a fatal error. All nine patched
+files fit with room to spare; `Test-NorthstarProfile.ps1` merges each one for
+real and fails if that stops being true.
+
+**Escape sequences must pass through untouched.** The playlist holds 2,525
+`\n` and 138 `\"` inside localised strings. Decoding them on parse and not
+re-encoding them on write silently dropped every backslash, which no structural
+check catches - it just runs 2,525 menu descriptions together. The parser now
+keeps the source bytes and the serialiser writes them back, so the merged file
+says byte for byte what the original said. Rescanning the shipped playlist with
+escapes disabled turns 639 keys into fragments of German prose, which is how we
+know the engine honours them.
+
+**Platform conditionals are syntax, not tokens.** `[$PC]`,
+`[!$JAPANESE && !$TCHINESE]` and friends attach to the entry before them.
+Reading one as an ordinary token shifts every following key/value pair by one;
+`resource/fontfiletable.txt` failed outright with `key
+'resource/Lato-Regular.ttf' has no value`, and the shipped original would have
+merged into nonsense. Conditionals are now parsed, attached and written back,
+and a patch prefers the base entry carrying the same conditional - the shipped
+font table has `lucida console` twice, `[$PC]` and `[$GAMECONSOLE]`, and a
+patch for one must not land on the other.
+
+Duplicate keys within a block are preserved throughout: the playlist has 18,
+including eleven `lang` blocks under `playlists/LocalizedStrings`. A merge
+targets the first match, which is what Valve's `FindKey` returns.
+
+### Open after this change
+
+- **The server discards the PS4 client's usercmds.** A live fastball match had
+  the server echoing `Bogus cmd timing` from `exploitfixes.cpp`, which fires on
+  `frameTime <= 0 || tick_count == 0 || command_time <= 0` and then zeroes the
+  command's view angles, movement, buttons and melee target. The client-side log
+  for the same match sits in `spectator` with repeated
+  `ServerCallback_YouDied() healthFrac: 1`, and the player saw a black 3D view
+  with working HUD and audio - consistent with being stuck spectating with no
+  view entity. Not yet proven to be one cause; the next step is to compare what
+  the PS4 client writes into `CUserCmd` against what the PC server reads.
+- **shadPS4 crashes on the level transition out of a match.** Host-side
+  `Unhandled Exception code 0xc0000005 at 0x7ff89014cca7` in the emulator's own
+  `GpuSchedPriorityPendingOpsRunner` thread, at the same address in all three
+  occurrences, while loading `mp_lobby`. Emulator GPU bug, not game code.
+
+## Mod VPKs are never mounted: the invisible fastball titan (2026-09-17)
+
+Fastball precaches and spawns `models/titans/buddy/titan_buddy.mdl` (BT) in
+`_gamemode_fastball_intro.gnut`. The titan is invisible on this port while
+everything else in the match works.
+
+`models/titans/buddy/` ships **only in the SP VPKs**, on PS4 and on PC alike -
+it is in all thirteen `englishclient_sp_*.bsp.pak000_dir.vpk` and in none of the
+MP ones. PC gets the model into an MP session because `Northstar.Custom` ships
+its own `vpk/client_mp_northstar_common` (86 MB), and NorthstarLauncher's
+`h_MountVPK` mounts every enabled mod's `vpk/` entries after each engine mount.
+
+**This port implements no part of that.** The overlay serves loose files from
+`<mod>/mod/` only. The 86 MB VPK is deployed in the PS4 profile and
+`northstar_common` appears zero times in a 2.4M-line log; the engine mounts only
+stock `client_frontend`, `client_mp_common` and the map. So the prop spawns and
+the model resolves to nothing.
+
+**Filesystem vtable, `filesystem_stdio.prx`.** PC's `IFileSystem::VTable` puts
+`AddSearchPath` at 10, `ReadFromCache` at 95 and `MountVPK` at 111. This port
+already resolves `ReadFromCache` at **97**, so the PS4 table is shifted by +2,
+which predicts `MountVPK` at **113** - and slot 113 is `+0xa900`, which takes
+`(this, const char* vpkPath)`, formats it with `"%s.pak000"` into a 0x104 buffer,
+lowercases it and scans the mounted-VPK list at `[this+0x280]` with count
+`[this+0x298]`, comparing each entry at `+5`. That is `MountVPK`. Slot 112
+(`+0xa300`) is the PS4 map-VPK loader and is the one holding
+`vpk_ps4/%sclient_%s.bsp.pak000%s` and `vpk_ps4/server_%s.bsp.pak000%s`.
+
+Because the format is a bare `"%s.pak000"`, a mod VPK can be mounted by passing
+a path the engine can resolve, the same way PC passes
+`<mod>/vpk/client_mp_northstar_common.bsp`.
+
+**Still to decide.** The shipped `client_mp_northstar_common` is a PC VPK
+holding PC model data, so mounting it on PS4 is unlikely to produce a usable
+model even once the mechanism exists. The PS4-native model is in
+`client_sp_training` (`titan_buddy.mdl` 16 MB, plus the eleven sibling animation
+models it references internally, 60 MB total), and `tools/tf2vpk-bin` has
+`tf2-vpkunpack-ps4` and `tf2vpk-ps4` to unpack and repack. Keeping the PC shape
+therefore means: implement the mount hook, then ship a PS4-built VPK in the
+mod's own `vpk/` directory rather than copying loose models, which was tried and
+reverted because it diverges from how PC does it.
+
+Textures are a separate step: they live in the rpaks, BT's in the `common_sp`
+family, and an MP session loads `common_mp`. This port implements no rpak
+loading, so a mounted model may still render untextured.
+
+
+## Native mod VPK mounting implemented - 2026-09-17
+
+`runtime_vpks.inl` discovers enabled mods' `vpk/english*.bsp.pak000_dir.vpk` files and mounts their language-neutral stem through the original PS4 MountVPK. The primary filesystem vtable slot is **113**, function VA **0xa900**, gated against the expected slot address and exact prologue `55 48 89 e5 41 57 41 56 41 55 41 54 53 48 81 ec 28 02 00 00` in the existing hash-locked filesystem profile. The hook calls the retail mount first and mounts matching/preloaded mod archives afterward. A scripts.rson open also catches archives whose initial retail mount preceded interface installation. A recursion guard prevents re-entry; the engine deduplicates mounts by normalized path. The original return value is preserved, with the PC-style mod handle fallback when the original mount fails.
+
+Correction to the earlier profiling note: **slot 112 / VA 0xa300 is a mounted-archive query, not the map mount function**. Its disassembly searches the existing list and returns a query result. Map-like string references in the adjacent function must not be attributed to this slot. The observed stock mount events are intercepted at slot 113.
+
+Config behavior: absent or invalid vpk.json defaults to preload; a valid object requires boolean Preload:true for preload. Otherwise the archive stem must equal the basename of the engine's mount request. Comments/trailing commas are normalized before strict JSON validation. Folder discovery is filtered by enabled settings and sorted by mod load priority, with deterministic per-folder archive order. The native mount formats `%s.pak000` into 260 bytes; longer mod paths are rejected before calling it.
+
+**The existing Northstar.Custom Buddy models do not need conversion.** Contrary to the earlier asset-format hypothesis, the original mod's `models/titans/buddy/titan_buddy.mdl` is byte-for-byte identical to the retail PS4 sp_training copy: 16,291,124 bytes, SHA256 `f5632b4857eeba6f6ef6296f8eaffb32105de1a6c786b51fcf987895b8caf44f`, CRC `1592F2E9`, IDST version 53. All twelve matching Buddy model entries have identical CRCs. Archive compression differs; the decompressed BT payload does not. A temporary native-subset experiment stayed under dist and was not installed; the working test uses the unchanged original mod VPK.
+
+Runtime evidence: `work/stage2/iterations/20260917-220847/shad-new-lines.log`, PRX SHA256 `4a8d17e493e1cc78b66c9b7bcb9c7cb32e240d20ad8489dcbaeed6ac2b47d157`. The engine mounted `vpk_ps4/client_mp_common.bsp`, the hook mounted `/app0/R2Northstar/mods/Northstar.Custom/vpk/client_mp_northstar_common.bsp` with a non-null handle, and original OpenEx/Read returned a 12-byte IDST header for BT. The boot completed the UI lifecycle in 38.841 seconds. This proves native lookup of mod VPK content, not BT rendering or material/RPAK support. Retail VPKs and installed mod sources were not modified by this work.
+
+Final configuration-validation build also passed: `work/stage2/iterations/20260917-221314/shad-new-lines.log`, PRX SHA256 `608689815ad53970eb968f24e24efc701ba26812e7ce83eab9720adb93648cfc`. UI startup completed in 36.217 seconds; the same non-null mod mount and `read=12 IDST=1` asset lookup were observed. This build remains installed. Host suites and `git diff --check` passed.
+
+## Mod rpaks are not loaded; the twin-B error model is probably not a port gap (2026-09-17)
+
+BT renders correctly in a real fastball match, so mod VPK mounting is confirmed
+end to end and BT's materials resolve from retail content. The twin-B shotgun
+shows the Source error model instead.
+
+**The model does not exist in either game.** `mp_weapon_shotgun_doublebarrel.txt`
+(shipped loose by `Northstar.Custom`) points at
+`models/weapons/shotgun_doublebarrel/ptpov_shotgun_doublebarrel.mdl` and
+`w_shotgun_doublebarrel.mdl`. Neither path is in any PS4 VPK, any PC VPK, or the
+`client_mp_northstar_common` mod VPK. PS4 and PC `mp_common` both carry only
+`scripts/weapons/mp_weapon_shotgun_doublebarrel.txt` and the matching `.nut`;
+the mod VPK carries only `materials/models/weapons/twinbshotgun/shotgun_bullet*`.
+`models/weapons/shotgun*` returns nothing from `client_mp_common`,
+`client_sp_crashsite` or `client_sp_training`.
+
+**Northstar's rpaks contain no models.** Both mod rpaks are uncompressed
+(`RPak` version 7, flags 0x0000, against retail's flags 0x0100) and readable:
+`mp_weapon_shotgun_doublebarrel.rpak` holds 18 `txtr` and 9 `matl` and zero
+`mdl_`/`rmdl`, naming `models/weapons/twinbshotgun/*` skins;
+`northstarEventModels.rpak` holds 29 `txtr`, 5 `matl`, zero models, naming
+`models/northstartree/*`. They are reskins for models that must already exist.
+
+So **implementing mod rpak loading would not fix the twin-B** - no mod rpak
+anywhere carries that model. The remaining uncertainty is that retail rpaks are
+compressed (`common.rpak` returns zero hits for `"models/"` and `"materials/"`,
+so string searching them proves nothing), so the model could exist as an `mdl_`
+asset inside an SP-only retail rpak that an MP session never loads. Asking
+whether the twin-B renders on a PC Northstar install settles it in one minute:
+the PC and PS4 asset sets for this weapon are identical, so if PC shows the
+error model too, this is not a port gap.
+
+**Mod rpak loading is still genuinely unimplemented** and does matter for
+texture and material mods. Groundwork: the system lives in `rtech_game.prx`
+(128 KB). Its strings include `/app0/r2/paks/PS4/%s`, `(%02u).rpak`,
+`patch_master.rpak`, `_hotswap.starpak` and `PakDispatchLoad`. The path format
+is referenced from two sites, `+0x669d` and `+0x8947`; `+0x83d0` is the dispatch
+worker that takes a context in `rdi` and walks counters at `+0x7c`/`+0x80`, and
+the site at `+0x669d` formats the pak name from `r14` into a 0x3fd buffer via
+the snprintf at `+0xa030`. Unlike `MountVPK`, which accepts a free path, the pak
+loader hardcodes its directory, so mod paks either need `../` traversal in the
+name or to be staged under `r2/paks/PS4`. The entry point equivalent to PC's
+`LoadPakAsync(path, allocator, flags)` is not yet identified.
+
+## Mod rpak loader built; disabled because the shipped mod paks are PC builds (2026-09-18)
+
+`launcher/include/northstar_ps4/mod_rpaks.h` and `launcher/src/runtime_rpaks.inl`
+implement Northstar's `paks/rpak.json` mechanism. `tests/rpaks.cpp` covers the
+rules and runs against the shipped config. The feature is gated off by
+`kModRpakLoadingEnabled`; everything below is why.
+
+**The pak system, in `rtech_game.prx` (128 KB).** `+0x76f0` is the loader:
+`int LoadPakAsync(const char* name, void* allocator, int flags)`. It takes the
+lock at `+0x2a7460c`, allocates a handle (-1 on failure), indexes a 512-slot
+table of 0xa8-byte entries by `handle & 0x1ff`, stores flags at `+0x380638` and
+state 1 at `+0x380634`, strlens the name, calls
+`allocator->alloc(allocator, len + 1, 1)` through the allocator's first vtable
+slot, copies the name in and returns the handle. `+0x78b0` wraps it for the rest
+of the game, forwarding rdi/rsi/edx and handing rcx and r8 to the completion
+registrar at `+0x74b0`. The worker at `+0x5340` drains the queue.
+
+**Hooking it took three attempts, and the first two were wrong.**
+
+1. *Rewriting import slots that hold the function's address.* This found nothing
+   for `+0x76f0`, which is unsurprising in hindsight - it has two callers inside
+   the module and its address appears nowhere as data, because it is not the
+   exported entry. The one match it did find was a coincidental 64-bit value in
+   `tier0.sprx`. Rewriting memory because its contents happen to equal an
+   address is how unrelated data gets corrupted. The scan also crashed the boot
+   twice: once reading uncommitted pages inside a reported segment, and once
+   because it "restored" data pages to protection 3. The bits are 4=read,
+   2=write, 1=execute, so 3 is write-execute with no read and the next ordinary
+   read of the page faults.
+2. *Detouring the entry's prologue.* Needs an executable trampoline, and shadPS4
+   refuses to make this module's data page RWX: `sceKernelMprotect(..., 0x7)`
+   aborts the emulator with `Protect: Unreachable code!` from
+   `address_space.cpp:562`.
+3. *Patching the loader's two call sites, `+0x78c0` and `+0x7ed1`* - the same
+   rel32 patcher the lifecycle hooks use. No new executable memory is needed
+   because the loader is left intact and called directly as the original. This
+   works: both sites patch, and both of Northstar.Custom's paks are dispatched
+   right after `common.rpak` with valid handles.
+
+**Paths are absolute.** The worker holds a `/app0/r2/paks/PS4/%s` format string,
+but it is not applied on the route a load request takes: a relative name reached
+the filesystem verbatim and the open failed on the literal
+`../../../R2Northstar/...`. Passing the full path works, and the engine then
+opens and reads the pak from the mod directory with no pak error.
+
+**Why it is off.** The archives Northstar ships are PC builds - `RPak` version 7
+but flags 0x0000 against retail's 0x0100 - holding `txtr` and `matl` assets in PC
+formats. Loading them wedges the boot: the engine looks for
+`mp_weapon_shotgun_doublebarrel.starpak` at `/app0/r2/`, where a mod's streamed
+data does not live, and the pak system then walks the address space in
+`sceKernelAvailableDirectMemorySize` in 0x4000 steps and never finishes. No
+playlist, no UI lifecycle, `UI VM probe timed out`. With the gate off the boot is
+healthy again: UI lifecycle completes, the merged playlist is served, the mod VPK
+mounts, no FatalError.
+
+This is the opposite of how the VPK work turned out, where the shipped archive
+held bytes identical to the PS4 originals. Turning this on needs PS4-format mod
+paks, and starpak resolution alongside - PC registers those separately rather
+than leaving them beside the rpak.
+
+Note also that none of this would have fixed the twin-B shotgun: both mod rpaks
+contain zero `mdl_`/`rmdl` assets, and the model it wants is absent from PC and
+PS4 alike.

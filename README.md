@@ -1,60 +1,52 @@
 # PS4 Northstar
 
-An experimental port of the Northstar modding framework to the PS4 version of Titanfall 2, targeting shadPS4 and Titanfall 2 build `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM`.
+Experimental PS4 native port of Northstar for Titanfall 2 under shadPS4, targeting `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM`.
 
-**Start here: [docs/GOALS.md](docs/GOALS.md)** — the current goal-by-goal status and prioritized next steps. Static VPK integration (formerly "Stage 1") is complete; everything active right now is native runtime work (formerly "Stage 2").
+The project now targets the PC Northstar install layout. Mods retain their original `mod.json`, `mod/`, `keyvalues/`, and other content; PS4 differences belong in the native launcher/runtime. **No VPK repacking, baked script manifests, or edits to mod scripts are part of setup.**
 
-## Repository policy
+**This is not yet a drop-in replacement for the PC launcher.** The runtime-manifest build completes UI startup, supports CLIENT lifecycle hooks and KeyValues overrides, and mounts enabled mods' VPKs through the PS4 filesystem. Reading the shipped BT model from Northstar.Custom is verified; rendering, RPAKs and several Northstar services remain incomplete. See [docs/GOALS.md](docs/GOALS.md).
 
-This repository does not contain Titanfall 2, Northstar release binaries, extracted archives, or rebuilt game files. You must provide matching PC and PS4 installations. Generated data is written beneath `work/` and `dist/`, and external toolchains live under `tools/` — all three are ignored by Git. See [tools/README.md](tools/README.md) for what needs to go under `tools/` and where to get it.
+## Layout
 
-## Repository layout
-
-| Path | Contents |
-| --- | --- |
-| [`docs/GOALS.md`](docs/GOALS.md) | Current status and next steps — read this first. |
-| [`docs/FOUNDATION.md`](docs/FOUNDATION.md) | The completed static VPK integration phase (Goal 0). |
-| [`docs/TECHNICAL-NOTES.md`](docs/TECHNICAL-NOTES.md) | The detailed native-port lab notebook: hashes, virtual addresses, byte preimages, run history. Read before changing any hash-locked code. |
-| `launcher/` | The native OpenOrbis PRX (`northstar_ps4.prx`) source — the PS4 analog of PC Northstar's `NorthstarLauncher`. |
-| `mods/` | Northstar mods mirroring the PC mod layout (`mods/<Name>/mod.json` + `mod/`). `Northstar.Client`/`Northstar.Custom` stage straight from the PC install; PS4-port-specific mods (`Northstar.DirectConnect`, `Northstar.PS4`) live in the repo. |
-| `scripts/` | PowerShell automation: environment checks, VPK build/deploy, native PRX build/deploy/iteration, overlay staging. |
-| `config/` | Project configuration and hash-locked offset/manifest profiles. `config/local.json` (your machine's paths) is gitignored — copy it from `config/project.example.json`. |
-| `tools/` | External toolchains and reference clones, entirely gitignored except [`tools/README.md`](tools/README.md), which lists what each subfolder needs. |
-| `work/`, `dist/` | Generated staging and build output, entirely gitignored. |
-| `.codex/AGENTS.md` | Role/context brief for coding agents working on this repo. |
-
-## Bootstrap
-
-1. Copy `config/project.example.json` to `config/local.json` and adjust the paths.
-2. Fetch the required tools listed in [tools/README.md](tools/README.md).
-3. Run `.\scripts\Test-Environment.ps1` to validate the PC and PS4 installations match the expected build.
-
-## Foundation: static VPK integration (Goal 0, complete)
-
-The currently-installed game boots on top of VPKs patched by this pipeline — it is still required, not legacy. See [FOUNDATION.md](docs/FOUNDATION.md) for the full plan and safety gates.
-
-```powershell
-.\scripts\New-Stage1Workspace.ps1 -Clean   # stage loose mod content into work/stage1/loose (does not modify either install)
-.\scripts\Build-AndDeployStage1Vpks.ps1    # rebuild chunk 228 with RSPNVPK, back up, install, verify hashes
+```text
+Titanfall2 PS4/
+  eboot.bin                         # hash-locked PS4 bootstrap
+  bin/ps4_retail/northstar_ps4.prx    # PS4 native runtime
+  R2Northstar/
+    enabledmods.json                # PC Name -> Version -> bool format
+    mods/
+      Author.Mod/
+        mod.json
+        mod/
+        keyvalues/                  # native merged overrides
+        vpk/                        # original mod VPKs, mounted by runtime
+  vpk_ps4/                          # original retail archives
 ```
 
-## Launcher (Goals 1+, in progress)
+Add/remove mod folders in `R2Northstar/mods` and restart the game. No mod list is compiled into the PRX. Discovery uses each mod's metadata `Name` and `Version` for enabled state. New mods default enabled; lower `LoadPriority` loads first and higher priority wins file overrides. Equal priorities use folder-name ordering for deterministic PS4 behavior. Current bounds: 128 mod folders, folder/metadata names below 64 bytes and metadata below 16 KiB. Other prototype limits are described in the catalog header.
 
-The PS4 launcher (`launcher/`) is the analog of PC Northstar's `NorthstarLauncher`: a hash-locked eboot bootstrap loads `northstar_ps4.prx` before Titanfall's own modules under shadPS4, its initializer runs, and Titanfall continues to the main menu. See [docs/GOALS.md](docs/GOALS.md) for what's done and what's next, and [docs/TECHNICAL-NOTES.md](docs/TECHNICAL-NOTES.md) before touching the bootstrap, linker script, or runtime discovery code.
+See [the shadPS4 installation guide](docs/INSTALL.md) for exact build/deploy commands, runtime identification and rollback.
 
-Build and redeploy the PRX:
+## Setup and build
 
-```powershell
-.\scripts\Build-Stage2Poc.ps1
-.\scripts\Deploy-Stage2Poc.ps1
-```
+1. Copy `config/project.example.json` to `config/local.json`; set `northstarModsRoot` to your PC profile's `mods` directory. Packaging only needs this source, not a PC executable or extracted game content.
+2. Run `.\scripts\New-NorthstarProfile.ps1`. It discovers every immediate mod folder, copies files byte-for-byte, verifies their hashes, and preserves the source profile's `enabledmods.json`. Output is `dist/northstar-profile/R2Northstar`. For subsequent packages, supply a fresh `-Output` directory; existing profiles are not overwritten.
+3. Install the toolchain in [tools/README.md](tools/README.md) and run `.\scripts\Build-Northstar.ps1`. The output is `dist/northstar-ps4/northstar_ps4.prx`. The script-injection experiment requires explicit `-EnableExperimentalScriptLoading`; it is known to fail with some real mods.
+4. On a clean matching retail install, copy the generated `R2Northstar` folder beside `eboot.bin`. Use `Deploy-Stage2Poc.ps1 -Source .\dist\northstar-ps4\northstar_ps4.prx` to install the runtime with its existing backup behavior. The hash-locked bootstrap is managed by `Enable-Stage2Bootstrap.ps1`; read [docs/TECHNICAL-NOTES.md](docs/TECHNICAL-NOTES.md) before applying it.
 
-The build uses OpenOrbis through `OO_PS4_TOOLCHAIN` and includes project-local fixes for constructor boundaries and shadPS4 `DT_INIT` behavior. Do not apply the bootstrap to an unrecognized retail executable.
+The PRX reads `/app0/R2Northstar`; it does not import an old `/app0/mods` or flattened `r2` overlay. A generated `.ns_mod_manifest` is only an emulator fallback when directory enumeration fails; refresh the package if using that fallback after adding/removing folders.
 
-Iterate against a live shadPS4 run (build, deploy, launch, watch the log for a success/failure marker, stop):
+Existing installations with Stage 1 patched VPKs or staged `r2` scripts must be returned to a verified clean retail baseline before testing this architecture. The setup does not guess which old game files are safe to delete or restore. Historical VPK entry points now stop with an error. UI startup with vanilla archives now passes; full script/API parity remains outstanding.
 
-```powershell
-.\scripts\Invoke-Stage2Iteration.ps1
-```
+`mods/` contains earlier PS4 compatibility mods; these are optional (`New-NorthstarProfile.ps1 -IncludePs4CompatibilityMods`), not edits applied to PC mods. Windows plugin DLLs and platform-specific assets are not made PS4-compatible by copying them. Packaging preserves files; the PS4 runtime supplies the supported services.
 
-See `docs/TECHNICAL-NOTES.md` for the full set of build-time feature flags (`-EnableM6ScriptProbe`, `-EnableM6ScriptInject`, ...) and how to read iteration results under `work/stage2/iterations/`.
+## Development
+
+The current native script experiment is `Build-Northstar.ps1 -EnableRuntimeManifest`. It builds a writable guest script cache from the vanilla manifest and enabled mod metadata, intercepts cached/loose script reads, and installs the profiled UI API/callback adapter. UI startup and mod VPK asset lookup pass in shadPS4; this remains a development build with incomplete services. The older `-EnableExperimentalScriptLoading` uses the separate late-injection experiment.
+
+UI mod-setting changes are saved under guest `/data/northstar_ps4/enabledmods.json`, which takes precedence over the original profile on subsequent boots. The current reload function reports that a restart is required. Before/After UI dispatch executes in completed boots; authentication/download transport and SERVER lifecycle support remain incomplete.
+
+
+`launcher/include/northstar_ps4/mod_catalog.h` contains portable metadata, enabled-state and ordering policy. `launcher/src/runtime.cpp` contains PS4 module/ABI discovery and engine adapters. `Build-Stage2Poc.ps1` remains available for isolated diagnostic builds. `Invoke-Stage2Iteration.ps1` builds/deploys the PRX and observes emulator logs; it no longer generates script manifests.
+
+Run `.\scripts\Test-NorthstarProfile.ps1` for host catalog and package tests. Game data, extracted archives, downloaded reference sources, toolchains and generated output stay outside Git (`tools/`, `work/`, `dist/`).

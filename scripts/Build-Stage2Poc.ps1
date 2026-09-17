@@ -10,9 +10,15 @@ param(
     [switch] $EnableM6ScriptProbe,
     [switch] $EnableM6ScriptInject,
     [switch] $EnableM6ScriptInjectFromMods,
+    [switch] $EnableRuntimeManifest,
     [switch] $EnableM6Localise
 )
 $ErrorActionPreference = 'Stop'
+if ($EnableRuntimeManifest) { $EnableM6FsOverlay = $true }
+if ($EnableM6FsOverlay -or $EnableM6Localise) { $EnableM6ModMetadata = $true }
+if ($EnableM6ScriptInjectFromMods -and -not ($EnableM6ScriptProbe -and $EnableM6ScriptInject -and $EnableM6ModMetadata -and $EnableM6FsOverlay)) {
+    throw 'Real mod script injection requires metadata, filesystem overlay, script probe and script injection flags.'
+}
 $toolchainRoot = [IO.Path]::GetFullPath($Toolchain)
 $outputRoot = [IO.Path]::GetFullPath($Output)
 $env:OO_PS4_TOOLCHAIN = $toolchainRoot
@@ -72,6 +78,7 @@ if ($EnableM6Localise) {
     # discovery/parsing it reuses.
     $runtimeCompileArgs = @('-DNORTHSTAR_PS4_ENABLE_M6_LOCALISE=1') + $runtimeCompileArgs
 }
+if ($EnableRuntimeManifest) { $runtimeCompileArgs = @('-DNORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST=1') + $runtimeCompileArgs }
 & $clang @runtimeCompileArgs
 if ($LASTEXITCODE) { throw "OpenOrbis runtime compile failed: $LASTEXITCODE" }
 $linkArgs = @('-m','elf_x86_64','-pie','--script',(Join-Path $sourceRoot 'link.x'),'--eh-frame-hdr','-L',(Join-Path $toolchainRoot 'lib'),$object,$runtimeObject,'-lc','-lc++','-lkernel',(Join-Path $toolchainRoot 'lib\crtlib.o'),'-o',$elf)
@@ -112,4 +119,15 @@ if (-not $patchedInit) { throw 'DT_INIT was not found in the linked ELF.' }
 if ($LASTEXITCODE) { throw "OpenOrbis PRX conversion failed: $LASTEXITCODE" }
 if (-not (Test-Path -LiteralPath $prx -PathType Leaf)) { throw "OpenOrbis did not produce $prx" }
 $file = Get-Item -LiteralPath $prx
+$buildInfo = [ordered]@{
+    schemaVersion = 1
+    prxSha256 = (Get-FileHash -LiteralPath $prx -Algorithm SHA256).Hash.ToLowerInvariant()
+    runtimeManifest = [bool]$EnableRuntimeManifest
+    filesystemOverrides = [bool]$EnableM6FsOverlay
+    lateScriptInjection = [bool]$EnableM6ScriptInject
+    authentication = 'disabled'
+    fullNorthstarCompatibility = $false
+    knownBlocker = 'UI and CLIENT VM lifecycles dispatch, maps load and custom gamemodes run (fastball verified on mp_forwardbase_kodai). Mod KeyValues patches are merged in-module and mod VPKs are mounted. Mod rpak loading is implemented but disabled: the shipped mod paks are PC builds and stall the boot. SERVER VM, chat rendering and Atlas authentication are not implemented.'
+}
+$buildInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputRoot 'northstar_ps4.build.json') -Encoding UTF8
 [pscustomobject]@{ File=$file.FullName; Bytes=$file.Length; SHA256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); Toolchain=$toolchainRoot }

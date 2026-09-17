@@ -32,9 +32,4 @@ A mod for Goldhen using the direct connect mod: https://github.com/taskinoz/Nort
 
 **Read [docs/GOALS.md](../docs/GOALS.md) before starting any work.** It is the authoritative, up-to-date goal list and next-steps tracker — this file is context/role only and will not be kept in sync with day-to-day status.
 
-The original plan was two stages; it has evolved into a numbered goal list as work progressed:
-
-1. *(Done — Goal 0 in docs/GOALS.md)* Merge Northstar's scripts and custom files into the PS4 game's VPKs so it can connect to a Northstar server by IP with `Northstar.Custom` active (the server side only needs `Northstar.CustomServers`, which fills in missing content so it won't crash). Done via the direct-connect menu mod.
-2. *(In progress — Goals 1 through 9 in docs/GOALS.md)* Port the native (C++) side: a PRX bootstrap, runtime module discovery, native ConVar/Squirrel-function registration, mod filesystem overlay and metadata discovery, runtime mod script loading (in progress), mod enable/disable, Atlas authentication, and the server browser — so mods can be loaded/unloaded and the PS4 client can browse and join servers like the PC game does.
-
-Do not restate or re-derive this plan from scratch in a new doc — extend `docs/GOALS.md` instead, and keep this section as a short pointer to it.
+The current direction is native PC-style mod loading from `R2Northstar/mods` with unchanged mod sources and vanilla VPKs. Stage 1 repacking and script merging are retired. Keep all remaining work and validation status in `docs/GOALS.md`; do not substitute historical patched-content proofs for native loader validation.

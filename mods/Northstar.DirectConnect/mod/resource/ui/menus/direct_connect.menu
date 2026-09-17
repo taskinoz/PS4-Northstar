@@ -124,6 +124,7 @@ resource/ui/menus/direct_connect.menu
 			textHidden				0
 			editable				1
 			maxchars				8
+			tabPosition			2
 			NumericInputOnly		0
 			textAlignment			"east"
 			font 					DefaultBold_53
@@ -147,6 +148,7 @@ resource/ui/menus/direct_connect.menu
 			wide 							200
 			ypos							20
 			classname 				ModButton
+			tabPosition			3
 			scriptID				0
 			visible 							1
 			navUp					ConnectIPTextEntry

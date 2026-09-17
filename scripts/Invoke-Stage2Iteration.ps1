@@ -25,6 +25,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($EnableM6Scripts) { throw 'Use New-NorthstarProfile.ps1 to prepare R2Northstar/mods; runtime iterations never stage or merge scripts.' }
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $configPath = [IO.Path]::GetFullPath($Config)
 if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
@@ -48,14 +49,6 @@ if (-not $SkipBuild) {
 if (-not $SkipDeploy) {
     & (Join-Path $PSScriptRoot 'Deploy-Stage2Poc.ps1') -Config $configPath
     if (-not $?) { throw 'Stage 2 deployment failed.' }
-}
-if ($EnableM6Scripts) {
-    & (Join-Path $PSScriptRoot 'New-Stage2R2Overlay.ps1') -Config $configPath -SkipR2ModStage:$SkipR2ModStage
-    if (-not $?) { throw 'Overlay staging failed.' }
-    if (-not $SkipR2ModStage) {
-        & (Join-Path $PSScriptRoot 'Merge-Stage2ScriptsRson.ps1') -Config $configPath -Probe:$EnableM6ScriptProbe
-        if (-not $?) { throw 'Scripts.rson merge failed.' }
-    }
 }
 if (-not (Test-Path -LiteralPath $prx -PathType Leaf)) {
     throw "Installed Stage 2 PRX not found: $prx"
@@ -87,7 +80,7 @@ $arguments = @('--game', $eboot, '--log-append')
 Write-Host "Launching shadPS4: $ShadPs4Exe"
 Write-Host "Watching: $ShadLog"
 Write-Host "Success: $SuccessPattern"
-$process = Start-Process -FilePath $ShadPs4Exe -ArgumentList $arguments -PassThru
+$process = Start-Process -FilePath $ShadPs4Exe -ArgumentList $arguments -PassThru -WindowStyle Hidden
 $started = Get-Date
 $status = 'timeout'
 $matchedLine = $null

@@ -1,14 +1,14 @@
 # tools/
 
+Mod packaging needs none of these tools. VPK repacking is retired.
+
 Nothing under `tools/` is original project content — it's downloaded toolchains, built binaries, and reference source clones, all `.gitignore`d (`tools/*` with an exception for this file). A fresh clone starts with an empty `tools/` directory; this file is the checklist for what needs to go where before the scripts in `scripts/` will run.
 
 ## Required — the automated pipeline reads these directly
 
 | Path | What it is | Where it comes from |
 | --- | --- | --- |
-| `tools/RSPNVPK-bin/RSPNVPK.exe` (+ `lzham_x64.dll`) | VPK repacker used by `scripts/Build-AndDeployStage1Vpks.ps1` | Build from `tools/RSPNVPK` (below), or grab a release from [taskinoz/RSPNVPK](https://github.com/taskinoz/RSPNVPK) |
 | `tools/openorbis-0.5.4/OpenOrbis/PS4Toolchain/` | PS4 native toolchain (headers, `crtlib.o`, `create-fself.exe`) used by `scripts/Build-Stage2Poc.ps1` | [OpenOrbis/OpenOrbis-PS4Toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4Toolchain) release `v0.5.4`, asset `toolchain-llvm-18.tar.gz`. Archive SHA-256 `3c7cd5bb593ca74fa1c13fd59f3938dc0fc07985167f7275063019e63abe4526` (see `docs/TECHNICAL-NOTES.md`). Extract so this exact path exists. Also put `clang++`, `ld.lld`, and `llvm-nm` (LLVM 18) on `PATH`. |
-| `tools/vanilla-scripts/scripts/vscripts/scripts.rson` | The *unmodified* PS4 build's `scripts.rson`, used as the merge base by `scripts/Merge-Stage2ScriptsRson.ps1` | Extract `scripts/vscripts/scripts.rson` from the PS4 game's `frontend` VPK before any patching (e.g. with `tf2vpk`/`tf2vpk-bin`, below), from a clean/backup copy of the install. |
 
 `scripts/Test-Environment.ps1` does **not** check for these — it only validates the PC/PS4 game roots in `config/local.json`. If a Stage-specific script fails with "not found", check this table first.
 

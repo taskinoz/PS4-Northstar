@@ -1,3 +1,5 @@
+> Historical only: VPK modification is retired as of 2026-09-06. Use the native-only direction in GOALS.md; the commands below are no longer an installation workflow.
+
 # Foundation: static PS4 content integration
 
 **Status: complete (Goal 0 in [GOALS.md](GOALS.md)).** This document is kept as reference for how the currently-installed PS4 game state was produced, and to reproduce it from scratch if needed. The tooling described here (`scripts/Build-AndDeployStage1Vpks.ps1` and friends) is still required — the native runtime work in [TECHNICAL-NOTES.md](TECHNICAL-NOTES.md) boots on top of these patched VPKs, not instead of them. See "Retiring the Goal 0 VPK patches" in GOALS.md before removing any of it.

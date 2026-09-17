@@ -1,12 +1,29 @@
+#if defined(NORTHSTAR_PS4_ENABLE_M6_FS_OVERLAY) && !defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
+#define NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA 1
+#endif
 #include "northstar_ps4/runtime.h"
+#include "northstar_ps4/mod_catalog.h"
+#include "northstar_ps4/mod_settings.h"
+#include "northstar_ps4/mod_callbacks.h"
+#include "northstar_ps4/mod_savefiles.h"
+#include "northstar_ps4/json_text.h"
+#include "northstar_ps4/keyvalues.h"
 
 #include <orbis/libkernel.h>
 #include <cstring>
 #include <cstdarg>
+#include <cerrno>
 #include <cstdio>
 #include <dirent.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <string>
+#include <algorithm>
+#include <atomic>
+#include "northstar_ps4/mod_vpks.h"
+#include "northstar_ps4/mod_rpaks.h"
+#include <vector>
 
 namespace northstar::ps4 {
 namespace {
@@ -660,142 +677,9 @@ char gCollectedUiScripts[kMaxCollectedUiScripts][96]{};
 std::int32_t gCollectedUiScriptCount = 0;
 #endif
 #if defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
-constexpr std::size_t kMaxModConVars = 32;
-constexpr std::size_t kMaxModNames = 16;
-constexpr std::size_t kModJsonBufferSize = 16 * 1024;
-
-const char* JsonSkipWs(const char* p) noexcept {
-    while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') ++p;
-    return p;
-}
-
-const char* JsonSkipString(const char* p) noexcept {
-    if (*p != '"') return p;
-    ++p;
-    while (*p != '\0') {
-        if (*p == '\\' && p[1] != '\0') {
-            p += 2;
-            continue;
-        }
-        if (*p == '"') return p + 1;
-        ++p;
-    }
-    return p;
-}
-
-const char* JsonSkipValue(const char* p) noexcept {
-    p = JsonSkipWs(p);
-    if (*p == '"') return JsonSkipString(p);
-    if (*p == '{') {
-        ++p;
-        for (;;) {
-            p = JsonSkipWs(p);
-            if (*p == '}') return p + 1;
-            if (*p != '"') return p;
-            p = JsonSkipString(p);
-            p = JsonSkipWs(p);
-            if (*p != ':') return p;
-            p = JsonSkipValue(p + 1);
-            p = JsonSkipWs(p);
-            if (*p == ',') {
-                ++p;
-                continue;
-            }
-            return (*p == '}') ? p + 1 : p;
-        }
-    }
-    if (*p == '[') {
-        ++p;
-        for (;;) {
-            p = JsonSkipWs(p);
-            if (*p == ']') return p + 1;
-            p = JsonSkipValue(p);
-            p = JsonSkipWs(p);
-            if (*p == ',') {
-                ++p;
-                continue;
-            }
-            return (*p == ']') ? p + 1 : p;
-        }
-    }
-    while (*p != '\0' && *p != ',' && *p != '}' && *p != ']') ++p;
-    return p;
-}
-
-const char* JsonFindMember(const char* object, const char* key) noexcept {
-    if (object == nullptr) return nullptr;
-    const char* p = JsonSkipWs(object);
-    if (*p != '{') return nullptr;
-    ++p;
-    for (;;) {
-        p = JsonSkipWs(p);
-        if (*p != '"') return nullptr;
-        const char* const keyStart = p + 1;
-        const char* keyEnd = keyStart;
-        while (*keyEnd != '\0' && *keyEnd != '"') {
-            if (*keyEnd == '\\' && keyEnd[1] != '\0') ++keyEnd;
-            ++keyEnd;
-        }
-        if (*keyEnd != '"') return nullptr;
-        const std::size_t keyLength =
-            static_cast<std::size_t>(keyEnd - keyStart);
-        const bool matches = std::strlen(key) == keyLength &&
-            std::memcmp(keyStart, key, keyLength) == 0;
-        p = keyEnd + 1;
-        p = JsonSkipWs(p);
-        if (*p != ':') return nullptr;
-        p = JsonSkipWs(p + 1);
-        if (matches) return p;
-        p = JsonSkipValue(p);
-        p = JsonSkipWs(p);
-        if (*p != ',') return nullptr;
-        ++p;
-    }
-}
-
-bool JsonExtractString(const char* p, char* out, std::size_t capacity) noexcept {
-    p = JsonSkipWs(p);
-    if (*p != '"') return false;
-    ++p;
-    std::size_t used = 0;
-    while (*p != '\0' && *p != '"') {
-        if (*p == '\\' && p[1] != '\0') {
-            ++p;
-            char decoded = *p;
-            switch (*p) {
-                case 'b': decoded = '\b'; break;
-                case 'f': decoded = '\f'; break;
-                case 'n': decoded = '\n'; break;
-                case 'r': decoded = '\r'; break;
-                case 't': decoded = '\t'; break;
-                default: break;
-            }
-            if (used + 1 < capacity) out[used++] = decoded;
-            ++p;
-            continue;
-        }
-        if (used + 1 < capacity) out[used++] = *p;
-        ++p;
-    }
-    if (capacity > 0) out[capacity - 1] = '\0';
-    return *p == '"';
-}
-
-long long JsonExtractInteger(const char* p) noexcept {
-    p = JsonSkipWs(p);
-    bool negative = false;
-    if (*p == '-') {
-        negative = true;
-        ++p;
-    }
-    long long value = 0;
-    if (*p < '0' || *p > '9') return 0;
-    while (*p >= '0' && *p <= '9') {
-        value = value * 10 + (*p - '0');
-        ++p;
-    }
-    return negative ? -value : value;
-}
+using namespace northstar::ps4::mods;
+constexpr const char* kProfileRoot = "/app0/R2Northstar";
+constexpr const char* kModsRoot = "/app0/R2Northstar/mods";
 
 bool ReadFileIntoBuffer(const char* path, char* buffer,
     std::size_t capacity, std::size_t& sizeOut) noexcept {
@@ -813,197 +697,74 @@ bool ReadFileIntoBuffer(const char* path, char* buffer,
         used += static_cast<std::size_t>(bytesRead);
     }
     close(fd);
-    if (!ok) return false;
+    if (!ok || used >= capacity) return false;
     if (used < capacity) buffer[used] = '\0';
     else buffer[capacity - 1] = '\0';
     sizeOut = used;
     return true;
 }
 
-constexpr std::size_t kMaxModUiScripts = 32;
-constexpr std::size_t kMaxModLocalisationFiles = 16;
-
-struct ModConVarInfo {
-    char name[64];
-    char defaultValue[64];
-    char flags[32];
-};
-
-struct ModInfo {
-    char name[64];
-    char description[128];
-    char version[32];
-    char initScript[96];
-    std::int32_t loadPriority = 0;
-    std::int32_t scriptCount = 0;
-    std::int32_t conVarCount = 0;
-    ModConVarInfo conVars[kMaxModConVars];
-    // Subset of Scripts[] whose "RunOn" is exactly "UI" (the only CompileList
-    // context proven safe so far, VA-verified as countTable index 2 by
-    // ProbeUiScriptSystem). CLIENT/SERVER/compound RunOn expressions are
-    // counted in scriptCount but intentionally not collected here until
-    // their CompileList context index is identified the same way.
-    std::int32_t uiScriptCount = 0;
-    char uiScripts[kMaxModUiScripts][96];
-    // Localisation[] file paths (PC mod.json key, e.g.
-    // "resource/northstar_client_localisation_%language%.txt"). Fed to the
-    // game's CLocalise::AddFile so mod tokens load through the native
-    // localise interface instead of the engine VPK bake.
-    std::int32_t localisationCount = 0;
-    char localisationFiles[kMaxModLocalisationFiles][160];
-};
-
-struct ModDiscovery {
-    char names[kMaxModNames][64];
-    std::int32_t count = 0;
-};
-
-bool ParseModMetadata(const char* json, ModInfo& out) noexcept {
-    out = ModInfo{};
-    const char* const nameValue = JsonFindMember(json, "Name");
-    if (nameValue != nullptr) {
-        JsonExtractString(nameValue, out.name, sizeof(out.name));
-    }
-    const char* const descriptionValue = JsonFindMember(json, "Description");
-    if (descriptionValue != nullptr) {
-        JsonExtractString(descriptionValue, out.description,
-            sizeof(out.description));
-    }
-    const char* const versionValue = JsonFindMember(json, "Version");
-    if (versionValue != nullptr) {
-        JsonExtractString(versionValue, out.version, sizeof(out.version));
-    }
-    const char* const initScriptValue = JsonFindMember(json, "InitScript");
-    if (initScriptValue != nullptr) {
-        JsonExtractString(initScriptValue, out.initScript,
-            sizeof(out.initScript));
-    }
-    const char* const priorityValue = JsonFindMember(json, "LoadPriority");
-    if (priorityValue != nullptr) {
-        out.loadPriority =
-            static_cast<std::int32_t>(JsonExtractInteger(priorityValue));
-    }
-
-    const char* const conVarsValue = JsonFindMember(json, "ConVars");
-    if (conVarsValue != nullptr) {
-        const char* elem = JsonSkipWs(conVarsValue);
-        if (*elem == '[') elem = JsonSkipWs(elem + 1);
-        while (elem != nullptr && *elem != ']' &&
-            out.conVarCount < static_cast<std::int32_t>(kMaxModConVars)) {
-            if (*elem == '{') {
-                ModConVarInfo& info = out.conVars[out.conVarCount];
-                const char* const nv = JsonFindMember(elem, "Name");
-                if (nv != nullptr &&
-                    JsonExtractString(nv, info.name, sizeof(info.name))) {
-                    const char* const dv =
-                        JsonFindMember(elem, "DefaultValue");
-                    if (dv != nullptr) {
-                        JsonExtractString(dv, info.defaultValue,
-                            sizeof(info.defaultValue));
-                    }
-                    const char* const fv = JsonFindMember(elem, "Flags");
-                    if (fv != nullptr) {
-                        JsonExtractString(fv, info.flags, sizeof(info.flags));
-                    }
-                    ++out.conVarCount;
-                }
-            }
-            elem = JsonSkipWs(JsonSkipValue(elem));
-            if (*elem == ',') elem = JsonSkipWs(elem + 1);
-            else break;
+bool ReadEnabledSettings(char* buffer, std::size_t capacity) noexcept {
+    std::size_t size = 0;
+    const char* paths[] = {"/data/northstar_ps4/enabledmods.json", "/app0/R2Northstar/enabledmods.json"};
+    for (const char* path : paths) {
+        struct stat info{};
+        if (stat(path, &info) == 0) {
+            if (!ReadFileIntoBuffer(path, buffer, capacity, size)) return false;
+            const char* begin = JsonSkipWs(buffer);
+            const char* end = JsonSkipValue(begin);
+            return *begin == '{' && end > begin && end[-1] == '}' && *JsonSkipWs(end) == '\0';
         }
+        if (errno != ENOENT) return false;
     }
-
-    const char* const scriptsValue = JsonFindMember(json, "Scripts");
-    if (scriptsValue != nullptr) {
-        const char* elem = JsonSkipWs(scriptsValue);
-        if (*elem == '[') elem = JsonSkipWs(elem + 1);
-        while (elem != nullptr && *elem != ']') {
-            ++out.scriptCount;
-            if (*elem == '{') {
-                const char* const pathValue = JsonFindMember(elem, "Path");
-                const char* const runOnValue = JsonFindMember(elem, "RunOn");
-                char path[96]{};
-                char runOn[64]{};
-                const bool havePath = pathValue != nullptr &&
-                    JsonExtractString(pathValue, path, sizeof(path));
-                const bool haveUiRunOn = runOnValue != nullptr &&
-                    JsonExtractString(runOnValue, runOn, sizeof(runOn)) &&
-                    std::strcmp(runOn, "UI") == 0;
-                if (havePath && haveUiRunOn &&
-                    out.uiScriptCount < static_cast<std::int32_t>(kMaxModUiScripts)) {
-                    std::strncpy(out.uiScripts[out.uiScriptCount], path,
-                        sizeof(out.uiScripts[0]) - 1);
-                    out.uiScripts[out.uiScriptCount][sizeof(out.uiScripts[0]) - 1] = '\0';
-                    ++out.uiScriptCount;
-                }
-            }
-            elem = JsonSkipWs(JsonSkipValue(elem));
-            if (*elem == ',') elem = JsonSkipWs(elem + 1);
-            else break;
-        }
-    }
-
-    const char* const localisationValue = JsonFindMember(json, "Localisation");
-    if (localisationValue != nullptr) {
-        const char* elem = JsonSkipWs(localisationValue);
-        if (*elem == '[') elem = JsonSkipWs(elem + 1);
-        while (elem != nullptr && *elem != ']' &&
-            out.localisationCount <
-                static_cast<std::int32_t>(kMaxModLocalisationFiles)) {
-            if (*elem == '"') {
-                char file[160]{};
-                if (JsonExtractString(elem, file, sizeof(file))) {
-                    std::strncpy(out.localisationFiles[out.localisationCount], file,
-                        sizeof(out.localisationFiles[0]) - 1);
-                    out.localisationFiles[out.localisationCount]
-                        [sizeof(out.localisationFiles[0]) - 1] = '\0';
-                    ++out.localisationCount;
-                }
-            }
-            elem = JsonSkipWs(JsonSkipValue(elem));
-            if (*elem == ',') elem = JsonSkipWs(elem + 1);
-            else break;
-        }
-    }
-    return out.name[0] != '\0';
+    std::snprintf(buffer, capacity, "{}");
+    return true;
 }
 
-void CollectModNames(ModDiscovery& discovery) noexcept {
-    DIR* const dir = opendir("/app0/mods");
-    if (dir != nullptr) {
-        LogFormat("[NorthstarPS4] mod metadata opendir /app0/mods ok\n");
-        while (struct dirent* entry = readdir(dir)) {
-            if (entry->d_name[0] == '.') continue;
-            if (discovery.count >= static_cast<std::int32_t>(kMaxModNames)) break;
-            std::strncpy(discovery.names[discovery.count], entry->d_name,
-                sizeof(discovery.names[0]) - 1);
-            discovery.names[discovery.count][sizeof(discovery.names[0]) - 1] = '\0';
-            ++discovery.count;
+void CollectModNames(ModDiscovery& discovery, bool includeDisabled = false) noexcept {
+    discovery = ModDiscovery{};
+    static char enabled[kModJsonBufferSize];
+    std::size_t size = 0;
+    char path[256]{};
+    if (!ReadEnabledSettings(enabled, sizeof(enabled))) {
+        LogFormat("[NorthstarPS4] refusing mods: enabled settings are invalid or unreadable\n");
+        return;
+    }
+    auto collect = [&](const char* folder) {
+        if (!IsModFolderName(folder)) return;
+        std::snprintf(path, sizeof(path), "%s/%s/mod.json", kModsRoot, folder);
+        static char json[kModJsonBufferSize];
+        ModInfo mod{};
+        if (!ReadFileIntoBuffer(path, json, sizeof(json), size) || !ParseModMetadata(json, mod)) {
+            LogFormat("[NorthstarPS4] skipping invalid mod metadata: %s\n", path);
+            return;
         }
+        if (!includeDisabled && !IsModEnabled(enabled, mod)) {
+            LogFormat("[NorthstarPS4] mod disabled: %s %s\n", mod.name, mod.version);
+            return;
+        }
+        if (!InsertMod(discovery, folder, mod.loadPriority))
+            LogFormat("[NorthstarPS4] mod catalog capacity exceeded: %s\n", folder);
+    };
+    DIR* const dir = opendir(kModsRoot);
+    if (dir != nullptr) {
+        while (struct dirent* entry = readdir(dir)) collect(entry->d_name);
         closedir(dir);
         return;
     }
-    LogFormat("[NorthstarPS4] mod metadata opendir failed, reading manifest\n");
+    // Emulator fallback only. Normal installs discover folders at each boot.
+    LogFormat("[NorthstarPS4] opendir failed: %s; using staging index\n", kModsRoot);
     static char buffer[kModJsonBufferSize];
-    std::size_t size = 0;
-    if (!ReadFileIntoBuffer("/app0/mods/.ns_mod_manifest",
-            buffer, sizeof(buffer) - 1, size)) {
-        LogFormat("[NorthstarPS4] mod metadata manifest read failed\n");
-        return;
-    }
+    std::snprintf(path, sizeof(path), "%s/.ns_mod_manifest", kModsRoot);
+    if (!ReadFileIntoBuffer(path, buffer, sizeof(buffer), size)) return;
     char* line = buffer;
-    while (line != nullptr && *line != '\0' &&
-        discovery.count < static_cast<std::int32_t>(kMaxModNames)) {
-        char* const newline = std::strchr(line, '\n');
-        if (newline != nullptr) *newline = '\0';
-        if (line[0] != '\0' && line[0] != '\r') {
-            std::strncpy(discovery.names[discovery.count], line,
-                sizeof(discovery.names[0]) - 1);
-            discovery.names[discovery.count][sizeof(discovery.names[0]) - 1] = '\0';
-            ++discovery.count;
-        }
-        if (newline == nullptr) break;
+    while (*line) {
+        char* newline = std::strchr(line, '\n');
+        if (newline) *newline = '\0';
+        const std::size_t length = std::strlen(line);
+        if (length && line[length - 1] == '\r') line[length - 1] = '\0';
+        collect(line);
+        if (!newline) break;
         line = newline + 1;
     }
 }
@@ -1070,7 +831,7 @@ void ProbeModMetadata(void* cvar, ModFindVarFn findVar,
     std::int32_t conVarSlot = 0;
     for (std::int32_t i = 0; i < discovery.count; ++i) {
         char path[160]{};
-        std::snprintf(path, sizeof(path), "/app0/mods/%s/mod.json",
+        std::snprintf(path, sizeof(path), "/app0/R2Northstar/mods/%s/mod.json",
             discovery.names[i]);
         static char jsonBuffer[kModJsonBufferSize];
         std::size_t jsonSize = 0;
@@ -1764,46 +1525,325 @@ using FsCloseFn = void (*)(void*, void*);
 // at fs+8 and the engine dispatches open/read/close through it (slot 2 = open,
 // 0 = read, 3 = close, proven by the probe below). We copy the whole vtable
 // into writable memory, swap slot 2 for a resolution hook, and repoint fs+8.
-// The hook serves mod files from their own /app0/mods/<Name>/mod dir first
-// (last-discovered mod has highest priority, mirroring PC AddSearchPath
+// The hook serves mod files from their own /app0/R2Northstar/mods/<Name>/mod dir first
+// (highest LoadPriority wins, mirroring PC AddSearchPath
 // semantics where the last-registered path wins), then falls through to the
 // engine's original search paths (loose /app0/r2 + VPK mounts). This replaces
 // the old "dump mod content into r2" staging: mods now live and load from
 // their own folder exactly like PC R2Northstar/mods/<Name>/mod.
 constexpr std::size_t kFsVtableCopySlots = 256;
-constexpr std::size_t kMaxModRoots = 16;
+constexpr std::size_t kMaxModRoots = kMaxModNames;
 constexpr std::size_t kModRootCapacity = 128;
 
 std::uintptr_t g_fsVtableCopy[kFsVtableCopySlots]{};
 char g_modRoots[kMaxModRoots][kModRootCapacity]{};
 std::int32_t g_modRootCount = 0;
 FsOpenFn g_originalFsOpen = nullptr;
-void* g_fsSelf = nullptr;
+using FsOpenExFn = void* (*)(void*, const char*, const char*, std::uint32_t, const char*, char**);
+FsOpenExFn g_originalFsOpenEx = nullptr;
+using FsReadCacheFn = bool (*)(void*, const char*, void*);
+FsReadCacheFn g_originalFsReadCache = nullptr;
+std::uintptr_t g_primaryFsTable[168]{};
+bool g_fsHookInstalled = false;
+
 
 std::size_t NormalizeRequestedPath(const char* in, char* out, std::size_t capacity) noexcept {
-    if (in == nullptr) {
-        out[0] = '\0';
-        return 0;
-    }
-    const char* p = in;
-    while (*p == '/' || *p == '\\') ++p;
+    if (capacity == 0) return 0;
+    out[0] = '\0';
+    if (!in || *in == '/' || *in == '\\' || std::strchr(in, ':')) return 0;
     std::size_t n = 0;
-    for (; *p != '\0' && n + 1 < capacity; ++p) {
-        out[n++] = (*p == '\\') ? '/' : *p;
+    for (; *in; ++in) {
+        if (n + 1 >= capacity) { out[0] = '\0'; return 0; }
+        out[n++] = *in == '\\' ? '/' : *in;
     }
     out[n] = '\0';
+    const char* segment = out;
+    while (*segment) {
+        const char* end = std::strchr(segment, '/');
+        const std::size_t length = end ? static_cast<std::size_t>(end - segment) : std::strlen(segment);
+        if (length == 0 || (length == 1 && segment[0] == '.') ||
+            (length == 2 && segment[0] == '.' && segment[1] == '.')) {
+            out[0] = '\0'; return 0;
+        }
+        if (!end) break;
+        segment = end + 1;
+    }
     return n;
+}
+
+bool ModReadFromCache(void* self, const char* fileName, void* result) noexcept {
+    char normalized[256]{};
+    if (NormalizeRequestedPath(fileName, normalized, sizeof(normalized))) {
+        for (int i = g_modRootCount - 1; i >= 0; --i) {
+            char candidate[384]{};
+            const int n = std::snprintf(candidate, sizeof(candidate), "%s/%s", g_modRoots[i], normalized);
+            if (n < 0 || static_cast<std::size_t>(n) >= sizeof(candidate)) continue;
+            const int fd = open(candidate, O_RDONLY);
+            if (fd < 0) continue;
+            close(fd);
+            LogFormat("[NorthstarPS4] bypass cached mod file: %s\n", normalized);
+            return false;
+        }
+    }
+    return g_originalFsReadCache(self, fileName, result);
+}
+
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+constexpr const char* kRuntimeRson = "/data/northstar_ps4/scripts.rson";
+FsReadFn g_originalFsRead = nullptr;
+FsCloseFn g_originalFsClose = nullptr;
+using FsSizeFn = std::uint64_t (*)(void*, const char*, const char*);
+FsSizeFn g_originalFsSize = nullptr;
+
+std::uintptr_t g_runtimeClientBase = 0;
+std::size_t g_runtimeClientSpan = 0;
+bool g_runtimeManifestGenerated = false;
+
+#include "runtime_ui_api.inl"
+#include "runtime_script_print.inl"
+#include "runtime_ui_callbacks.inl"
+
+bool RegisterRuntimeConstants(void* owner, int context) noexcept {
+    const auto base = g_runtimeClientBase;
+    constexpr std::uint8_t internBytes[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec};
+    if (!ValidateEnginePreimage(base, g_runtimeClientSpan, 0x6a96a0, internBytes, sizeof(internBytes))) return false;
+    constexpr std::uint8_t insertBytes[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec};
+    if (!ValidateEnginePreimage(base, g_runtimeClientSpan, 0x6ab3e0, insertBytes, sizeof(insertBytes))) return false;
+    constexpr std::uint8_t constTableBytes[] = {0x49,0x8b,0x55,0x08,0x8b,0x4a,0x68,0x48,0x8b,0x42,0x50,0x8d,0x71,0x01,0x48,0xc1,0xe1,0x04,0x89,0x72,0x68,0x48,0x8b,0x72,0x70,0xf6,0x80,0xdb,0x40,0x00,0x00,0x08};
+    if (!ValidateEnginePreimage(base, g_runtimeClientSpan, 0x6759d2, constTableBytes, sizeof(constTableBytes))) return false;
+    if (kClientScriptOwnerGlobalVa + sizeof(void*) > g_runtimeClientSpan) return false;
+    void* vm = owner ? *reinterpret_cast<void**>(reinterpret_cast<char*>(owner) + 8) : nullptr;
+    void* shared = vm ? *reinterpret_cast<void**>(reinterpret_cast<char*>(vm) + 0x50) : nullptr;
+    if (!shared) { LogFormat("[NorthstarPS4] constants not ready owner=%p vm=%p\n", owner, vm); return false; }
+
+    // Install the script print sink before anything else can fail: script
+    // output is the only diagnostic channel mods have, and it is worth having
+    // even when constant or native registration below goes wrong.
+    InstallScriptPrint(shared, context == uiapi::kCtxUi ? "UI" : "CLIENT");
+
+    void* strings = *reinterpret_cast<void**>(reinterpret_cast<char*>(shared) + 0x4048);
+    void* constants = *reinterpret_cast<void**>(reinterpret_cast<char*>(shared) + 0x40e0);
+    const auto tag = *reinterpret_cast<std::uint32_t*>(reinterpret_cast<char*>(shared) + 0x40d8);
+    LogFormat("[NorthstarPS4] constants table vm=%p shared=%p table=%p tag=%x\n", vm, shared, constants, tag);
+    if (!strings || !constants || tag != 0xa000020) return false;
+    using InternFn = void* (*)(void*, const char*, std::int32_t);
+    using InsertFn = bool (*)(void*, const void*, const void*);
+    auto intern = reinterpret_cast<InternFn>(base + 0x6a96a0);
+    auto insert = reinterpret_cast<InsertFn>(base + 0x6ab3e0);
+    const struct { const char* name; std::int64_t value; } values[] = {
+        {"VANILLA", 0}, {"NS_VERSION_MAJOR", 0}, {"NS_VERSION_MINOR", 1},
+        {"NS_VERSION_PATCH", 0}, {"NS_VERSION_DEV", 1}
+    };
+    for (const auto& entry : values) {
+        void* keyString = intern(strings, entry.name, -1);
+        if (!keyString) return false;
+        // SQString::Create (0x6a96a0) never writes the shared-state back-pointer
+        // at string+0x18, and it does not take a reference. Every engine caller
+        // does both itself immediately afterwards (sq_pushstring 0x682e00, the
+        // script-function lookup 0x685cf0, the native registrar 0x684630).
+        // Omitting it leaves the key unowned with a garbage +0x18, and the
+        // table's release path at VM teardown dereferences string+0x18 and then
+        // sharedState+0x4048, faulting inside SQString release at VA 0x69f6e4.
+        // Latent until a VM was actually destroyed: the UI VM outlives the
+        // session, the CLIENT VM is torn down on leaving a map.
+        *reinterpret_cast<void**>(static_cast<char*>(keyString) + 0x18) = shared;
+        ++*reinterpret_cast<std::uint32_t*>(static_cast<char*>(keyString) + 8);
+        const std::uint64_t key[2] = {0x8000010, reinterpret_cast<std::uintptr_t>(keyString)};
+        const std::uint64_t value[2] = {0x5000002, static_cast<std::uint64_t>(entry.value)};
+        const int result = insert(constants, key, value);
+        LogFormat("[NorthstarPS4] runtime constant name=%s value=%lld result=%d\n", entry.name, static_cast<long long>(entry.value), result);
+    }
+    if (!RegisterRuntimeUiNatives(owner, context) || !InstallRuntimeUiCallbacks()) return false;
+    return true;
+}
+
+#include "runtime_vm_lifecycle.inl"
+
+bool BuildRuntimeManifest(void* self) noexcept {
+    void* source = g_originalFsOpenEx(self, "scripts/vscripts/scripts.rson", "rb", 0, "GAME", nullptr);
+    if (!source) return false;
+    std::string original;
+    char chunk[4096];
+    int count = 0;
+    do {
+        count = g_originalFsRead(reinterpret_cast<char*>(self) + 8, chunk, sizeof(chunk), source);
+        if (count > 0) original.append(chunk, count);
+    } while (count == sizeof(chunk) && original.size() < 1024 * 1024);
+    g_originalFsClose(reinterpret_cast<char*>(self) + 8, source);
+    if (count < 0 || original.empty() || original.size() >= 1024 * 1024) return false;
+    std::string initBlocks, modBlocks;
+    ModDiscovery discovery{};
+    CollectModNames(discovery);
+    int scriptCount = 0;
+    for (int i = 0; i < discovery.count; ++i) {
+        char metadataPath[256]{};
+        std::snprintf(metadataPath, sizeof(metadataPath), "%s/%s/mod.json", kModsRoot, discovery.names[i]);
+        static char json[kModJsonBufferSize];
+        std::size_t size = 0;
+        static ModInfo info;
+        if (!ReadFileIntoBuffer(metadataPath, json, sizeof(json), size) || !ParseModMetadata(json, info)) return false;
+        if (info.initScript[0]) {
+            // RuntimeVmInit compiles each mod's InitScript directly at VM
+            // creation for every context it hooks, so the manifest must only
+            // declare the contexts it does not hook. Declaring a hooked context
+            // here compiles the InitScript twice in that VM, and the second pass
+            // fails ("Redefinition of enumeration ..."). SERVER lives in
+            // server.prx and is still unhooked; once it is, this block goes away
+            // entirely rather than gaining another context.
+            initBlocks += g_runtimeVmInitHooked ? "When: \"SERVER\"\nScripts:\n[\n" : "When: \"SERVER || CLIENT || UI\"\nScripts:\n[\n";
+            initBlocks += info.initScript;
+            initBlocks += "\n]\n";
+        }
+        const char* entries = JsonFindMember(json, "Scripts");
+        if (!entries || *JsonSkipWs(entries) != '[') continue;
+        entries = JsonSkipWs(entries + 1);
+        while (*entries && *entries != ']') {
+            const char* pathValue = JsonFindMember(entries, "Path");
+            const char* whenValue = JsonFindMember(entries, "RunOn");
+            char path[256]{}, when[512]{}, normalized[256]{};
+            if (!pathValue || !whenValue || !JsonExtractString(pathValue, path, sizeof(path)) ||
+                !JsonExtractString(whenValue, when, sizeof(when)) ||
+                !NormalizeRequestedPath(path[0] == '/' ? path + 1 : path, normalized, sizeof(normalized)) ||
+                std::strpbrk(when, "\"\r\n") || std::strpbrk(path, "\"\r\n[]")) { LogFormat("[NorthstarPS4] manifest rejected mod=%s script=%s\n", info.name, path); return false; }
+            modBlocks += "When: \"";
+            modBlocks += when;
+            modBlocks += "\"\nScripts:\n[\n";
+            modBlocks += normalized;
+            modBlocks += "\n]\n";
+            ++scriptCount;
+            entries = JsonSkipWs(JsonSkipValue(entries));
+            if (*entries != ',') break;
+            entries = JsonSkipWs(entries + 1);
+        }
+    }
+    // Runtime compiled cache, like PC Northstar. Retail archives and mod sources
+    // are only read. Init declarations precede scripts that reference their types.
+    mkdir("/data/northstar_ps4", 0777);
+    FILE* output = std::fopen(kRuntimeRson, "wb");
+    if (!output) { LogFormat("[NorthstarPS4] runtime manifest cache is not writable\n"); return false; }
+    const std::string combined = initBlocks + "\n" + original + "\n" + modBlocks;
+    bool ok = std::fwrite(combined.data(), 1, combined.size(), output) == combined.size();
+    if (std::fclose(output) != 0) ok = false;
+    LogFormat("[NorthstarPS4] runtime manifest generated mods=%d scripts=%d bytes=%zu success=%d\n", discovery.count, scriptCount, combined.size(), ok ? 1 : 0);
+    return ok;
+}
+
+#include "runtime_keyvalues.inl"
+#endif
+
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+// IBaseFileSystem::Size(fileName, pathID), primary vtable slot 135. A patched
+// file must report the length of the merged copy that Open will hand back, or
+// the engine allocates for the original and truncates the rest.
+std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noexcept {
+    char normalized[256]{};
+    if (kKeyValuesMergeEnabled && NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
+        IsKeyValuePatched(normalized)) {
+        std::uint64_t size = 0;
+        if (KeyValuesServedSize(self, normalized, size)) {
+            LogFormat("[NorthstarPS4] keyvalues size %s = %llu\n",
+                normalized, static_cast<unsigned long long>(size));
+            return size;
+        }
+    }
+    return g_originalFsSize(self, fileName, pathID);
+}
+#endif
+
+#include "runtime_vpks.inl"
+#include "runtime_rpaks.inl"
+
+void* ModOpenEx(void* self, const char* fileName, const char* mode,
+    std::uint32_t flags, const char* pathID, char** resolved) noexcept {
+    // Catch preload archives when the engine mounted its initial stock set
+    // before our interface hook was installed. Run on the engine reader thread.
+    if (fileName && std::strstr(fileName, "scripts/vscripts/scripts.rson"))
+        MountModVpks(self, nullptr, nullptr);
+    const bool readOnly = mode && std::strchr(mode, 'r') &&
+        !std::strchr(mode, '+') && !std::strchr(mode, 'w') && !std::strchr(mode, 'a');
+    char normalized[256]{};
+    const bool trace = fileName && (std::strstr(fileName, "scripts.rson") ||
+        std::strstr(fileName, "_menus.nut") || std::strstr(fileName, "panel_mainmenu.nut"));
+    if (trace) LogFormat("[NorthstarPS4] OpenEx requested=%s pathID=%s\n", fileName, pathID ? pathID : "(null)");
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    if (readOnly && NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
+        std::strcmp(normalized, "scripts/vscripts/scripts.rson") == 0) {
+        if (!g_runtimeManifestGenerated) g_runtimeManifestGenerated = BuildRuntimeManifest(self);
+        if (g_runtimeManifestGenerated) {
+            void* handle = g_originalFsOpenEx(self, kRuntimeRson, mode, flags, pathID, resolved);
+            LogFormat("[NorthstarPS4] runtime manifest served handle=%p\n", handle);
+            if (handle) return handle;
+        }
+    }
+#endif
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    // KeyValues patches. A patched file is merged on its first request and the
+    // single complete result is served in its place; later requests reuse it.
+    // If the merge fails for any reason this falls through to the stock file,
+    // so a bad patch degrades to vanilla rather than failing to boot.
+    if (kKeyValuesMergeEnabled && readOnly &&
+        NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
+        IsKeyValuePatched(normalized) &&
+        (KeyValuesAlreadyBuilt(normalized) || BuildKeyValuesPatch(self, normalized))) {
+        char candidate[512];
+        if (KeyValuesOutputPath(normalized, candidate, sizeof(candidate))) {
+            void* handle = g_originalFsOpenEx(self, candidate, mode, flags, pathID, resolved);
+            if (handle) {
+                LogFormat("[NorthstarPS4] keyvalues served: %s\n", normalized);
+                return handle;
+            }
+            LogFormat("[NorthstarPS4] keyvalues merged file would not open: %s\n", candidate);
+        }
+    }
+#endif
+    if (readOnly && (!pathID || std::strcmp(pathID, "GAME") == 0) &&
+        NormalizeRequestedPath(fileName, normalized, sizeof(normalized))) {
+        for (std::int32_t i = g_modRootCount - 1; i >= 0; --i) {
+            char candidate[384]{};
+            const int n = std::snprintf(candidate, sizeof(candidate), "%s/%s", g_modRoots[i], normalized);
+            if (n < 0 || static_cast<std::size_t>(n) >= sizeof(candidate)) continue;
+            const int fd = open(candidate, O_RDONLY);
+            if (fd < 0) continue;
+            close(fd);
+            void* handle = g_originalFsOpenEx(self, candidate, mode, flags, pathID, resolved);
+            if (handle) {
+                LogFormat("[NorthstarPS4] mod file served: %s\n", candidate);
+                return handle;
+            }
+        }
+    }
+    return g_originalFsOpenEx(self, fileName, mode, flags, pathID, resolved);
 }
 
 void* ModSearchPathOpen(void* self, const char* fileName, const char* mode,
     const char* pathID, std::int64_t flags) noexcept {
+    // TEMP DIAGNOSTIC (2026-08-17): tracing a case where fixed mod content
+    // (verified correct on disk in both the VPK and the /app0/R2Northstar/mods overlay)
+    // still isn't what CLIENT-context script compilation reads at connect
+    // time. Logs every open attempt whose requested path mentions
+    // "codecallbacks" -- remove once root-caused.
+    const bool traceThis = fileName != nullptr &&
+        (std::strstr(fileName, "codecallbacks") != nullptr ||
+         std::strstr(fileName, "scripts.rson") != nullptr ||
+         std::strstr(fileName, "_menus.nut") != nullptr ||
+         std::strstr(fileName, "panel_mainmenu.nut") != nullptr);
+    if (traceThis) {
+        LogFormat("[NorthstarPS4] modtrace requested fileName=%s mode=%s pathID=%s\n",
+            fileName, mode != nullptr ? mode : "(null)",
+            pathID != nullptr ? pathID : "(null)");
+    }
     const bool readOnly = mode != nullptr &&
         std::strchr(mode, 'w') == nullptr && std::strchr(mode, 'a') == nullptr &&
         std::strchr(mode, '+') == nullptr;
-    if (readOnly && fileName != nullptr) {
+    if (readOnly && fileName != nullptr &&
+        (pathID == nullptr || std::strcmp(pathID, "GAME") == 0)) {
         char normalized[256]{};
         const std::size_t pathLength =
             NormalizeRequestedPath(fileName, normalized, sizeof(normalized));
+        if (traceThis) {
+            LogFormat("[NorthstarPS4] modtrace normalized=%s length=%zu modRootCount=%d\n",
+                normalized, pathLength, g_modRootCount);
+        }
         if (pathLength > 0) {
             for (std::int32_t i = g_modRootCount - 1; i >= 0; --i) {
                 const std::size_t rootLength = std::strlen(g_modRoots[i]);
@@ -1816,17 +1856,30 @@ void* ModSearchPathOpen(void* self, const char* fileName, const char* mode,
                 // NOTE: access() is a shadPS4 stub that always returns 0, so
                 // probe existence with open/close (real kernel FS) instead.
                 const int fd = open(candidate, O_RDONLY);
+                if (traceThis) {
+                    LogFormat("[NorthstarPS4] modtrace candidate[%d]=%s fd=%d\n",
+                        i, candidate, fd);
+                }
                 if (fd < 0) continue;
                 close(fd);
-                return g_originalFsOpen(g_fsSelf, candidate, mode, pathID, flags);
+                if (traceThis) {
+                    LogFormat("[NorthstarPS4] modtrace SERVING candidate=%s\n", candidate);
+                }
+                void* handle = g_originalFsOpen(self, candidate, mode, pathID, flags);
+                if (handle != nullptr) return handle;
             }
         }
     }
-    return g_originalFsOpen(g_fsSelf, fileName, mode, pathID, flags);
+    if (traceThis) {
+        LogFormat("[NorthstarPS4] modtrace FALLTHROUGH to original open fileName=%s\n",
+            fileName);
+    }
+    return g_originalFsOpen(self, fileName, mode, pathID, flags);
 }
 } // namespace
 
 void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
+    if (g_fsHookInstalled) return;
     using CreateInterfaceFn = void* (*)(const char*, int*);
 
     void* createInterfaceAddress = nullptr;
@@ -1877,28 +1930,66 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
     g_modRootCount = 0;
     for (std::int32_t i = 0; i < discovery.count && g_modRootCount < kMaxModRoots; ++i) {
         std::snprintf(g_modRoots[g_modRootCount], sizeof(g_modRoots[0]),
-            "/app0/mods/%s/mod", discovery.names[i]);
+            "/app0/R2Northstar/mods/%s/mod", discovery.names[i]);
         LogFormat("[NorthstarPS4] fs overlay mod root[%d]=%s\n",
             g_modRootCount, g_modRoots[g_modRootCount]);
         ++g_modRootCount;
     }
-    if (g_modRootCount > 0) {
-        g_fsSelf = fsFieldAddr;
-        g_originalFsOpen = originalOpen;
-        for (std::size_t slot = 0; slot < kFsVtableCopySlots; ++slot) {
-            g_fsVtableCopy[slot] = reinterpret_cast<std::uintptr_t>(vtable2[slot]);
-        }
-        g_fsVtableCopy[2] = reinterpret_cast<std::uintptr_t>(&ModSearchPathOpen);
-        auto vtable2PointerAddress = reinterpret_cast<std::uintptr_t>(fs) + 8;
-        *reinterpret_cast<void**>(vtable2PointerAddress) =
-            reinterpret_cast<void*>(g_fsVtableCopy);
-        const void* const readBack =
-            *reinterpret_cast<void* const*>(vtable2PointerAddress);
-        LogFormat("[NorthstarPS4] fs overlay vtable2 repointed to %p (readback %p) roots=%d\n",
-            reinterpret_cast<void*>(g_fsVtableCopy), readBack, g_modRootCount);
-    } else {
-        LogFormat("[NorthstarPS4] fs overlay no mods, search-path overlay not installed\n");
-    }
+    if (g_modRootCount == 0) return;
+    OrbisKernelModuleInfo fsInfo{};
+    fsInfo.size = sizeof(fsInfo);
+    if (sceKernelGetModuleInfo(fsHandle, &fsInfo) != 0 || fsInfo.segmentCount == 0) return;
+    const auto base = reinterpret_cast<std::uintptr_t>(fsInfo.segmentInfo[0].address);
+    // filesystem_stdio.prx SHA256 4d6b7b653c1d9cde01b2f0634d11a06d8b986dded4374b87ca330100e4969266.
+    // Read-only disassembly: secondary Open at d480 adjusts this by -8 and
+    // jumps through primary slot 0x260/8 (76), OpenEx at d4a0.
+    constexpr std::uint8_t openExPreimage[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0x58,0x02,0x00,0x00};
+    constexpr std::uint8_t cachePreimage[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x53,0x48,0x81,0xec,0x28,0x02,0x00,0x00};
+    // Size(fileName, pathID): secondary slot 7 is a `this -= 8` thunk straight
+    // into this same implementation, so the primary slot is the one to hook.
+    constexpr std::uint8_t sizePreimage[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0xa8,0x01,0x00,0x00};
+    const bool matches = reinterpret_cast<std::uintptr_t>(vtable) == base + 0x70eb0 &&
+        reinterpret_cast<std::uintptr_t>(vtable2) == base + 0x713f0 &&
+        reinterpret_cast<std::uintptr_t>(vtable[135]) == base + 0xde20 &&
+        ValidateEnginePreimage(base, fsInfo.segmentInfo[0].size, 0xde20, sizePreimage, sizeof(sizePreimage)) &&
+        reinterpret_cast<std::uintptr_t>(vtable[76]) == base + 0xd4a0 &&
+        reinterpret_cast<std::uintptr_t>(vtable[97]) == base + 0x67f0 &&
+        ValidateEnginePreimage(base, fsInfo.segmentInfo[0].size, 0x67f0, cachePreimage, sizeof(cachePreimage)) &&
+        reinterpret_cast<std::uintptr_t>(vtable2[2]) == base + 0xd480 &&
+        ValidateEnginePreimage(base, fsInfo.segmentInfo[0].size, 0xd4a0, openExPreimage, sizeof(openExPreimage));
+    LogFormat("[NorthstarPS4] OpenEx profile gate base=%p match=%d\n", reinterpret_cast<void*>(base), matches ? 1 : 0);
+    if (!matches) return;
+    g_originalFsOpen = originalOpen;
+    g_originalFsOpenEx = reinterpret_cast<FsOpenExFn>(vtable[76]);
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    g_originalFsRead = originalRead;
+    g_originalFsClose = originalClose;
+#endif
+    // Include the offset-to-top and RTTI entries preceding the vtable.
+    for (std::int32_t i = -2; i < 166; ++i)
+        g_primaryFsTable[i + 2] = reinterpret_cast<std::uintptr_t>(vtable[i]);
+    g_primaryFsTable[78] = reinterpret_cast<std::uintptr_t>(&ModOpenEx);
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    g_originalFsSize = reinterpret_cast<FsSizeFn>(vtable[135]);
+    g_primaryFsTable[137] = reinterpret_cast<std::uintptr_t>(&ModSize);
+#endif
+    g_originalFsReadCache = reinterpret_cast<FsReadCacheFn>(vtable[97]);
+    g_primaryFsTable[99] = reinterpret_cast<std::uintptr_t>(&ModReadFromCache);
+    constexpr std::uint8_t mountBytes[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0x28,0x02,0x00,0x00};
+    if (reinterpret_cast<std::uintptr_t>(vtable[113]) == base + 0xa900 &&
+        ValidateEnginePreimage(base, fsInfo.segmentInfo[0].size, 0xa900, mountBytes, sizeof(mountBytes))) {
+        DiscoverModVpks();
+        g_originalMountVpk = reinterpret_cast<FsMountVpkFn>(vtable[113]);
+        g_primaryFsTable[115] = reinterpret_cast<std::uintptr_t>(&ModMountVpk);
+        g_modVpkHookReady = true;
+        LogFormat("[NorthstarPS4] MountVPK hook installed archives=%zu\n", g_modVpks.size());
+    } else LogFormat("[NorthstarPS4] MountVPK profile mismatch; mod VPK mounting disabled\n");
+    *reinterpret_cast<void**>(fs) = g_primaryFsTable + 2;
+    g_fsHookInstalled = true;
+    LogFormat("[NorthstarPS4] OpenEx hook installed roots=%d\n", g_modRootCount);
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    CollectKeyValuePatches();
+#endif
 
     // Probe through the repointed (hooked) interface so results reflect mod
     // search-path resolution instead of the pre-hook function pointer.
@@ -1919,7 +2010,7 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
         LogFormat("[NorthstarPS4] fs overlay open %-12s %-40s handle=%p read=%d bytes=%.*s\n",
             tag, fileName, handle, bytesRead,
             bytesRead > 0 ? bytesRead : 0, buffer);
-        originalClose(fs, handle);
+        originalClose(fsFieldAddr, handle);
     };
 
     const struct { const char* tag; const char* file; } probePaths[] = {
@@ -1930,7 +2021,7 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
         { "custom-nut", "scripts/vscripts/_disallowed_tacticals.gnut" },
         { "base-ui-menus", "scripts/vscripts/ui/_menus.nut" },
         { "abs-init",
-            "/app0/mods/Northstar.Client/mod/scripts/vscripts/cl_northstar_client_init.nut" },
+            "/app0/R2Northstar/mods/Northstar.Client/mod/scripts/vscripts/cl_northstar_client_init.nut" },
     };
     for (const auto& probe : probePaths) {
         tryOpen(probe.tag, probe.file);
@@ -2005,7 +2096,7 @@ void ProbeLocaliseInterface(OrbisKernelModule localizeHandle,
     std::int32_t loadedFiles = 0;
     for (std::int32_t i = 0; i < discovery.count; ++i) {
         char path[160]{};
-        std::snprintf(path, sizeof(path), "/app0/mods/%s/mod.json",
+        std::snprintf(path, sizeof(path), "/app0/R2Northstar/mods/%s/mod.json",
             discovery.names[i]);
         static char jsonBuffer[kModJsonBufferSize];
         std::size_t jsonSize = 0;
@@ -2048,6 +2139,7 @@ void* ModuleTracker(void*) noexcept {
     OrbisKernelModule vstdlibHandle = static_cast<OrbisKernelModule>(-1);
     OrbisKernelModule engineHandle = static_cast<OrbisKernelModule>(-1);
     OrbisKernelModule fsHandle = static_cast<OrbisKernelModule>(-1);
+    OrbisKernelModule rtechHandle = static_cast<OrbisKernelModule>(-1);
 #if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
     OrbisKernelModule localizeHandle = static_cast<OrbisKernelModule>(-1);
     std::uintptr_t localizeBase = 0;
@@ -2097,6 +2189,9 @@ void* ModuleTracker(void*) noexcept {
                 if (infoResult == 0 &&
                     std::strstr(info.name, "filesystem_stdio") != nullptr) {
                     fsHandle = handles[i];
+                }
+                if (infoResult == 0 && std::strstr(info.name, "rtech_game") != nullptr) {
+                    rtechHandle = handles[i];
                 }
 #if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
                 if (infoResult == 0 && std::strstr(info.name, "localize") != nullptr) {
@@ -2152,6 +2247,24 @@ void* ModuleTracker(void*) noexcept {
         }
         if (!(engineSeen && clientSeen)) sceKernelUsleep(100000);
     }
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    g_runtimeClientBase = clientBase;
+    g_runtimeClientSpan = clientSpan;
+    InstallRuntimeVmInit();
+#endif
+#if defined(NORTHSTAR_PS4_ENABLE_M6_FS_OVERLAY)
+    if (fsHandle != static_cast<OrbisKernelModule>(-1)) {
+        ProbeFilesystemInterface(fsHandle);
+    } else {
+        LogFormat("[NorthstarPS4] fs overlay skipped: filesystem_stdio handle unavailable\n");
+    }
+    // After the filesystem overlay, so mod discovery has already run.
+    if (rtechHandle != static_cast<OrbisKernelModule>(-1)) {
+        InstallModRpakHook(rtechHandle);
+    } else {
+        LogFormat("[NorthstarPS4] mod rpak hook skipped: rtech_game handle unavailable\n");
+    }
+#endif
 #if defined(NORTHSTAR_PS4_ENABLE_DIAGNOSTIC_UI_NATIVE)
     if (clientBase != 0) InstallDiagnosticUiRecord(clientBase, clientSpan);
 #endif
@@ -2163,13 +2276,7 @@ void* ModuleTracker(void*) noexcept {
     } else {
         LogFormat("[NorthstarPS4] cvar probe skipped: vstdlib handle unavailable\n");
     }
-#if defined(NORTHSTAR_PS4_ENABLE_M6_FS_OVERLAY)
-    if (fsHandle != static_cast<OrbisKernelModule>(-1)) {
-        ProbeFilesystemInterface(fsHandle);
-    } else {
-        LogFormat("[NorthstarPS4] fs overlay skipped: filesystem_stdio handle unavailable\n");
-    }
-#endif
+
     LogFormat(
         "[NorthstarPS4] module tracker complete engine=%d client=%d\n",
         engineSeen ? 1 : 0, clientSeen ? 1 : 0);
