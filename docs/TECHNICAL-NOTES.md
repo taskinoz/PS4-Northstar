@@ -3701,3 +3701,40 @@ offset 9`. The lobby stayed up with no script errors.
 `INVALID_MASTERSERVER_TOKEN` (or `PLAYER_NOT_FOUND`). PC recovers by re-authenticating with
 Origin; the PS4 cannot, so the join dialog now appends how to re-export the identity. The
 parser records `error.enum` separately and keeps PC's reason text.
+## shadPS4 ca89b01 fixes the transition crash; mod file index on (2026-09-24)
+
+**Busy-server joins crashed the same way.** Two joins to the most-populated public server
+(`mp_eden`, then `mp_wargames`) passed Atlas auth, the uid fix and connect, then crashed at
+`VCRUNTIME140+0x1cca7` on `GpuSchedPriorityPendingOpsRunner` about 5,000 log lines after the
+map VPK mounted. An empty server (`mp_angel_city`) loaded and stayed connected with no
+timeout. The two joins run the same sequence; the difference in the crash window is that the
+texture-streaming threads (Thread4-8) were already reserving and mapping memory in the
+crashing joins. Joining from the lobby tears down the listen server and briefly shows the
+main menu, which a local `map` change does not.
+
+**shadPS4 pre-release `ca89b01` (2026-09-23) fixes it.** The transition harness that crashed
+3/3 on `5b92da8` passed 20/20 hops on `ca89b01`: Kodai -> complex3 -> lobby -> wargames, then
+eden -> lobby -> angel_city -> glitch -> lobby -> Kodai, and two more runs with the index
+below. All loads had zero script errors. The likely fix is the buffer manager rewrite (#5047).
+`docs/INSTALL.md` now names `ca89b01` as the minimum.
+
+**Mod file index enabled.** It was only off because it made the old crash certain on
+`5b92da8`. On `ca89b01`, with it on, 10/10 hops loaded and loads got much faster:
+
+| Hop | Probing | Index |
+|---|---|---|
+| lobby -> Kodai | 55 s | 34 s |
+| Kodai -> complex3 | 85 s | 66 s |
+| -> lobby | 35-38 s | 23-24 s |
+| lobby -> wargames | 89 s | 66 s |
+| lobby -> eden | 60 s | 39 s |
+
+Failed opens per hop: 3-33, down from thousands. PRX `5b4acd32`.
+
+**Atlas token in shadPS4's log.** Atlas reads `auth_with_server` parameters only from the
+query string (`r.URL.Query()` in `pkg/api/api0/client.go`), and shadPS4 logs full URLs at
+Info in four places (`sceHttpCreateConnectionWithURL`, `sceHttpCreateRequestWithURL`,
+`sceHttpSendRequest`, `LogSendRequestSettings`). The per-game log filter
+`*:Info Lib.Http:Warning` removes them (verified: 0 token lines, 0 `Lib.Http` Info lines in
+the next session) without affecting this module's `[Tty]` output. Per-game `Log.append` is
+now on so a crash log survives the next launcher start.

@@ -1585,19 +1585,15 @@ std::int32_t g_modRootCount = 0;
 // A sorted vector rather than a map: this module's static constructors never
 // run, and a zeroed vector is a valid empty one.
 //
-// **Disabled, deliberately.** It works - 800 files across 6 roots, failed opens
-// per session 55,590 -> 103, boot to the Northstar lobby 70-74 s -> 52-57 s - but
-// it turns a shadPS4 race from occasional into certain. Harness A/B, lobby ->
-// `map mp_forwardbase_kodai`: with the index 3/3 crash 12 s in at
-// VCRUNTIME140+0x1cca7 (memcpy on shadPS4's GpuSchedPriorityPendingOpsRunner
-// reading freed memory); without it 2/2 load. The crash follows the main
-// thread's large sceKernelMunmap calls during the transition, while the GPU
-// thread still has copies pending from that memory. The probes' overhead kept
-// the main thread busy long enough for those copies to finish first, which is
-// the only reason the transition usually survived. Joining a server is the same
-// kind of transition, so the index stays off until the race is fixed in shadPS4
-// or guarded here (e.g. by delaying large unmaps until pending GPU work drains).
-constexpr bool kModFileIndexEnabled = false;
+// 800 files across 6 roots: failed opens per session 55,590 -> 103, boot to the
+// Northstar lobby 70-74 s -> 52-57 s.
+//
+// It was disabled while shadPS4 5b92da8 was current: there the index turned the
+// emulator's level-transition crash (VCRUNTIME140+0x1cca7 on
+// GpuSchedPriorityPendingOpsRunner) from occasional into certain on the first
+// map load, 3/3. That crash is gone in shadPS4 ca89b01 (buffer manager rewrite,
+// #5047), so the index is on; older emulator builds should keep it off.
+constexpr bool kModFileIndexEnabled = true;
 struct ModFileEntry { std::string key; std::int32_t root; };
 std::vector<ModFileEntry> g_modFileIndex;
 std::atomic<bool> g_modFileIndexReady{false};
