@@ -8,7 +8,7 @@
 #include "northstar_ps4/mod_savefiles.h"
 #include "northstar_ps4/json_text.h"
 #include "northstar_ps4/keyvalues.h"
-#include "northstar_ps4/persistence_schema.h"
+#include "northstar_ps4/server_list.h"
 
 #include <orbis/libkernel.h>
 #include <orbis/Net.h>
@@ -931,6 +931,7 @@ void ProbeCvarInterface(
     ProbeAuthConVars(cvar, findVar, engineBase, engineSize);
     ApplyAtlasIdentity(cvar, findVar);
     AllowMultiplayerMenu(cvar, findVar);
+    CaptureServerFilter(cvar, findVar);
     // Always validated and resolved now: ns_allow_team_change and
     // ns_has_agreed_to_send_token below are unconditional, proven-required
     // registrations, not just the diagnostic/experimental ones.
@@ -1630,6 +1631,11 @@ std::uintptr_t g_runtimeClientBase = 0;
 std::size_t g_runtimeClientSpan = 0;
 bool g_runtimeManifestGenerated = false;
 
+// Defined in runtime_http.inl, which is included further down under a superset
+// of this block's guards. The server-list natives in the UI API need them.
+bool InitHttpTransport() noexcept;
+bool HttpGet(const char* url, char* out, std::size_t capacity, int& status) noexcept;
+bool HttpPost(const char* url, char* out, std::size_t capacity, int& status) noexcept;
 #include "runtime_ui_api.inl"
 #include "runtime_script_print.inl"
 #include "runtime_ui_callbacks.inl"
@@ -1788,7 +1794,6 @@ bool BuildRuntimeManifest(void* self) noexcept {
 }
 
 #include "runtime_keyvalues.inl"
-#include "runtime_persistence_schema.inl"
 #endif
 
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
@@ -1797,9 +1802,6 @@ bool BuildRuntimeManifest(void* self) noexcept {
 // the engine allocates for the original and truncates the rest.
 std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noexcept {
     char normalized[256]{};
-    if ((!pathID || !std::strcmp(pathID, "GAME")) &&
-        NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
-        !std::strcmp(normalized, kPs4PdefPath) && PreparePersistenceSchema(self)) return g_pdefSize;
     if (kKeyValuesMergeEnabled && NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
         IsKeyValuePatched(normalized)) {
         std::uint64_t size = 0;
@@ -1818,6 +1820,72 @@ std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noex
 #include "runtime_server_vm.inl"
 #include "runtime_console.inl"
 #include "runtime_http.inl"
+
+// IBaseFileSystem::ReadFile - secondary slot 14, filesystem_stdio+0xc3d0.
+//
+// Some loaders read a whole file in one call instead of opening it, and
+// ReadFile opens internally without going through OpenEx, so none of the mod
+// overlay above applies to it. That is how the server's per-level AI init
+// loads its behaviour definitions (server.prx 0x2fc2c4:
+// `call [rax+0x70]` on fs+8 with pathID "game"), and it is why hosting a
+// match died on
+//
+//   FatalError: Couldn't read scripts/aibehavior/behaviors.txt!
+//
+// even though Northstar.CustomServers ships that file: the stock game keeps it
+// only in the single-player archives, on PS4 and PC alike, and PC hosts serve
+// it from the mod.
+//
+// Mod roots are tried in priority order, as OpenEx does; a hit is read by
+// handing ReadFile the absolute mod path. Files OpenEx rewrites rather than
+// overlays (the runtime scripts.rson, the generated pdef, KeyValues merges)
+// keep ReadFile's stock behaviour, which is what they had before this hook
+// existed, and are logged so a loader that reads them this way is noticed.
+using FsReadFileFn = bool (*)(void*, const char*, const char*, void*, int, int, void*);
+FsReadFileFn g_originalFsReadFile = nullptr;
+constexpr std::size_t kSecondaryFsTableSlots = 64;
+std::uintptr_t g_secondaryFsTable[kSecondaryFsTableSlots + 2]{};
+
+bool PathIdIsGame(const char* pathID) noexcept {
+    if (!pathID) return true;
+    const char* game = "game";
+    for (; *pathID && *game; ++pathID, ++game)
+        if ((*pathID | 0x20) != *game) return false;
+    return *pathID == '\0' && *game == '\0';
+}
+
+bool RewrittenByOpenEx(const char* normalized) noexcept {
+    if (!std::strcmp(normalized, "scripts/vscripts/scripts.rson")) return true;
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    if (kKeyValuesMergeEnabled && IsKeyValuePatched(normalized)) return true;
+#endif
+    return false;
+}
+
+bool ModReadFile(void* self, const char* fileName, const char* pathID, void* buffer,
+    int maxBytes, int startingByte, void* alloc) noexcept {
+    char normalized[256]{};
+    if (PathIdIsGame(pathID) && NormalizeRequestedPath(fileName, normalized, sizeof(normalized))) {
+        if (RewrittenByOpenEx(normalized)) {
+            LogFormat("[NorthstarPS4] ReadFile of rewritten file left stock: %s\n", normalized);
+        } else {
+            for (std::int32_t i = g_modRootCount - 1; i >= 0; --i) {
+                char candidate[384]{};
+                const int n = std::snprintf(candidate, sizeof(candidate), "%s/%s", g_modRoots[i], normalized);
+                if (n < 0 || static_cast<std::size_t>(n) >= sizeof(candidate)) continue;
+                const int fd = open(candidate, O_RDONLY);
+                if (fd < 0) continue;
+                close(fd);
+                if (g_originalFsReadFile(self, candidate, pathID, buffer, maxBytes, startingByte, alloc)) {
+                    LogFormat("[NorthstarPS4] mod file read: %s\n", candidate);
+                    return true;
+                }
+                LogFormat("[NorthstarPS4] mod file read failed, trying next: %s\n", candidate);
+            }
+        }
+    }
+    return g_originalFsReadFile(self, fileName, pathID, buffer, maxBytes, startingByte, alloc);
+}
 
 void* ModOpenEx(void* self, const char* fileName, const char* mode,
     std::uint32_t flags, const char* pathID, char** resolved) noexcept {
@@ -1845,15 +1913,10 @@ void* ModOpenEx(void* self, const char* fileName, const char* mode,
     }
 #endif
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
-    if (readOnly && (!pathID || !std::strcmp(pathID, "GAME")) &&
-        NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
-        !std::strcmp(normalized, kPs4PdefPath) && PreparePersistenceSchema(self)) {
-        void* handle = g_originalFsOpenEx(self, kGeneratedPdef, mode, flags, pathID, resolved);
-        if (handle) {
-            LogFormat("[NorthstarPS4] persistence schema served bytes=%llu\n", static_cast<unsigned long long>(g_pdefSize));
-            return handle;
-        }
-    }
+    // The persistence definition needs no special case: Northstar.PS4 ships a
+    // pre-generated 929 file (PC 231 plus the console's black market; see
+    // scripts/pdef/build_ps4_pdef.py) and the ordinary mod overlay below
+    // serves it, Northstar.PS4 having the highest LoadPriority.
     // KeyValues patches. A patched file is merged on its first request and the
     // single complete result is served in its place; later requests reuse it.
     // If the merge fails for any reason this falls through to the stock file,
@@ -1987,7 +2050,9 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
         LogFormat("[NorthstarPS4] fs overlay vtable[%d]=%p\n",
             slot, vtable[slot]);
     }
-    for (std::int32_t slot = 0; slot < 12; ++slot) {
+    // All of IBaseFileSystem, Read (0) through UnzipFile (16). Slot 14 is
+    // ReadFile, hooked below.
+    for (std::int32_t slot = 0; slot < 17; ++slot) {
         LogFormat("[NorthstarPS4] fs overlay vtable2[%d]=%p\n",
             slot, vtable2[slot]);
     }
@@ -2062,6 +2127,23 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
         LogFormat("[NorthstarPS4] MountVPK hook installed archives=%zu\n", g_modVpks.size());
     } else LogFormat("[NorthstarPS4] MountVPK profile mismatch; mod VPK mounting disabled\n");
     *reinterpret_cast<void**>(fs) = g_primaryFsTable + 2;
+    // ReadFile lives only in the secondary table (fs+8): slot 14 points
+    // straight at the implementation, not at a thunk into the primary table,
+    // so it gets its own copied table. Gated separately; a mismatch leaves
+    // ReadFile stock and everything above in place.
+    constexpr std::uint8_t readFilePreimage[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x18,0x49,0x89,0xcf,0x48,0x89,0xfb,0x4c,0x89,0x4d,0xc8,0x49,0x89,0xd1,0x49,0x89};
+    if (reinterpret_cast<std::uintptr_t>(vtable2[14]) == base + 0xc3d0 &&
+        ValidateEnginePreimage(base, fsInfo.segmentInfo[0].size, 0xc3d0, readFilePreimage, sizeof(readFilePreimage))) {
+        // Offset-to-top and RTTI come across with the table, as for the primary.
+        for (std::size_t i = 0; i < kSecondaryFsTableSlots + 2; ++i)
+            g_secondaryFsTable[i] = reinterpret_cast<std::uintptr_t>(vtable2[static_cast<std::ptrdiff_t>(i) - 2]);
+        g_originalFsReadFile = reinterpret_cast<FsReadFileFn>(vtable2[14]);
+        g_secondaryFsTable[14 + 2] = reinterpret_cast<std::uintptr_t>(&ModReadFile);
+        *reinterpret_cast<void**>(reinterpret_cast<std::uintptr_t>(fs) + 8) = g_secondaryFsTable + 2;
+        LogFormat("[NorthstarPS4] ReadFile hook installed\n");
+    } else {
+        LogFormat("[NorthstarPS4] ReadFile profile mismatch; whole-file reads bypass mods\n");
+    }
     g_fsHookInstalled = true;
     LogFormat("[NorthstarPS4] OpenEx hook installed roots=%d\n", g_modRootCount);
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)

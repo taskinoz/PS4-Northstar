@@ -1,0 +1,8 @@
+[submodule "vendor/NorthstarMods"]
+	path = vendor/NorthstarMods
+	url = https://github.com/R2Northstar/NorthstarMods.git
+	shallow = true
+[submodule "vendor/NorthstarNavs"]
+	path = vendor/NorthstarNavs
+	url = https://github.com/R2Northstar/NorthstarNavs.git
+	shallow = true

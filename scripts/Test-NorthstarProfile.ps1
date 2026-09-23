@@ -25,7 +25,7 @@ if ($settings) {
     $rpakConfig = Join-Path $settings.northstarModsRoot 'Northstar.Custom\paks\rpak.json'
     if (Test-Path -LiteralPath $rpakConfig -PathType Leaf) { $rpakArgs = @($rpakConfig) }
 }
-foreach ($suite in @('mod_catalog', 'json_text', 'keyvalues', 'rpaks', 'persistence_schema')) {
+foreach ($suite in @('mod_catalog', 'json_text', 'keyvalues', 'rpaks', 'server_list')) {
     $exe = Join-Path $testRoot ($suite + '.exe')
     & clang++.exe -std=c++17 -D_CRT_SECURE_NO_WARNINGS -I (Join-Path $repositoryRoot 'launcher\include') (Join-Path $repositoryRoot ('tests\' + $suite + '.cpp')) -o $exe
     if ($LASTEXITCODE) { throw "Host compilation failed: $suite" }

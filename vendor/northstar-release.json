@@ -1,0 +1,17 @@
+{
+  "version": "1.31.13",
+  "source": "https://github.com/R2Northstar/Northstar/blob/v1.31.13/flake.lock",
+  "mods": {
+    "path": "vendor/NorthstarMods",
+    "rev": "509b14c727c127754b3f2566ee39e548386412cb"
+  },
+  "navs": {
+    "path": "vendor/NorthstarNavs",
+    "tag": "v4",
+    "rev": "0d3c1332ca40b7835f880251509da677184bec3e"
+  },
+  "launcher": {
+    "note": "Not vendored; pinned here for reference, matching tools/NorthstarLauncher-reference.",
+    "rev": "1b0ce15673a0027b21639746fd74d4f7da1e504d"
+  }
+}

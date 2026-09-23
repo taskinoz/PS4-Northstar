@@ -31,7 +31,7 @@ See [the shadPS4 installation guide](docs/INSTALL.md) for exact build/deploy com
 
 ## Setup and build
 
-1. Copy `config/project.example.json` to `config/local.json`; set `northstarModsRoot` to your PC profile's `mods` directory. Packaging only needs this source, not a PC executable or extracted game content.
+1. Run `git submodule update --init --depth 1` and `python scripts/Build-NorthstarMods.py` to assemble the pinned Northstar 1.31.13 mods, then copy `config/project.example.json` to `config/local.json` and set `northstarModsRoot` to `work/northstar-release/1.31.13/mods` (see [docs/INSTALL.md](docs/INSTALL.md)). Packaging only needs this source, not a PC executable or extracted game content.
 2. Run `.\scripts\New-NorthstarProfile.ps1`. It discovers every immediate mod folder, copies files byte-for-byte, verifies their hashes, and preserves the source profile's `enabledmods.json`. Output is `dist/northstar-profile/R2Northstar`. For subsequent packages, supply a fresh `-Output` directory; existing profiles are not overwritten.
 3. Install the toolchain in [tools/README.md](tools/README.md) and run `.\scripts\Build-Northstar.ps1`. The output is `dist/northstar-ps4/northstar_ps4.prx`. The script-injection experiment requires explicit `-EnableExperimentalScriptLoading`; it is known to fail with some real mods.
 4. On a clean matching retail install, copy the generated `R2Northstar` folder beside `eboot.bin`. Use `Deploy-Stage2Poc.ps1 -Source .\dist\northstar-ps4\northstar_ps4.prx` to install the runtime with its existing backup behavior. The hash-locked bootstrap is managed by `Enable-Stage2Bootstrap.ps1`; read [docs/TECHNICAL-NOTES.md](docs/TECHNICAL-NOTES.md) before applying it.

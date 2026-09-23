@@ -154,17 +154,12 @@ int TryLocalAuth(void*) {
         authSucceeded ? "" : ": ", authSucceeded ? "" : authFailure.c_str());
     return 0;
 }
-int TryRemoteAuth(void* vm) {
-    authSucceeded = false;
-    return Error(vm, "No Northstar server list is available for authentication");
-}
 // Falls back to the identity message: nothing may have set a reason yet, and an
 // empty string in the menu tells the player nothing.
 int AuthFailReason(void* vm) {
     String(vm, authFailure.empty() ? AtlasIdentityMessage() : authFailure.c_str());
     return 1;
 }
-int CompleteAuth(void* vm) { return Error(vm, "No authenticated Northstar connection is pending"); }
 // Distinct from CompleteAuth: raising here would abort the script between the
 // success branch and the `map mp_lobby` that follows it, so the lobby would
 // never start even though authentication had succeeded.
@@ -173,10 +168,8 @@ int CompleteLocalAuth(void* vm) {
     LogFormat("[NorthstarPS4] local server auth completed; lobby launch follows\n");
     return 0;
 }
-int ServerCount(void* vm) { Integer(vm, 0); return 1; }
-int GameServers(void* vm) { Array(vm); return 1; }
-int RequestServers(void*) { LogFormat("[NorthstarPS4] server-list request failed: transport unavailable\n"); return 0; }
-int ClearServers(void*) { return 0; }
+#include "runtime_server_list.inl"
+#include "runtime_server_join.inl"
 int AuthResult(void* vm) {
     Struct(vm, 3);
     Boolean(vm, AtlasIdentityReady()); Seal(vm, 0);
@@ -343,14 +336,14 @@ const Registration registrations[] = {
     {"NSGetMasterServerAuthResult", "MasterServerAuthResult", "", AuthResult, kCtxUi},
     {"NSTryAuthWithLocalServer", "void", "", TryLocalAuth, kCtxUi},
     {"NSTryAuthWithServer", "void", "int serverIndex, string password = ''", TryRemoteAuth, kCtxUi},
-    {"NSIsAuthenticatingWithServer", "bool", "", Authenticated, kCtxUi},
+    {"NSIsAuthenticatingWithServer", "bool", "", IsAuthenticating, kCtxUi},
     {"NSWasAuthSuccessful", "bool", "", AuthSuccessful, kCtxUi},
     {"NSGetAuthFailReason", "string", "", AuthFailReason, kCtxUi},
     {"NSCompleteAuthWithLocalServer", "void", "", CompleteLocalAuth, kCtxUi},
     {"NSConnectToAuthedServer", "void", "", CompleteAuth, kCtxUi},
     {"NSRequestServerList", "void", "", RequestServers, kCtxUi},
-    {"NSIsRequestingServerList", "bool", "", Authenticated, kCtxUi},
-    {"NSMasterServerConnectionSuccessful", "bool", "", MasterServerAuthenticated, kCtxUi},
+    {"NSIsRequestingServerList", "bool", "", IsRequestingServers, kCtxUi},
+    {"NSMasterServerConnectionSuccessful", "bool", "", MasterServerReachable, kCtxUi},
     {"NSGetServerCount", "int", "", ServerCount, kCtxUi},
     {"NSClearRecievedServerList", "void", "", ClearServers, kCtxUi},
     {"NSGetGameServers", "array<ServerInfo>", "", GameServers, kCtxUi},

@@ -7,6 +7,10 @@
     {
       "Path": "ui/ns_ps4_presence_stub.nut",
       "RunOn": "UI || CLIENT"
+    },
+    {
+      "Path": "ui/ns_ps4_client_command.nut",
+      "RunOn": "UI"
     }
   ],
   "Localisation": [

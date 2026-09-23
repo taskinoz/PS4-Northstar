@@ -13,7 +13,7 @@
 // Non-fatal - the menu still loads - but it corrupts the tail of the parse,
 // so the colour picker is built from a partly-misread layout.
 //
-// Regenerate with tools/menus/build_colorsliders_override.py when
+// Regenerate with scripts/menus/build_colorsliders_override.py when
 // Northstar.Client changes.
 resource/ui/menus/colorsliders.menu
 {

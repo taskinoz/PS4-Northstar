@@ -20,16 +20,23 @@ PC DLLs cannot be used as PS4 binaries. The runtime and eboot bootstrap below ar
 
 ## 1. Configure the project
 
-Run commands from the repository root. If `config/local.json` already exists, edit it rather than overwriting it. Otherwise copy `config/project.example.json` to it. Set at least:
+Run commands from the repository root. The Northstar mods come from two pinned submodules, `vendor/NorthstarMods` and `vendor/NorthstarNavs`, at exactly the revisions Northstar v1.31.13 packages (`vendor/northstar-release.json`). Fetch them and assemble the release the same way Northstar's own packaging does:
+
+```bash
+git submodule update --init --depth 1
+python scripts/Build-NorthstarMods.py
+```
+
+That writes the mods to `work/northstar-release/1.31.13/mods`. It is byte-identical to an installed 1.31.13 (`--compare <PC mods dir>` checks this). If `config/local.json` already exists, edit it rather than overwriting it. Otherwise copy `config/project.example.json` to it. Set at least:
 
 ```json
 {
   "ps4GameRoot": "D:\\PS4\\ShadPS4\\CUSA04013",
-  "northstarModsRoot": "D:\\Games\\Titanfall2\\R2Northstar\\mods"
+  "northstarModsRoot": "C:\\path\\to\\repo\\work\\northstar-release\\1.31.13\\mods"
 }
 ```
 
-Retain the other example fields if using the existing environment tools. `northstarModsRoot` must point directly to the directory containing the individual mod folders, not to an extra nested `R2Northstar` directory.
+Retain the other example fields if using the existing environment tools. `northstarModsRoot` must point directly to the directory containing the individual mod folders, not to an extra nested `R2Northstar` directory. It can still point at a PC install's `R2Northstar\mods` instead, but then the profile follows whatever version that install updates to.
 
 ## 2. Package the unchanged mods
 

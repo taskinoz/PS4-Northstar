@@ -3530,3 +3530,75 @@ Next UI error was unlockedPilotSkins[4] from OnLobbyMenu_Open. A scoped integer 
 Final deployed build `4cf10c9a765d65fae291e5487a0dfef1c84c9c781ae7bae56e41b46d526de25a`. Iteration 20260923-171208 reached mp_lobby; harness status and a second status after 20 seconds both confirm connected/lobby. Zero script errors across the session. A later disconnect terminated the emulator on GpuSchedPriorityPendingOpsRunner with access violation 0xc0000005 at 0x7ff93f72cca7. No guest script error or guest stack accompanied it. This is a separate unresolved teardown failure; see work/parity-audit/lobby-fix-session5.log. Do not count repeated in-process map transitions as verified.
 
 - **Repeat confirmed:** second fresh launch `20260923-171632` also reached and remained in mp_lobby; immediate and delayed harness replies both report connected/lobby true. `work/parity-audit/lobby-fix-repeat-session.log` has zero script errors or critical entries at capture; state evidence is in `lobby-fix-repeat-status.json` and `lobby-fix-repeat-stable.json`. Emulator left running in the lobby for user inspection. This verifies repeated fresh launches, not in-process leave/re-entry.
+
+## 2026-09-23: server browser, joining, hosting on Kodai, and persistence rebased on PC 231
+
+**Server browser** (`runtime_server_list.inl`, parsing in `northstar_ps4/server_list.h`,
+host-tested in `tests/server_list.cpp`). `GET https://northstar.tf/client/servers` on a
+worker thread; "requesting" goes true inside `NSRequestServerList` because the browser
+spins on `NSIsRequestingServerList`. Lock-free handover via an atomic state. Live on the
+console: `server list ok: 93 servers, 0 malformed skipped`.
+
+**Joining** (`runtime_server_join.inl`). `POST /client/auth_with_server`, then
+`NSConnectToAuthedServer` sets `serverfilter` and runs `connect ip:port` through the UI
+script helper `NSPS4_ClientCommand` (Northstar.PS4), since native command dispatch is not
+usable. Atlas refuses any User-Agent not starting `R2Northstar/<semver>`; this port sends
+`R2Northstar/<Northstar.Client version>+ps4 NorthstarPS4` (not `+dev`, which skips the
+minimum-version gate). Verified up to Atlas: UA accepted, refused only with
+`401 Invalid or expired masterserver token`. Address/port/token from Atlas are validated
+before reaching the command line. Unverified past that: whether the game server accepts
+the PS4's uid on connect.
+
+**Hosting: `ReadFile` bypassed the mod overlay.** Hosting a match died on
+`Couldn't read scripts/aibehavior/behaviors.txt!`. The stock game (PS4 and PC) has
+`scripts/aibehavior/` only in SP archives; Northstar.CustomServers ships it. The server's
+AI init reads it with `IBaseFileSystem::ReadFile` (secondary vtable slot 14,
+`filesystem_stdio+0xc3d0`, a direct implementation, not a thunk; called at server.prx
+`0x2fc2c4` with pathID `"game"`), which opens internally and never reaches the hooked
+`OpenEx`. Now hooked in a copied secondary table, gated on its first 32 bytes. Files
+`OpenEx` rewrites (runtime `scripts.rson`, KeyValues merges) keep stock `ReadFile`
+behaviour. Verified: all AI behaviour files load from the mod and `map
+mp_forwardbase_kodai` hosts with SERVER and CLIENT lifecycles complete.
+
+**Persistence: the served schema overflowed the player buffer.** The PS4 client record
+is PC's layout shifted by `0x250` at both ends of the save buffer (buffer `0x74a` vs
+`0x4fa`, UID `0xf750` vs `0xf500`), so it holds PC's 56,781 bytes. The engine sizes data
+from the pdef and never checks it against the buffer (no size limit string or constant
+exists; only a 0xD000 file-text limit). The 929-extension approach (earlier generator plus
+the runtime `persistence_schema` pipeline) had reached 59,818 bytes of data. PC 231 is
+56,169 bytes (confirmed by Atlas: `UnmarshalBinary` rejects shorter input).
+
+Rebased: `scripts/pdef/build_ps4_pdef.py` emits PC 231 verbatim plus only the console's
+black market (`bm`, 181 bytes, and its types) = 56,350 bytes. Evidence it is enough:
+no PS4 native binary looks up a console-only field by name (only candidate,
+`bc.discard.%d:1|c`, is a statsd counter); `scripts/pdef/find_console_fields.py`
+resolves every persistent-var path in the 462 stock scripts no mod overrides and finds
+only `bm.*` + `BlackMarketUnlocks` missing from 231, and no literal enum index invalid
+in 231. The runtime pipeline (`runtime_persistence_schema.inl`, `persistence_schema.h`,
+its test) was removed; the mod overlay serves Northstar.PS4's file. Verified: hosted
+Kodai, player connected, `READY_INSECURE` set, zero script errors (the previous
+`Invalid var name 'xp_count[0]'` disconnect is gone). A side benefit: 231 lines up
+byte-for-byte with a PC Northstar server's pdata.
+
+**Private-match crash (emulator).** `0xc0000005` on `GpuSchedPriorityPendingOpsRunner`
+maps (module snapshot, bases stable per boot) to `VCRUNTIME140.dll+0x1cca7`: the AVX
+large-copy path of memcpy/memmove (>= 1.5 MB), faulting on the *source* load. shadPS4
+copies from guest memory already unmapped by level teardown. `copy_gpu_buffers` is off
+for this title and is the setting aimed at that race; untested.
+
+**Tooling moved.** `tools/` is gitignored, so generators live in `scripts/pdef/` and
+`scripts/menus/`.
+
+**Northstar mods are vendored, pinned to release 1.31.13.** `vendor/NorthstarMods`
+(`509b14c7`) and `vendor/NorthstarNavs` (`v4`, `0d3c1332`) are shallow submodules at
+the revisions `R2Northstar/Northstar` v1.31.13's `flake.lock` packages
+(`vendor/northstar-release.json`). NorthstarMods itself always commits
+`"Version": "0.0.0.1+dev"`; the release stamps the version with `jq` and copies
+NorthstarNavs' `graphs/` and `navmesh/` into `Northstar.CustomServers/mod/maps`.
+`scripts/Build-NorthstarMods.py` repeats exactly that into
+`work/northstar-release/1.31.13/mods`, and `northstarModsRoot` points there. Verified
+byte-identical to the PC install: 818/818 files, and `Sync-NorthstarProfile.ps1` against
+the deployed profile reports `InSync=True` with no changes. The submodules must be checked
+out with `core.autocrlf=false`, `core.eol=lf` (the script sets this): upstream commits some
+files with CRLF and marks localisation `working-tree-encoding=UTF-16LE-BOM` with `text`,
+so a Windows-default checkout differs from the release in line endings.

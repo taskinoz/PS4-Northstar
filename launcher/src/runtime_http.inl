@@ -21,7 +21,31 @@ constexpr int kSceHttpVersion11 = 2;
 constexpr std::size_t kHttpNetPoolSize = 16 * 1024;
 constexpr std::size_t kHttpSslPoolSize = 96 * 1024;
 constexpr std::size_t kHttpPoolSize = 64 * 1024;
-constexpr const char* kHttpUserAgent = "NorthstarPS4";
+// Atlas only authenticates clients whose User-Agent starts with
+// `R2Northstar/<semver>` at or above its configured minimum
+// (Atlas-reference pkg/api/api0/api.go, CheckLauncherVersion); anything else
+// is refused as "not R2Northstar". PC sends `R2Northstar/1.31.13`, or
+// `R2Northstar/x.y.z+dev` for dev builds, which skip the minimum entirely.
+//
+// This port sends the deployed Northstar.Client version with `+ps4` build
+// metadata. That identifies the build honestly without borrowing `+dev`'s
+// bypass: semver comparison ignores build metadata, so an install older than
+// Atlas's minimum is refused exactly as the same PC install would be. Only the
+// first space-separated token is checked, so the platform name can follow.
+char g_httpUserAgent[96] = "R2Northstar/0.0.0+ps4 NorthstarPS4";
+
+void BuildNorthstarUserAgent() noexcept {
+    static char json[kModJsonBufferSize];
+    std::size_t size = 0;
+    char path[256];
+    std::snprintf(path, sizeof(path), "%s/Northstar.Client/mod.json", kModsRoot);
+    char version[32]{};
+    const char* member = ReadFileIntoBuffer(path, json, sizeof(json), size)
+        ? JsonFindMember(json, "Version") : nullptr;
+    if (member && JsonExtractString(member, version, sizeof(version)) && version[0] != '\0')
+        std::snprintf(g_httpUserAgent, sizeof(g_httpUserAgent), "R2Northstar/%s+ps4 NorthstarPS4", version);
+    LogFormat("[NorthstarPS4] http user agent \"%s\"\n", g_httpUserAgent);
+}
 constexpr const char* kHttpProbeFile = "/data/northstar_ps4/http_probe.txt";
 
 int g_httpNetPool = -1;
@@ -52,7 +76,8 @@ bool InitHttpTransport() noexcept {
     LogFormat("[NorthstarPS4] http sceHttpInit=%d\n", g_httpCtx);
     if (g_httpCtx < 0) return false;
 
-    g_httpTemplate = sceHttpCreateTemplate(g_httpCtx, kHttpUserAgent, kSceHttpVersion11, 1);
+    BuildNorthstarUserAgent();
+    g_httpTemplate = sceHttpCreateTemplate(g_httpCtx, g_httpUserAgent, kSceHttpVersion11, 1);
     LogFormat("[NorthstarPS4] http sceHttpCreateTemplate=%d\n", g_httpTemplate);
     if (g_httpTemplate < 0) return false;
 
@@ -60,9 +85,13 @@ bool InitHttpTransport() noexcept {
     return true;
 }
 
-// A bounded GET. `out` always ends NUL-terminated; `status` is the HTTP status
-// when the request completed at all.
-bool HttpGet(const char* url, char* out, std::size_t capacity, int& status) noexcept {
+constexpr int kSceHttpMethodPost = 1;
+
+// A bounded request with no body. `out` always ends NUL-terminated; `status`
+// is the HTTP status when the request completed at all. A response that fills
+// `out` is returned as success with `out` truncated, so callers that parse the
+// body must check the length themselves.
+bool HttpRequest(int method, const char* url, char* out, std::size_t capacity, int& status) noexcept {
     status = 0;
     if (!out || capacity == 0) return false;
     out[0] = '\0';
@@ -73,7 +102,7 @@ bool HttpGet(const char* url, char* out, std::size_t capacity, int& status) noex
         LogFormat("[NorthstarPS4] http connect failed 0x%x\n", connection);
         return false;
     }
-    const int request = sceHttpCreateRequestWithURL(connection, kSceHttpMethodGet, url, 0);
+    const int request = sceHttpCreateRequestWithURL(connection, method, url, 0);
     if (request < 0) {
         LogFormat("[NorthstarPS4] http request create failed 0x%x\n", request);
         sceHttpDeleteConnection(connection);
@@ -104,6 +133,16 @@ bool HttpGet(const char* url, char* out, std::size_t capacity, int& status) noex
     sceHttpDeleteRequest(request);
     sceHttpDeleteConnection(connection);
     return ok;
+}
+
+bool HttpGet(const char* url, char* out, std::size_t capacity, int& status) noexcept {
+    return HttpRequest(kSceHttpMethodGet, url, out, capacity, status);
+}
+
+// Atlas's /client/* endpoints take their arguments in the query string and a
+// POST with an empty body.
+bool HttpPost(const char* url, char* out, std::size_t capacity, int& status) noexcept {
+    return HttpRequest(kSceHttpMethodPost, url, out, capacity, status);
 }
 
 // Reads a URL from a file and fetches it once, so the transport can be pointed

@@ -348,6 +348,19 @@ void ApplyAtlasIdentity(void* cvar, ModFindVarFn findVar) noexcept {
     // server, not the long-lived player token.
 }
 
+// The convar a joining client carries its per-connection Atlas token in. PC's
+// NSConnectToAuthedServer sets it immediately before `connect`; kept here so the
+// join path (runtime_server_join.inl) can do the same without a convar lookup
+// at join time. Null until startup has found it, or if writes are unavailable.
+void* g_serverFilterConVar = nullptr;
+
+void CaptureServerFilter(void* cvar, ModFindVarFn findVar) noexcept {
+    if (!cvar || !findVar || !g_authConVarWriteReady) return;
+    g_serverFilterConVar = findVar(cvar, "serverfilter");
+    LogFormat("[NorthstarPS4] serverFilter %s for server joins\n",
+        g_serverFilterConVar ? "captured" : "not found");
+}
+
 // Unlocking the multiplayer button.
 //
 // `ui/panel_mainmenu.nut` threads `UpdatePlayButton( file.fdButton )` onto the
