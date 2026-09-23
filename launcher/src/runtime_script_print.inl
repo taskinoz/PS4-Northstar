@@ -71,7 +71,17 @@ void ScriptPrint(void* vm, const char* format, ...) noexcept {
     if (hook && hook->original) hook->original(vm, "%s", text);
 }
 
-bool InstallScriptPrint(void* shared, const char* label) noexcept {
+// The sink itself is a data write into the VM's own SQSharedState, so it is
+// module-independent; only the validation gate is not. server.prx carries its
+// own copy of the same `print` native, so the caller says which module to
+// validate against and the defaults keep every existing client call site
+// unchanged. The server addresses were found by scanning for the 15-byte sink
+// sequence, which occurs exactly once per module: client 0x6d0b84, server
+// 0x691194, each sitting 0x54 bytes into its enclosing native.
+bool InstallScriptPrint(void* shared, const char* label,
+    std::uintptr_t base = 0, std::size_t span = 0,
+    std::uintptr_t printVa = 0x6d0b30, std::uintptr_t sinkVa = 0x6d0b84) noexcept {
+    if (base == 0) { base = g_runtimeClientBase; span = g_runtimeClientSpan; }
     if (!shared) return false;
     // This preimage encodes both offsets the sink depends on: `mov rax,[rbx+0x50]`
     // then `mov rcx,[rax+0x4350]`. If either moved, refuse rather than write a
@@ -80,15 +90,24 @@ bool InstallScriptPrint(void* shared, const char* label) noexcept {
         0x48,0x8b,0x43,0x50,0x48,0x8b,0x88,0x50,0x43,0x00,0x00,0x48,0x85,0xc9,0x74};
     constexpr std::uint8_t printBytes[] = {
         0x55,0x48,0x89,0xe5,0x41,0x56,0x53,0x48,0x83,0xec,0x10,0x4c,0x8b,0x35};
-    if (!ValidateEnginePreimage(g_runtimeClientBase, g_runtimeClientSpan, 0x6d0b30, printBytes, sizeof(printBytes)) ||
-        !ValidateEnginePreimage(g_runtimeClientBase, g_runtimeClientSpan, 0x6d0b84, sinkBytes, sizeof(sinkBytes))) {
+    if (!ValidateEnginePreimage(base, span, printVa, printBytes, sizeof(printBytes)) ||
+        !ValidateEnginePreimage(base, span, sinkVa, sinkBytes, sizeof(sinkBytes))) {
         LogFormat("[NorthstarPS4] script print sink profile mismatch; script output stays hidden\n");
         return false;
     }
-    if (FindScriptPrintHook(shared)) return true;
     auto slot = reinterpret_cast<ScriptPrintFn*>(static_cast<char*>(shared) + kSharedStatePrintFuncOffset);
     ScriptPrintFn previous = *slot;
     if (previous == &ScriptPrint) return true;
+    // A recycled shared state keeps a stale entry whose slot no longer points
+    // at this sink. Returning early on the address match alone would then
+    // leave the new VM uncaptured, which is how SERVER output could go quiet
+    // after a few map loads, so the entry is refreshed rather than skipped.
+    for (std::size_t i = 0; i < g_scriptPrintHookCount; ++i) {
+        if (g_scriptPrintHooks[i].shared != shared) continue;
+        g_scriptPrintHooks[i] = {shared, previous, label};
+        *slot = &ScriptPrint;
+        return true;
+    }
     if (g_scriptPrintHookCount >= kMaxScriptPrintHooks) {
         // Drop the oldest rather than stop capturing; it belongs to a VM that
         // has already gone away.

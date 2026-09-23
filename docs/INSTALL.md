@@ -108,7 +108,28 @@ Launch the game's `eboot.bin` through shadPS4. In this workspace the log is `C:\
 
 Settings use the PC `Name -> Version -> bool` format. On PS4, saved changes live in guest `/data/northstar_ps4/enabledmods.json` because `/app0` is read-only. That saved file overrides `R2Northstar/enabledmods.json` on subsequent boots. Its host location depends on the emulator's data mount; do not confuse it with the installation profile.
 
-The current reload API saves changes then reports that a restart is required. True live reload remains unfinished. Authentication is intentionally disabled: requests must not report success or issue fabricated tokens. Other missing services, including downloads and server-list transport, remain compatibility gaps rather than intended exclusions.
+The current reload API saves changes then reports that a restart is required. True live reload remains unfinished. Downloads remain a compatibility gap rather than an intended exclusion.
+
+### Signing in to Atlas
+
+The PS4 build has no Origin session of its own, so it cannot perform the Origin exchange Northstar uses on PC. Instead it reads an identity exported from a PC that is already signed in. No EA credential ever reaches the console: only the account uid and the Northstar player token are copied.
+
+1. On the PC, start Northstar and wait for its log to say `Northstar origin authentication completed successfully`.
+2. Run `scripts\Export-AtlasCredentials.ps1`. It reads the uid and player token out of the running client, cross-checks the uid against the client's own log, and refuses to export on a mismatch. Add `-WhatIf` to see what it would write without writing it.
+3. It writes `atlas_identity.json` into the emulator's `/data/northstar_ps4/`. Point `-Output` elsewhere if your data mount differs.
+
+The console picks the file up at startup, applies the uid to `platform_user_id`, and reports the session to the menu. If anything is missing the menu says what to do rather than only that it failed:
+
+| State | What it means |
+| --- | --- |
+| `PS4_AUTH_IMPORTED` | Signed in with the imported identity. |
+| `PS4_AUTH_NO_IDENTITY` | No `atlas_identity.json`. Export one and copy it to `/data/northstar_ps4/`. |
+| `PS4_AUTH_NO_TOKEN` | The file has a uid but no `playerToken`. Re-export it from a signed-in PC client. |
+| `PS4_AUTH_BAD_IDENTITY` | The file could not be read, or the token is not 32 hex characters. Re-export it. |
+
+**The exported file is a live credential.** Anyone holding it can authenticate to Atlas as that account. It expires after 24 hours, and sooner if the PC client authenticates again, which mints a replacement and invalidates the copy. Do not commit or share it; re-export when it stops working.
+
+Joining a server that verifies also needs a per-connection token from Atlas, which is not wired up yet, so this currently signs in rather than completing a verified join. Servers running `ns_auth_allow_insecure 1` do not check either value.
 
 Mods that use Northstar's Safe I/O API keep their data under guest `/data/northstar_ps4/save_data/<mod folder>`, one folder per mod, with the same rules PC applies: ASCII-only paths that cannot leave the mod's own folder, `.txt` and `.json` writes only, and a 50 MiB per-mod cap. As with enabled settings, the host location of that guest path depends on the emulator's data mount.
 
@@ -148,3 +169,7 @@ Use the build/deploy commands in section 3 and restart the game. No additional a
 An absent `vpk/vpk.json` preloads the mod's archives. An object with `"Preload": true` does the same; `false` or an object without that member mounts only when an engine mount has the same archive stem. Comments and trailing commas are supported. Mods follow enabled state and ascending load priority; changes require a restart. Only the supported `english*.bsp.pak000_dir.vpk` naming convention is discovered, and overlong paths are rejected with a log message.
 
 A successful boot logs `mod VPK discovered`, a non-null `mod VPK mount` result and `UI lifecycle completed`. With the shipped Northstar.Custom archive, the diagnostic also logs `VPK asset lookup: models/titans/buddy/titan_buddy.mdl read=12 IDST=1`. This verifies an engine asset read. In-game model rendering, texture/material compatibility and RPAK loading remain separate checks; arbitrary PC assets are not guaranteed compatible.
+
+## Optional local automation
+
+Install [AI.Harness](AI-HARNESS.md) to queue Northstar multiplayer launch before boot and send console/menu commands with correlated replies. It is excluded from normal profile packaging unless `-IncludeAIHarness` is supplied. Retail VPKs remain unchanged.

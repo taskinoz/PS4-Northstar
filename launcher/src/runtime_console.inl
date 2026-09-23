@@ -122,7 +122,7 @@ void ProbeEngineClientInterface(OrbisKernelModule engineHandle,
 // file is truncated so the same batch is not replayed. This is what stands in
 // for typing, since the build has no keyboard path at all.
 void DrainConsoleCommandFile() noexcept {
-    if (!g_consoleCommandsReady) return;
+    if (!kConsoleCommandsEnabled || !g_consoleCommandsReady) return;
     FILE* file = std::fopen(kConsoleCommandFile, "rb");
     if (!file) return;
     static char text[kConsoleCommandFileMax];

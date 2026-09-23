@@ -1,0 +1,1605 @@
+// Generate the PS4 persistence-definition override shipped in Northstar.PS4.
+//
+// This console build uses persistence version 929; PC Titanfall 2, and therefore
+// stock Northstar, uses 231. The engine asks each mod for
+// cfg/server/persistent_player_data_version_929.pdef and falls back to the stock
+// one, so the pdef Northstar ships is never even requested.
+//
+// That matters because the stock 929 definition is disc-era: it predates a large
+// part of the stat surface the game's own sh_stats.gnut registers. Vanilla gets
+// away with it, because vanilla's _items.nut never asks for the stats that do not
+// resolve. Northstar ships PC's _items.nut, which registers unlock challenges
+// against them, and an unresolved lookup is a hard script error that kills the
+// lobby before it is playable:
+//
+//     SCRIPT ERROR: [SERVER] The index "speedball" does not exist
+//      -> return shGlobalMP.playerStatVars[ category ][ alias ][ subAlias ].statVar
+//
+// Rather than guess, the required surface is derived from two files that ship
+// with the game itself:
+//
+//   * sh_stats.gnut, extracted from englishclient_frontend.bsp, names the
+//     persistence path of every stat this build registers. Resolving all 191 of
+//     them against the stock 929 definition leaves 49 unresolved. Those 49 are
+//     exactly what this script adds.
+//   * PC's 231 definition supplies the declarations, so what is added matches
+//     what PC Northstar expects rather than being invented here.
+//
+// Everything is APPENDED. These enums size fixed arrays and the structs are laid
+// out in order, so inserting in the middle would silently repoint every stat
+// after the insertion point.
+//
+// Keeping _items.nut byte-identical to PC's is the point: the divergence lives
+// here, in one PS4-only file, instead of in Northstar's scripts.
+//
+// Usage:  python tools/pdef/build_ps4_pdef.py [stock_929.pdef] [output.pdef]
+
+// Enums the stock 929 definition lacks; see NEW_ENUMS in the generator.
+
+$ENUM_START titanExecution
+	execution_ion
+	execution_ion_prime
+	execution_tone
+	execution_tone_prime
+	execution_ronin
+	execution_ronin_prime
+	execution_northstar
+	execution_northstar_prime
+	execution_legion
+	execution_legion_prime
+	execution_vanguard
+	execution_scorch
+	execution_scorch_prime
+	execution_random_0
+	execution_random_1
+	execution_random_2
+	execution_random_3
+	execution_random_4
+	execution_random_5
+	execution_random_6
+$ENUM_END
+
+$ENUM_START titanIsPrimeTitan
+	titan_is_not_prime
+	titan_is_prime
+$ENUM_END
+
+int initializedVersion
+int announcementVersionSeen
+
+int xp
+int previousXP
+int credits
+int xp_match[11]
+
+bool        matchWin
+bool        matchScoreEvent
+bool        matchComplete
+
+bool showGameSummary
+bool regenShowNew
+bool spawnAsTitan
+bool haveSeenCustomCoop
+
+bool isACheater
+
+//#############################
+// LISTS OF THINGS IN THE GAME
+//#############################
+
+//All game modes in the game, including riffs.
+$ENUM_START gameModes
+	tdm
+	cp
+	at
+	ctf
+	lts
+	ltsbomb
+	wlts
+	mfd
+	mfdp
+	ps
+	wps
+	htdm
+	ffa
+	fra
+	fw
+	coliseum
+	// Added for Northstar; see this file's header.
+	speedball
+	fd
+$ENUM_END
+
+// enum used for stats. mp_box and mp_test_engagement_range are
+// in this list so I can test stat tracking in those maps
+// add new maps to the bottom of this list...DO NOT CHANGE ORDER!!
+$ENUM_START maps
+	mp_box
+	mp_test_engagement_range
+
+	// R2
+	mp_forwardbase_kodai
+	mp_grave
+	mp_homestead
+    mp_thaw
+	mp_black_water_canal
+	mp_eden
+	mp_drydock
+	mp_crashsite3
+	mp_complex3
+	mp_angel_city
+	mp_colony02
+	mp_relic02
+	mp_coliseum
+$ENUM_END
+
+$ENUM_START loadoutWeaponsAndAbilities
+	NULL
+	melee_pilot_emptyhanded
+	melee_pilot_sword
+    melee_titan_sword
+    melee_titan_sword_aoe
+    mp_ability_cloak
+    mp_ability_grapple
+    mp_ability_heal
+    mp_ability_holopilot
+    mp_ability_phase_rewind
+    mp_ability_shifter
+    mp_titanability_ammo_swap
+    mp_titanability_basic_block
+    mp_titanability_gun_shield
+    mp_titanability_hover
+    mp_titanability_laser_trip
+    mp_titanability_particle_wall
+    mp_titanability_phase_dash
+    mp_titanability_power_shot
+    mp_titanability_slow_trap
+    mp_titanability_smoke
+    mp_titanability_sonar_pulse
+    mp_titanability_tether_trap
+    mp_titancore_flame_wave
+    mp_titancore_flight_core
+    mp_titancore_laser_cannon
+    mp_titancore_salvo_core
+    mp_titancore_shift_core
+    mp_titancore_siege_mode
+    mp_titanweapon_40mm
+    mp_titanweapon_arc_wave
+    mp_titanweapon_flame_wall
+    mp_titanweapon_heat_shield
+    mp_titanweapon_homing_rockets
+    mp_titanweapon_dumbfire_rockets
+    mp_titanweapon_laser_lite
+    mp_titanweapon_leadwall
+    mp_titanweapon_meteor
+    mp_titanweapon_particle_accelerator
+    mp_titanweapon_predator_cannon
+    mp_titanweapon_rocket_launcher
+    mp_titanweapon_rocketeer_rocketstream
+    mp_titanweapon_salvo_rockets
+    mp_titanweapon_sniper
+    mp_titanweapon_sticky_40mm
+    mp_titanweapon_tracker_rockets
+    mp_titanweapon_vortex_shield
+    mp_titanweapon_vortex_shield_ion
+    mp_titanweapon_xo16
+    mp_titanweapon_xo16_shorty
+    mp_weapon_alternator_smg
+    mp_weapon_arc_launcher
+    mp_weapon_autopistol
+    mp_weapon_car
+    mp_weapon_defender
+    mp_weapon_deployable_cover
+    mp_weapon_dmr
+    mp_weapon_doubletake
+    mp_weapon_epg
+    mp_weapon_esaw
+    mp_weapon_frag_drone
+    mp_weapon_frag_grenade
+    mp_weapon_g2
+    mp_weapon_grenade_electric_smoke
+    mp_weapon_grenade_emp
+    mp_weapon_grenade_gravity
+    mp_weapon_grenade_sonar
+    mp_weapon_hemlok
+    mp_weapon_hemlok_smg
+    mp_weapon_lmg
+    mp_weapon_lstar
+    mp_weapon_mastiff
+    mp_weapon_mgl
+    mp_weapon_pulse_lmg
+    mp_weapon_r97
+    mp_weapon_rocket_launcher
+    mp_weapon_rspn101
+    mp_weapon_satchel
+    mp_weapon_semipistol
+    mp_weapon_shotgun
+    mp_weapon_shotgun_pistol
+    mp_weapon_smart_pistol
+    mp_weapon_smr
+    mp_weapon_sniper
+    mp_weapon_softball
+    mp_weapon_thermite_grenade
+    mp_weapon_vinson
+    mp_weapon_wingman
+	// Added for Northstar; see this file's header.
+	mp_titanweapon_xo16_vanguard
+	mp_weapon_rspn101_og
+	mp_weapon_wingman_n
+$ENUM_END
+
+$ENUM_START pilotMod
+	NULL
+	aog
+	automatic_fire
+	burn_mod_rspn101
+	burn_mod_g2
+	burn_mod_hemlok
+	burn_mod_vinson
+	burn_mod_lstar
+	burn_mod_car
+	burn_mod_r97
+	burn_mod_alternator_smg
+	burn_mod_lmg
+	burn_mod_esaw
+	burn_mod_pulse_lmg
+	burn_mod_sniper
+	burn_mod_dmr
+	burn_mod_doubletake
+	burn_mod_mastiff
+	burn_mod_shotgun
+	burn_mod_softball
+	burn_mod_shotgun_pistol
+	burn_mod_autopistol
+	burn_mod_wingman
+	burn_mod_semipistol
+	burn_mod_smart_pistol
+	burn_mod_emp_grenade
+	burn_mod_frag_grenade
+	burn_mod_satchel
+	burn_mod_proximity_mine
+	burn_mod_grenade_electric_smoke
+	burn_mod_grenade_gravity
+	burn_mod_thermite_grenade
+	burn_mod_defender
+	burn_mod_rocket_launcher
+	burn_mod_arc_launcher
+	burn_mod_smr
+	burn_mod_mgl
+	burst
+	enhanced_targeting
+	extended_ammo
+	fast_lock
+	fast_reload
+	guided_missile
+	hcog
+	high_density
+	holosight
+	iron_sights
+	long_fuse
+	powered_magnets
+	scope_4x
+	scope_6x
+	scope_8x
+	scope_10x
+	scope_12x
+	silencer
+	sniper_assist
+	stabilizer
+	single_shot
+	slammer
+	stabilized_warhead
+	tank_buster
+	amped_wall
+	short_shift
+	burn_mod_epg
+	ricochet
+	ar_trajectory
+	redline_sight
+	threat_scope
+	smart_lock
+	pro_screen
+	delayed_shot
+	pas_run_and_gun
+	tactical_cdr_on_kill
+	pas_fast_ads
+	pas_fast_swap
+	pas_fast_reload
+	jump_kit
+	quick_charge
+$ENUM_END
+
+$ENUM_START titanClasses
+	NULL
+	ion
+	scorch
+	ronin
+	tone
+	northstar
+	legion
+	// Added for Northstar; see this file's header.
+	vanguard
+$ENUM_END
+
+$ENUM_START titanMod
+	NULL
+	accelerator
+	afterburners
+	arc_triple_threat
+	burn_mod_titan_40mm
+	burn_mod_titan_arc_cannon
+	burn_mod_titan_sniper
+	burn_mod_titan_triple_threat
+	burn_mod_titan_xo16
+	burn_mod_titan_dumbfire_rockets
+	burn_mod_titan_homing_rockets
+	burn_mod_titan_salvo_rockets
+	burn_mod_titan_shoulder_rockets
+	burn_mod_titan_vortex_shield
+	burn_mod_titan_smoke
+	burn_mod_titan_particle_wall
+	burst
+	capacitor
+	extended_ammo
+	fast_lock
+	fast_reload
+	instant_shot
+	overcharge
+	quick_shot
+	rapid_fire_missiles
+	stryder_sniper
+$ENUM_END
+
+$ENUM_START pilotPassive
+	NULL
+	pas_stealth_movement
+	pas_ordnance_pack
+	pas_power_cell
+	pas_wallhang
+	pas_fast_health_regen
+	pas_minimap_ai
+	pas_longer_bubble
+	pas_run_and_gun
+	pas_dead_mans_trigger
+	pas_wall_runner
+	pas_fast_hack
+	pas_cloaked_wallrun
+	pas_cloaked_wallhang
+	pas_smoke_sight
+	pas_fast_embark
+	pas_cdr_on_kill
+	pas_at_hunter
+	pas_ordnance_beam
+	pas_fast_rodeo
+	pas_phase_eject
+	pas_ads_hover
+	pas_enemy_death_icons
+	pas_off_the_grid
+$ENUM_END
+
+$ENUM_START pilotSuit
+	medium
+	geist
+	stalker
+	light
+	heavy
+	grapple
+	nomad
+$ENUM_END
+
+$ENUM_START pilotRace
+	race_human_male
+	race_human_female
+$ENUM_END
+
+$ENUM_START pilotExecution
+	execution_neck_snap
+	execution_face_stab
+	execution_backshot
+	execution_combo
+	execution_knockout
+	// Added for Northstar; see this file's header.
+	execution_telefrag
+	execution_stim
+	execution_grapple
+	execution_pulseblade
+	execution_random
+	execution_cloak
+	execution_holopilot
+	execution_ampedwall
+$ENUM_END
+
+$ENUM_START titanPassive
+	NULL
+	pas_enhanced_titan_ai
+	pas_auto_eject
+	pas_dash_recharge
+	pas_defensive_core
+	pas_shield_regen
+	pas_assault_reactor
+	pas_hyper_core
+	pas_anti_rodeo
+	pas_build_up_nuclear_core
+	pas_offensive_autoload
+	pas_offensive_hitnrun
+	pas_offensive_regen
+	pas_defensive_tacload
+	pas_defensive_quickdash
+	pas_defensive_domeshield
+	pas_mobility_dash_capacity
+	pas_warpfall
+	pas_bubbleshield
+	pas_ronin_weapon
+	pas_northstar_weapon
+	pas_ion_weapon
+	pas_tone_weapon
+	pas_scorch_weapon
+	pas_legion_weapon
+	pas_ion_tripwire
+	pas_ion_vortex
+	pas_ion_lasercannon
+	pas_tone_rockets
+	pas_tone_sonar
+	pas_tone_wall
+	pas_ronin_arcwave
+	pas_ronin_phase
+	pas_ronin_swordcore
+	pas_northstar_cluster
+	pas_northstar_trap
+	pas_northstar_flightcore
+	pas_scorch_firewall
+	pas_scorch_shield
+	pas_scorch_selfdmg
+	pas_legion_spinup
+	pas_legion_gunshield
+	pas_legion_smartcore
+$ENUM_END
+
+$ENUM_START titanDecals
+	NULL
+$ENUM_END
+
+// This is needed so we know what decals were earned in the last match. We can't track it like we do unlocks from leveling or challenges where we know pre-game status
+bool 	decalsUnlocked[titanDecals]
+
+$ENUM_START titanVoice
+	titanos_bt
+	titanos_legion
+	titanos_scorch
+	titanos_ronin
+	titanos_northstar
+	titanos_ion
+	titanos_tone
+$ENUM_END
+
+$ENUM_START faction
+	faction_apex
+	faction_64
+	faction_vinson
+	faction_marauder
+	faction_aces
+	faction_ares
+$ENUM_END
+
+//######################
+//		LOADOUTS
+//######################
+
+$STRUCT_START spawnLoadout
+	int		index
+$STRUCT_END
+
+$STRUCT_START pilotLoadout
+	string{42}					name
+	pilotSuit 					suit
+	pilotRace					race
+	pilotExecution 				execution
+	loadoutWeaponsAndAbilities	primary
+	pilotMod					primaryAttachment
+	pilotMod					primaryMod1
+	pilotMod					primaryMod2
+	loadoutWeaponsAndAbilities	secondary
+	pilotMod					secondaryMod1
+	pilotMod					secondaryMod2
+	loadoutWeaponsAndAbilities	ordnance
+	pilotPassive				passive1
+	pilotPassive				passive2
+	int                         skinIndex
+	int                         camoIndex
+	int                         primarySkinIndex
+	int                         primaryCamoIndex
+	int                         secondarySkinIndex
+	int                         secondaryCamoIndex
+	// Added for Northstar; see this file's header.
+	pilotMod primaryMod3
+	pilotMod secondaryMod3
+	loadoutWeaponsAndAbilities weapon3
+	pilotMod weapon3Mod1
+	pilotMod weapon3Mod2
+	pilotMod weapon3Mod3
+	int weapon3SkinIndex
+	int weapon3CamoIndex
+$STRUCT_END
+
+$STRUCT_START titanLoadout
+	string{42}					name // TODO: No need for this in persistent data any more
+	titanClasses				titanClass
+	titanMod					primaryMod
+	loadoutWeaponsAndAbilities	special
+	loadoutWeaponsAndAbilities	antirodeo
+	titanPassive				passive1
+	titanPassive				passive2
+	titanPassive				passive3
+	titanDecals 				decal
+	titanVoice					voice
+	int                         skinIndex
+	int                         camoIndex
+	int                         decalIndex
+	int                         primarySkinIndex
+	int                         primaryCamoIndex
+	// Added for Northstar; see this file's header.
+	titanPassive passive4
+	titanPassive passive5
+	titanPassive passive6
+	titanExecution titanExecution
+	titanIsPrimeTitan isPrime
+	int primeSkinIndex
+	int primeCamoIndex
+	int primeDecalIndex
+	int showArmBadge
+$STRUCT_END
+
+$STRUCT_START recentUnlock
+	int                         refGuid
+	int                         parentRefGuid
+	// Added for Northstar; see this file's header.
+	int count
+$STRUCT_END
+
+int randomPilotCamoUnlocks
+int randomTitanCamoUnlocks[titanClasses]
+int randomWeaponCamoUnlocks[loadoutWeaponsAndAbilities]
+int randomCallsignCardUnlocks
+int randomCallsignIconUnlocks
+
+int doubleXP
+int coliseumTickets
+
+recentUnlock recentUnlocks[10]
+
+int burnmeterSlot
+
+faction factionChoice
+
+bool persistentRewards[32]
+int consumableRewards[32]
+
+spawnLoadout pilotSpawnLoadout
+spawnLoadout titanSpawnLoadout
+
+pilotLoadout activePilotLoadout
+//titanLoadout activeTitanLoadout
+int activeTitanLoadoutIndex
+
+pilotLoadout pilotLoadouts[10]
+titanLoadout titanLoadouts[10]
+
+$ENUM_START unlockRefs
+	edit_pilots // these two must come first
+	edit_titans
+
+	pilot_custom_loadout_1
+	pilot_custom_loadout_2
+	pilot_custom_loadout_3
+	pilot_custom_loadout_4
+	pilot_custom_loadout_5
+
+	titan_custom_loadout_1
+	titan_custom_loadout_2
+	titan_custom_loadout_3
+	titan_custom_loadout_4
+	titan_custom_loadout_5
+
+	burn_card_slot_1
+	burn_card_slot_2
+	burn_card_slot_3
+
+	burn_card_pack_1
+	burn_card_pack_2
+	burn_card_pack_3
+	burn_card_pack_4
+	burn_card_pack_5
+
+	challenges
+$ENUM_END
+
+//######################
+//		BURN CARDS
+//######################
+
+$ENUM_START burnCard
+	NULL
+	bc_conscription
+	bc_double_xp
+	bc_free_xp
+	bc_fast_cooldown1
+	bc_fast_cooldown2
+	bc_super_stim
+	bc_super_cloak
+	bc_super_sonar
+	bc_summon_ogre
+	bc_cloak_forever
+	bc_stim_forever
+	bc_sonar_forever
+	bc_summon_stryder
+	bc_spectre_virus
+	bc_play_spectre
+	bc_double_agent
+	bc_minimap
+	bc_summon_atlas
+	bc_megaturrets
+	bc_summon_dogfighter
+	bc_wifi_spectre_hack
+	bc_nuclear_core
+	bc_core_charged
+	bc_smart_pistol_m2
+	bc_r97_m2
+	bc_rspn101_m2
+	bc_dmr_m2
+	bc_shotgun_m2
+	bc_lmg_m2
+	bc_g2_m2
+	bc_car_m2
+	bc_hemlok_m2
+	bc_sniper_m2
+	bc_smr_m2
+	bc_mgl_m2
+	bc_defender_m2
+	bc_rocket_launcher_m2
+	bc_semipistol_m2
+	bc_autopistol_m2
+	bc_wingman_m2
+	bc_satchel_m2
+	bc_frag_m2
+	bc_arc_m2
+	bc_prox_m2
+	bc_pilot_warning
+	bc_rematch
+	bc_minimap_scan
+	bc_free_build_time_1
+	bc_free_build_time_2
+	bc_fast_build_1
+	bc_fast_build_2
+	bc_hunt_soldier
+	bc_hunt_spectre
+	bc_hunt_titan
+	bc_hunt_pilot
+	bc_auto_sonar
+	bc_fast_movespeed
+	bc_auto_refill
+	bc_dice_ondeath
+	bc_titan_40mm_m2
+	bc_titan_arc_cannon_m2
+	bc_titan_rocket_launcher_m2
+	bc_titan_sniper_m2
+	bc_titan_triple_threat_m2
+	bc_titan_xo16_m2
+	bc_titan_dumbfire_missile_m2
+	bc_titan_homing_rockets_m2
+	bc_titan_salvo_rockets_m2
+	bc_titan_shoulder_rockets_m2
+	bc_titan_vortex_shield_m2
+	bc_titan_electric_smoke_m2
+	bc_titan_shield_wall_m2
+	bc_titan_melee_m2
+	bc_extra_dash
+	bc_lstar_m2
+	bc_mastiff_m2
+	bc_vinson_m2
+$ENUM_END
+
+
+$STRUCT_START struct_activeBurnCardData
+	burnCard 	cardRef
+	burnCard	lastCardRef
+	bool 		clearOnStart // player has used this match long burn card
+$STRUCT_END
+
+$STRUCT_START struct_historyBurnCardData
+	int		collected
+	int		spent
+$STRUCT_END
+
+$STRUCT_START struct_blackMarketBurnCardUpgrades
+	burnCard cardRef
+$STRUCT_END
+
+struct_historyBurnCardData persData_historyBurnCards[ burnCard ]
+
+int onDeckBurnCardIndex
+int activeBCID
+
+struct_activeBurnCardData persData_activeBurnCards[3] // must match INGAME_BURN_CARDS
+struct_activeBurnCardData persData_pm_activeBurnCards[3] // must match INGAME_BURN_CARDS - this one is for private match
+
+burnCard persData_unopenedBurnCards[25] // must match MAX_UNOPENED_BURNCARDS
+
+int burncardStoryProgress
+
+int currentBurnCardPile
+int currentBurnCardOffset[3]
+
+int activeCallingCardIndex
+int activeCallsignIconIndex
+
+burnCard burnCardDeck[100]
+burnCard pm_burnCardDeck[100] // private match burn card deck
+
+$STRUCT_START struct_burnCardCollection
+	int cardCount[burnCard]
+	bool newCard[burnCard]
+$STRUCT_END
+
+$STRUCT_START struct_burnCardPlayerData
+	// burn card persistent variables go here
+	int  		blackMarketTimeUntilBurnCardUpgradeReset
+	burnCard 	stashedCardRef[3]
+	int 		stashedCardTime[3]
+	bool 	 	burnCardIsNew[100]
+	struct_blackMarketBurnCardUpgrades blackMarkedBurnCardUpgrades[3]
+	bool 		burnCardPremium[ burnCard ]
+	int 		devReset // to reset burn cards periodically for dev
+	int 		uiActiveBurnCardIndex // used by UI to get your own active burn card index
+	bool 		autofill
+$STRUCT_END
+
+struct_burnCardCollection bcCollection
+
+struct_burnCardPlayerData bc
+struct_burnCardPlayerData pm_bc
+
+// which packs have we already opened?
+//bool	burnCardPackOpened[ 81 ] // rare burn card count * rare count
+int		currentPack			// which pack are we on now?
+int		currentPackIndex	// how far through the pack are we?
+
+int 	nextBurnCard[3]
+
+int gen // as in, what generation player?
+
+
+//#########################
+// Faction XP
+//#########################
+
+int factionXP[faction]
+int previousFactionXP[faction]
+
+//#########################
+// Titan XP
+//#########################
+
+int titanXP[titanClasses]
+int previousTitanXP[titanClasses]
+
+//#########################
+// Average XP
+//#########################
+$STRUCT_START sAverageXP
+	float values[10]
+$STRUCT_END
+int averageXPIndex[gameModes]
+sAverageXP matchLengthHistory[gameModes]
+sAverageXP playerXPHistory[gameModes]
+sAverageXP weaponXPHistory[gameModes]
+sAverageXP titanXPHistory[gameModes]
+
+
+//################################################
+// CHAD'S STAT TRACKING STUFF - DON'T MESS WIT IT
+//################################################
+
+
+$STRUCT_START sMapStats
+	int gamesJoined[gameModes]
+	int gamesCompleted[gameModes]
+	int gamesWon[gameModes]
+	int gamesLost[gameModes]
+	int topPlayerOnTeam[gameModes]
+	int top3OnTeam[gameModes]
+	float hoursPlayed[gameModes]
+	int timesScored100AttritionPoints_byMap
+	// Added for Northstar; see this file's header.
+	int matchesByDifficulty[5]
+	int winsByDifficulty[5]
+	int perfectMatchesByDifficulty[5]
+$STRUCT_END
+
+$STRUCT_START sGameStats
+	int modesPlayed[gameModes]
+	int previousModesPlayed[gameModes]
+	int modesWon[gameModes]
+	int mvp_total
+	int gamesCompletedTotal
+	int gamesWonAsIMC
+	int gamesWonAsMilitia
+	int gamesCompletedAsIMC
+	int gamesCompletedAsMilitia
+	int pvpKills[gameModes]
+	int timesKillDeathRatio2to1[gameModes]
+	int timesKillDeathRatio2to1_pvp[gameModes]
+	int timesScored100AttritionPoints_total
+	int mode_played_at
+	int mode_played_ctf
+	int mode_played_lts
+	int mode_played_cp
+	int mode_played_tdm
+	int mode_played_wlts
+	int mode_played_mfd
+	int mode_played_coop
+	int mode_won_at
+	int mode_won_ctf
+	int mode_won_lts
+	int mode_won_cp
+	int mode_won_tdm
+	int mode_won_wlts
+	int mode_won_mfd
+	int mode_won_coop
+	int coop_perfect_waves
+	// Added for Northstar; see this file's header.
+	int gamesWonTotal
+$STRUCT_END
+
+$STRUCT_START sHoursPlayed
+	float total
+	float asTitan[titanClasses]
+	float asPilot
+	float asTitanTotal
+	float dead
+	float wallhanging
+	float wallrunning
+	float inAir
+$STRUCT_END
+
+$STRUCT_START sMilesTraveled
+	float total
+	float asTitan[titanClasses]
+	float asPilot
+	float asTitanTotal
+	float wallrunning
+	float inAir
+	float ziplining
+	float onFriendlyTitan
+	float onEnemyTitan
+$STRUCT_END
+
+$STRUCT_START sWeaponStats
+	float hoursUsed
+	float hoursEquipped
+	int shotsFired
+	int shotsHit
+	int headshots
+	int critHits
+	// Added for Northstar; see this file's header.
+	int titanDamage
+$STRUCT_END
+
+$STRUCT_START sWeaponKillStats
+	int total
+	int pilots
+	int ejecting_pilots
+	int spectres
+	int marvins
+	int grunts
+	int titansTotal
+	int titans[titanClasses]
+	int npcTitans[titanClasses]
+	// Added for Northstar; see this file's header.
+	int assistsTotal
+	int killingSprees
+	int ai
+$STRUCT_END
+
+$STRUCT_START sKillStats
+	int total
+	int totalWhileUsingBurnCard
+	int titansWhileTitanBCActive
+	int totalPVP
+	int pilots
+	int spectres
+	int marvins
+	int grunts
+	int totalTitans
+	int totalTitansWhileDoomed
+	int totalPilots
+	int totalNPC
+	int asPilot
+	int asTitan[titanClasses]
+	int firstStrikes
+	int ejectingPilots
+	int whileEjecting
+	int cloakedPilots
+	int whileCloaked
+	int wallrunningPilots
+	int whileWallrunning
+	int wallhangingPilots
+	int whileWallhanging
+	int pilotExecution
+	int pilotExecutePilot
+	int pilotKickMelee
+	int pilotKickMeleePilot
+	int titanMelee
+	int titanMeleePilot
+	int titanStepCrush
+	int titanStepCrushPilot
+	int titanExocutionStryder
+	int titanExocutionAtlas
+	int titanExocutionOgre
+	int titanExocutionBuddy
+	int titanFallKill
+	int petTitanKillsFollowMode
+	int petTitanKillsGuardMode
+	int rodeo_total
+	int rodeo_stryder
+	int rodeo_buddy
+	int rodeo_atlas
+	int rodeo_ogre
+	int pilot_headshots_total
+	int evacShips
+	int flyers
+	int nuclearCore
+	int evacuatingEnemies
+	int exportTrapKills
+	int coopChallenge_NukeTitan_Kills
+	int coopChallenge_MortarTitan_Kills
+	int coopChallenge_EmpTitan_Kills
+	int coopChallenge_BubbleShieldGrunt_Kills
+	int coopChallenge_CloakDrone_Kills
+	int coopChallenge_Dropship_Kills
+	int coopChallenge_SuicideSpectre_Kills
+	int coopChallenge_Turret_Kills
+	int coopChallenge_Sniper_Kills
+	int ampedVortexKills
+	int meleeWhileCloaked
+	int pilotKillsWhileUsingActiveRadarPulse
+	int titanKillsAsPilot
+	int pilotKillsWhileStimActive
+	int pilotKillsAsTitan
+	// Added for Northstar; see this file's header.
+	int totalAssists
+	int killingSprees[titanClasses]
+	int pilotExecutePilotWhileCloaked
+	int pilotKillsWithHoloPilotActive
+	int pilotKillsWithAmpedWallActive
+	int pilotExecutePilotByType[pilotExecution]
+	int pilotKillsAsPilot
+	int titanKillsAsTitan
+	int titanExocutionIon
+	int titanExocutionScorch
+	int titanExocutionRonin
+	int titanExocutionTone
+	int titanExocutionNorthstar
+	int titanExocutionLegion
+	int titanExocutionVanguard
+	int telefragKils
+	int grappleKills
+	int throughAWallKills
+	int distractedKills
+$STRUCT_END
+
+$STRUCT_START sDeathStats
+	int total
+	int totalPVP
+	int asPilot
+	int asTitan[titanClasses]
+	int byPilots
+	int bySpectres
+	int byGrunts
+	int byTitans[titanClasses]
+	int byNPCTitans[titanClasses]
+	int suicides
+	int whileEjecting
+$STRUCT_END
+
+$STRUCT_START sMiscStats
+	int titanFalls
+	int titanFallsFirst
+	int titanEmbarks
+	int rodeos
+	int rodeosFromEject
+	int timesEjected
+	int timesEjectedNuclear
+	int burnCardsEarned
+	int burnCardsSpent
+	int spectreLeeches
+	int spectreLeechesByMap[maps]
+	int evacsAttempted
+	int evacsSurvived
+	int flagsCaptured
+	int flagsReturned
+	int arcCannonMultiKills
+	int gruntsConscripted
+	int hardpointsCaptured
+	int challengeTiersCompleted
+	int challengesCompleted
+	int dailyChallengesCompleted
+	int timesLastTitanRemaining
+	int killingSprees
+	int coopChallengesCompleted
+	int forgedCertificationsUsed
+	int regenForgedCertificationsUsed
+	// Added for Northstar; see this file's header.
+	int boostsActivated
+$STRUCT_END
+
+sGameStats gameStats
+sMapStats mapStats[maps]
+sHoursPlayed timeStats
+sMilesTraveled distanceStats
+sWeaponStats weaponStats[loadoutWeaponsAndAbilities]
+sWeaponKillStats weaponKillStats[loadoutWeaponsAndAbilities]
+sKillStats killStats
+sDeathStats deathStats
+sMiscStats miscStats
+
+float kdratio_lifetime
+float kdratio_lifetime_pvp
+float kdratio_match[10]
+float kdratiopvp_match[10]
+
+int winStreak
+int highestWinStreakEver
+bool winStreakIsDraws
+int winLossHistory[10]	// int instead of bool so we can have win, loss, and draw
+int winLossHistorySize
+
+int mostProjectilesCollectedInVortex
+int blackMarketItemsBought
+
+bool respawnKillInfected
+
+
+//#########################
+// 		WEAPONS
+//#########################
+
+$STRUCT_START weaponMain
+	sWeaponStats weaponStats
+	sWeaponKillStats weaponKillStats
+
+	int weaponXP
+	int previousWeaponXP
+
+	// bitfields
+	int newMods
+	int unlockedMods
+	int newWeaponSkins[4]
+	int unlockedWeaponSkins[4]
+	int newPrimeWeaponSkins
+	int unlockedPrimeWeaponSkins
+	int newFeatures
+	int unlockedFeatures
+	// Added for Northstar; see this file's header.
+	int proScreenKills
+	int previousProScreenKills
+$STRUCT_END
+
+$STRUCT_START weaponOffhand
+	sWeaponStats weaponStats
+	sWeaponKillStats weaponKillStats
+$STRUCT_END
+
+$STRUCT_START titanMain
+	// bitfields
+	int newPassives
+	int unlockedPassives
+	int newSkins[4]
+	int unlockedSkins[4]
+	int newPrimeSkins
+	int unlockedPrimeSkins
+	int newWeaponSkins[4]
+	int unlockedWeaponSkins[4]
+	int newPrimeWeaponSkins
+	int unlockedPrimeWeaponSkins
+	int newTitanDecals[3]
+	int unlockedTitanDecals[3]
+	// Added for Northstar; see this file's header.
+	int newPrimeTitanDecals
+	int unlockedPrimeTitanDecals
+	int unlockedFDUpgrades[2]
+	int newFDUpgrades[2]
+$STRUCT_END
+
+weaponMain pilotWeapons[35]
+weaponOffhand pilotOffhands[35]
+weaponMain titanWeapons[15]
+weaponOffhand titanOffhands[30]
+
+titanMain titanChassis[12]
+
+// bitfields
+int newPilotSkins[4]
+int unlockedPilotSkins[4]
+int newPrimePilotSkins
+int unlockedPrimePilotSkins
+
+int newPilotWeapons[2]
+int unlockedPilotWeapons[2]
+int newPilotOffhands[2]
+int unlockedPilotOffhands[2]
+int newPilotPassives
+int unlockedPilotPassives
+
+int newTitanOffhands[2]
+int unlockedTitanOffhands[2]
+int newTitanPassives
+int unlockedTitanPassives
+int newTitanChassis
+int unlockedTitanChassis
+int newPilotSuits
+int unlockedPilotSuits
+int newPilotExecutions
+int unlockedPilotExecutions
+
+int unlockedFeatures
+int newFeatures
+
+int unlockedBoosts
+int newBoosts
+
+int unlockedFactions
+int newFactions
+
+int unlockedCallingCards[12]
+int newCallingCards[12]
+
+int unlockedCallsignIcons[4]
+int newCallsignIcons[4]
+
+//#########################
+// 		CHALLENGES
+//#########################
+
+$ENUM_START challenge
+	NULL
+	// General
+
+	ch_games_played
+	ch_games_won
+	ch_games_mvp
+	ch_titan_falls
+	ch_rodeos
+	ch_times_ejected
+	ch_spectres_leeched
+
+	// Time
+
+	ch_hours_played
+	ch_hours_played_pilot
+	ch_hours_played_titan
+	ch_hours_wallhang
+
+	// Distance
+
+	ch_dist_total
+	ch_dist_pilot
+	ch_dist_titan
+	ch_dist_wallrun
+	ch_dist_inair
+	ch_dist_zipline
+	ch_dist_on_friendly_titan
+	ch_dist_on_enemy_titan
+
+	// Kills
+
+	ch_grunt_kills
+	ch_spectre_kills
+	ch_marvin_kills
+	ch_first_strikes
+	ch_ejecting_pilot_kills
+	ch_kills_while_ejecting
+	ch_cloaked_pilot_kills
+	ch_kills_while_cloaked
+	ch_wallrunning_pilot_kills
+	ch_wallhanging_pilot_kills
+	ch_kills_while_wallrunning
+	ch_kills_while_wallhanging
+	ch_pilotExecutePilot
+	ch_pilotKickMelee
+	ch_pilotKickMeleePilot
+	ch_titanMelee
+	ch_titanMeleePilot
+	ch_titanStepCrush
+	ch_titanStepCrushPilot
+	ch_titanExocutionStryder
+	ch_titanExocutionBuddy
+	ch_titanExocutionAtlas
+	ch_titanExocutionOgre
+	ch_titanFallKill
+	ch_petTitanKillsFollowMode
+	ch_petTitanKillsGuardMode
+	ch_rodeo_kills
+
+	// Titan Primary
+
+	ch_40mm_kills
+	ch_40mm_pilot_kills
+	ch_40mm_titan_kills
+	ch_40mm_spectre_kills
+	ch_40mm_grunt_kills
+	ch_40mm_hours_used
+	ch_40mm_crits
+
+	ch_xo16_kills
+	ch_xo16_pilot_kills
+	ch_xo16_titan_kills
+	ch_xo16_spectre_kills
+	ch_xo16_grunt_kills
+	ch_xo16_hours_used
+	ch_xo16_headshots
+	ch_xo16_crits
+
+	ch_titan_sniper_kills
+	ch_titan_sniper_pilot_kills
+	ch_titan_sniper_titan_kills
+	ch_titan_sniper_spectre_kills
+	ch_titan_sniper_grunt_kills
+	ch_titan_sniper_hours_used
+	ch_titan_sniper_crits
+
+	ch_rocket_launcher_kills
+	ch_rocket_launcher_pilot_kills
+	ch_rocket_launcher_titan_kills
+	ch_rocket_launcher_spectre_kills
+	ch_rocket_launcher_grunt_kills
+	ch_rocket_launcher_hours_used
+
+	ch_triple_threat_kills
+	ch_triple_threat_pilot_kills
+	ch_triple_threat_titan_kills
+	ch_triple_threat_spectre_kills
+	ch_triple_threat_grunt_kills
+	ch_triple_threat_hours_used
+
+	// Titan Ordnance
+
+	ch_salvo_rockets_kills
+	ch_salvo_rockets_pilot_kills
+	ch_salvo_rockets_titan_kills
+	ch_salvo_rockets_spectre_kills
+	ch_salvo_rockets_grunt_kills
+	ch_salvo_rockets_hours_used
+
+	ch_homing_rockets_titan_kills
+	ch_homing_rockets_hours_used
+
+	ch_dumbfire_rockets_kills
+	ch_dumbfire_rockets_pilot_kills
+	ch_dumbfire_rockets_titan_kills
+	ch_dumbfire_rockets_spectre_kills
+	ch_dumbfire_rockets_grunt_kills
+	ch_dumbfire_rockets_hours_used
+
+	ch_shoulder_rockets_titan_kills
+	ch_shoulder_rockets_hours_used
+
+	// Pilot Primary
+
+	ch_smart_pistol_kills
+	ch_smart_pistol_pilot_kills
+	ch_smart_pistol_spectre_kills
+	ch_smart_pistol_grunt_kills
+	ch_smart_pistol_hours_used
+
+	ch_shotgun_kills
+	ch_shotgun_pilot_kills
+	ch_shotgun_spectre_kills
+	ch_shotgun_grunt_kills
+	ch_shotgun_hours_used
+
+	ch_r97_kills
+	ch_r97_pilot_kills
+	ch_r97_spectre_kills
+	ch_r97_grunt_kills
+	ch_r97_hours_used
+	ch_r97_headshots
+
+	ch_car_kills
+	ch_car_pilot_kills
+	ch_car_spectre_kills
+	ch_car_grunt_kills
+	ch_car_hours_used
+	ch_car_headshots
+
+	ch_lmg_kills
+	ch_lmg_pilot_kills
+	ch_lmg_spectre_kills
+	ch_lmg_grunt_kills
+	ch_lmg_hours_used
+	ch_lmg_headshots
+
+	ch_rspn101_kills
+	ch_rspn101_pilot_kills
+	ch_rspn101_spectre_kills
+	ch_rspn101_grunt_kills
+	ch_rspn101_hours_used
+	ch_rspn101_headshots
+
+	ch_hemlok_kills
+	ch_hemlok_pilot_kills
+	ch_hemlok_spectre_kills
+	ch_hemlok_grunt_kills
+	ch_hemlok_hours_used
+	ch_hemlok_headshots
+
+	ch_g2_kills
+	ch_g2_pilot_kills
+	ch_g2_spectre_kills
+	ch_g2_grunt_kills
+	ch_g2_hours_used
+	ch_g2_headshots
+
+	ch_dmr_kills
+	ch_dmr_pilot_kills
+	ch_dmr_spectre_kills
+	ch_dmr_grunt_kills
+	ch_dmr_hours_used
+	ch_dmr_headshots
+
+	ch_sniper_kills
+	ch_sniper_pilot_kills
+	ch_sniper_spectre_kills
+	ch_sniper_grunt_kills
+	ch_sniper_hours_used
+
+	// Pilot Secondary
+
+	ch_smr_titan_kills
+	ch_smr_crits
+
+	ch_mgl_titan_kills
+
+	ch_archer_titan_kills
+
+	ch_defender_titan_kills
+	ch_defender_crits
+
+	// Pilot Ordnance
+
+	ch_frag_grenade_throws
+	ch_frag_grenade_kills
+	ch_frag_grenade_pilot_kills
+	ch_frag_grenade_grunt_kills
+
+	ch_emp_grenade_throws
+	ch_emp_grenade_kills
+	ch_emp_grenade_pilot_kills
+	ch_emp_grenade_grunt_kills
+	ch_emp_grenade_spectre_kills
+
+	ch_proximity_mine_throws
+	ch_proximity_mine_kills
+	ch_proximity_mine_pilot_kills
+	ch_proximity_mine_grunt_kills
+
+	ch_satchel_throws
+	ch_satchel_kills
+	ch_satchel_pilot_kills
+	ch_satchel_grunt_kills
+$ENUM_END
+
+$ENUM_START dailychallenge
+	NULL
+	// Dailies
+
+	ch_daily_xo16_pilot_kills
+	ch_daily_emp_grenade_kills
+	ch_daily_kills_nuclear_core
+$ENUM_END
+
+$STRUCT_START eChallenge
+	float progress
+	float previousProgress
+$STRUCT_END
+
+eChallenge challenges[challenge]
+eChallenge dailychallenges[dailychallenge]
+
+$STRUCT_START activeDailyChallenge
+	dailychallenge ref
+	int day
+$STRUCT_END
+
+activeDailyChallenge activeDailyChallenges[9]	// holds the players daily challenge refs
+
+int trackedChallenges[3]
+int EOGTrackedChallenges[3]
+string{64} trackedChallengeRefs[3]
+string{64} EOGTrackedChallengeRefs[3]
+int dailyChallengeDayIndex
+bool newDailyChallenges
+
+//#########################
+//    Post Game
+//#########################
+
+bool isPostGameScoreboardValid
+
+$STRUCT_START ePostGamePlayer
+	string{32}	name
+	string{22}	xuid
+	int 		level
+	int 		gen
+	int 		team
+	int 		scores[3]
+	bool 		playingRanked
+	int 		rank
+	int         callsignIconIndex
+	float		matchPerformance
+$STRUCT_END
+
+$STRUCT_START ePostGameData
+	int 		gameMode
+	int 		map
+	string{22}	myXuid
+	int 		myTeam
+	int 		maxTeamSize
+	int 		scoreIMC
+	int 		scoreMCOR
+	bool		teams
+	bool 		privateMatch
+	bool   		ranked
+	bool		hadMatchLossProtection
+	ePostGamePlayer players[16]
+	// Added for Northstar; see this file's header.
+	faction factionIMC
+	faction factionMCOR
+	recentUnlock challengeUnlocks[6]
+$STRUCT_END
+
+ePostGameData postGameData
+
+// Track Gooser progress ( ejecting pilot kills ) before requirements changed so we can reward these players later if they did it the hard way
+int previousGooserProgress
+
+
+//#########################
+// GAME HISTORY
+//#########################
+
+// If these are size adjusted, re-initialize with InitPlayerMapHistory() and InitPlayerModeHistory()
+int mapHistory[24]
+int modeHistory[10]
+string{32} lastPlaylist
+
+//#########################
+// BLACK MARKET
+//#########################
+
+$ENUM_START BlackMarketUnlocks
+	titan_decals_blackmarket01
+	titan_decals_blackmarket02
+	titan_decals_blackmarket03
+	titan_decals_blackmarket04
+	titan_decals_blackmarket05
+	titan_decals_blackmarket06
+	titan_decals_blackmarket07
+	titan_decals_blackmarket08
+	titanos_femaleassistant
+	titanos_maleintimidator
+	titanos_bettyde
+	titanos_bettyen
+	titanos_bettyes
+	titanos_bettyfr
+	titanos_bettyit
+	titanos_bettyjp
+	titanos_bettyru
+$ENUM_END
+
+$ENUM_START blackMarketPerishableTypes
+	NULL
+	perishable_burncard
+$ENUM_END
+
+$STRUCT_START struct_blackMarketPerishables
+
+	int 						nextRestockDate
+
+	blackMarketPerishableTypes	perishableType
+	burnCard 					cardRef
+
+	int 						coinCost
+	bool 						new
+
+$STRUCT_END
+
+$STRUCT_START struct_blackMarket
+
+	int coinCount
+	int previousCoinCount
+	int coin_rewards[6]
+	int coin_reward_counts[6]
+	bool newBlackMarketItems
+
+	int nextDiceCardDate
+
+	bool blackMarketItemUnlocks[BlackMarketUnlocks]
+
+	struct_blackMarketPerishables	blackMarketPerishables[9]
+
+	int challengeSkips
+
+$STRUCT_END
+
+struct_blackMarket bm
+
+//#########################
+// Dailies
+//#########################
+
+int lastDailyMatchVictory
+int lastTimePlayed
+int lastTimeLoggedIn
+
+
+$STRUCT_START struct_ranked
+    bool isPlayingRanked // deprecated but still used by code - need to fix
+	int currentRank // deprecated but still used by code - need to fix
+$STRUCT_END
+
+struct_ranked ranked
+
+
+// Structs the stock 929 definition does not have at all. sh_stats.gnut
+// registers the fd_stats and titan_stats categories regardless, so without
+// these every stat in both categories fails to resolve.
+$STRUCT_START sFDStats
+	int arcMinesPlaced
+	int turretsPlaced
+	int rodeos
+	int rodeoNukes
+	int arcMineZaps
+	int turretKills
+	int harvesterBoosts
+	int wavesComplete
+	int easyWins
+	int normalWins
+	int hardWins
+	int masterWins
+	int insaneWins
+	int highestTitanFDLevel
+$STRUCT_END
+
+$STRUCT_START sTitanStats
+	int pilots
+	int titansTotal
+	int ejections
+	int titansWhileDoomed
+	int titanDamage
+	int titansAsPrime
+	int pilotsAsPrime
+	int executionsAsPrime
+	int coresEarned
+	int matchesByDifficulty[5]
+	int perfectMatchesByDifficulty[5]
+$STRUCT_END
+
+sFDStats fdStats
+sTitanStats titanStats[titanClasses]
+int privateMatchState
+titanLoadout activeTitanLoadout
+bool ultimateEdition
+bool hasSeenStore
+bool hasBeenIntroducedToComms
+int numTimesUsedComms
+bool matchSquadBonus
+int coliseumTotalWins
+int coliseumTotalLosses
+int coliseumWinStreak
+bool isFDPostGameScoreboardValid
+string{16} lastFDTitanRef
+int fdTitanXP[titanClasses]
+int fdPreviousTitanXP[titanClasses]
+int titanFDUnlockPoints[titanClasses]
+int previousFDUnlockPoints[titanClasses]
+int titanClassLockState[titanClasses]

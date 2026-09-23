@@ -3159,3 +3159,374 @@ port already uses for `scripts.rson`, merged KeyValues and save data. The
 durable fix is to make the mods root a search path (`/data` first, then
 `/app0`) rather than the single hardcoded `kModsRoot` literal it is today. A
 directory junction would work on the emulator and has no hardware equivalent.
+
+## Atlas authentication: the client token half now works (2026-09-21)
+
+**The flow, from the reference implementation.** The client exchanges its Origin
+token with the master server (`/client/origin_auth?id=<uid>&token=<originToken>`)
+for a Northstar player token. To join a server it calls
+`/client/auth_with_server?id=<uid>&playerToken=<token>&server=<id>&password=<pw>`
+and receives `{ip, port, authToken}` - a token minted for that one connection.
+It then puts that token in the **`serverfilter` convar** and runs
+`connect <ip>:<port>`; `serverfilter` is an ordinary userinfo convar Northstar
+repurposes, so the token rides along in the handshake. The server receives
+`(uid, serverFilter)` as parameters of `CBaseServer::ConnectClient` and calls
+`CheckAuthentication(uid, token)`, which compares the uid Atlas recorded against
+the uid the client sent.
+
+So a genuine connection needs **both halves**: a token Atlas minted, and the uid
+it was minted for. The captured server log shows the PS4 client arriving as
+`uid 1` with a token that matched nothing, which is exactly
+`"Authentication Failed."`.
+
+**`ns_auth_allow_insecure` cannot produce that rejection.** `CheckAuthentication`
+returns `true` immediately when it is set, so the captured log predates it being
+active. Connecting to an insecure server already works; what does not work is
+being recognised by Atlas, which is what would allow joining any server.
+
+**`serverFilter` exists here and is writable.** Searching the binaries for
+`serverfilter` finds nothing, which looked like the console build had dropped
+it - the registered name is camelCase and `FindVar` is case-insensitive, so the
+lookup succeeds and returns a real convar with the expected help string. Writing
+it round-trips: set to a marker, read back identical, restored. That proves the
+token half of the handshake can be driven from this module with no server in the
+loop. The self-test is left behind `kAuthConVarRoundTripTest = false`.
+
+**ConVar writing, generally.** `ConVar::SetValue(const char*)` is **vtable slot
+15**. Slots 15 to 18 are IConVar forwarders: each loads the parent from
+`this + 0x38` and tail calls the parent's vtable at +0x98, +0xa0, +0xa8, +0xb0,
+which are slots 19 to 22. Slot 19 (`engine+0x2057f0`) keeps `rsi` as a pointer
+and slot 21 keeps `esi` as an int, giving the usual `const char*`, `float`,
+`int`, `Color` order. Slot 15 is the one to call, because it preserves the
+parent redirect. Gated on the prologues of both `engine+0x206040` and
+`engine+0x2057f0`. This build's ConVar layout: +0x18 name, +0x20 help, +0x40
+default value, +0x48 current value.
+
+**The uid is the open half.** `nucleus_pid` exists and holds `"0"`, but the
+server saw `uid 1`, so the connect uid may not come from that convar at all. On
+PC the client reads it from `g_pLocalPlayerUserID` (engine.dll+0x13F8E688), a
+plain `char*` the Origin login fills in; here PSN reports signed out. Testing
+whether writing `nucleus_pid` changes what the server receives needs a server.
+
+**Correction to the 2026-08-17 note.** That entry says grepping the reference for
+the Nucleus token override found no matches. It is there - `clientauthhooks.cpp`
+hooks `Auth3PToken` and overwrites `p3PToken` with the literal
+`"Protocol 3: Protect the Pilot"` whenever a Northstar client token exists. The
+earlier grep missed it because the symbol is spelled `p3PToken`.
+
+**Still unsolved: getting a real Atlas token.** On PC the Origin token lives in
+the running game's memory (`engine.dll+0x13979C80`) and Northstar reads it from
+there, so a PC-side helper would have to attach to a running Titanfall2.exe
+rather than read a file. That is the main obstacle to the import plan, and it is
+worth confirming before building the helper.
+
+## Atlas auth: both halves of the handshake are now reachable (2026-09-21)
+
+Following on from the flow mapped above, the two values the server checks are
+both ordinary convars on this build, and both can be written.
+
+**The uid is `platform_user_id`** - "Platform user id (origin user id on PC,
+xuid on xboxone)". It exists, reads `"0"`, and is writable. This supersedes the
+`nucleus_pid` guess: that convar also holds `"0"` but is the Nucleus persona id,
+not the platform identity the connect path uses.
+
+**The token is `serverFilter`**, already established as writable with a proven
+round trip.
+
+**The player name is not a blocker.** `VerifyPlayerName` replaces whatever the
+client sent with the username Atlas has for the token, and only checks the
+result is non-empty printable ASCII. The `"shadPS4"` name in the captured server
+log comes from the emulator's `users.json` `user_name`, and would be overridden
+anyway.
+
+**Identity extraction works.** `scripts/Export-AtlasCredentials.ps1` reads a
+signed-in PC client:
+
+- uid from `engine.dll + 0x13F8E688`, the same `g_pLocalPlayerUserID` the PC
+  launcher reads. The offset was **verified against this Northstar build**: it
+  read `1000108120826`, matching the uid in the client's own log. The script
+  cross-checks the two and refuses to export on a mismatch.
+- player token by locating `MasterServerManager::m_sOwnClientAuthToken`, a
+  `char[33]` of 32 lowercase hex preceded by `m_sOwnServerId[33]` and
+  `m_sOwnServerAuthToken[33]`, both empty on a non-hosting client. Scanning
+  committed private writable memory for that signature found **exactly one**
+  match across 3.3 GB. The script refuses to guess if it finds more than one.
+
+The Origin token is never read. Re-running `origin_auth` was deliberately
+avoided: Atlas overwrites `acct.AuthToken` on every call, so it would invalidate
+the running PC client's own session.
+
+**Atlas details worth knowing.** Tokens are `cryptoRandHex(32)`, exactly 32
+lowercase hex characters, expiring after 24 hours by default or whenever the PC
+client authenticates again. `auth_with_server` validates the token and expiry
+but **not** the source IP - `AuthIP` is only enforced on the persistence-write
+path - so a token minted on PC is usable from the console. Validation order is
+server-before-token, so a bogus server id cannot be used to test a token without
+authorising yourself onto someone else's server.
+
+**Applying it.** `ApplyAtlasIdentity` reads
+`/data/northstar_ps4/atlas_identity.json` at startup and writes the uid into
+`platform_user_id`; the log shows `"0" -> "1000108120826"`. Without that file
+nothing happens, so an un-exported profile behaves exactly as before. The player
+token is deliberately **not** applied to `serverFilter`: that convar needs the
+per-connection token Atlas mints for one specific server, not the long-lived
+player token.
+
+**Still unverified, and it needs a server.** Whether the engine actually reads
+`platform_user_id` when building the connect handshake. The captured log shows
+the PS4 arriving as `uid 1` while the convar read `"0"`, so either it is not the
+source or it is sampled elsewhere. Until that is settled, applying the identity
+only changes a convar.
+
+**The remaining piece** is the per-connection token: something has to call
+`auth_with_server` for the target server and get `{ip, port, authToken}` to the
+console before it connects. On the user's own server this is all moot -
+`ns_auth_allow_insecure` returns true immediately - so this only matters for
+joining servers that verify.
+
+## Atlas transport works: the PS4 client reached the master server (2026-09-21)
+
+The server browser, authentication and mod downloads were all "deliberately
+unimplemented" for one reason - there was no HTTP transport. There is now, and
+it reaches the real Atlas over TLS.
+
+`runtime_http.inl` implements a bounded GET on `sceHttp`. Init order is the
+SDK's: `sceNetInit`, `sceNetPoolCreate`, `sceSslInit`, `sceHttpInit`,
+`sceHttpCreateTemplate`. The toolchain ships `libSceHttp.so`, `libSceNet.so` and
+`libSceSsl.so` stubs, added to the link; shadPS4 provides the functions by HLE
+rather than loading a real module, which is why `libSceHttp.sprx` never appears
+in the module list even though the calls succeed.
+
+**Two results, both from the module inside the game.**
+
+Against a local server, to separate transport from TLS:
+
+```
+http probe url=http://127.0.0.1:8099/ps4probe ok=1 status=200 bytes=20
+http probe body: NORTHSTARPS4_HTTP_OK
+```
+
+Against the real master server:
+
+```
+http probe url=https://northstar.tf/client/servers ok=1 status=200 bytes=8191
+body: [{"lastHeartbeat":...,"id":"c5c76dab...","name":"...","region":"US West",...
+```
+
+shadPS4's own log agrees: `(SUCCESS) reqId=4 status=200 body=89988 bytes`, and
+`created connection connId=3 host=northstar.tf port=443 scheme=https`. The 8 KB
+probe buffer truncated an 89,988-byte response, so a real client needs a much
+larger one.
+
+**TLS works despite appearances.** `sceSslInit` logs as `(DUMMY)` and
+`sceNetInit`/`sceNetPoolCreate` as `(DUMMY)` too, but the request still
+completes over port 443 - shadPS4 performs the TLS itself rather than emulating
+the SDK's SSL layer, so the DUMMY tag is not a warning that HTTPS is unavailable.
+
+**What this unblocks.** Everything the master server does is HTTP:
+`/client/origin_auth`, `/client/auth_with_server`, `/client/servers`. With
+`platform_user_id` and `serverFilter` both writable and a working transport, the
+remaining work on the browser is marshalling - fetching `/client/servers`,
+parsing it, and backing `NSGetServerCount`/`NSGetGameServers` with the result
+instead of the current empty stubs.
+
+The probe reads its URL from `/data/northstar_ps4/http_probe.txt` and does
+nothing when that file is absent, so it stays inert unless deliberately pointed
+at something.
+
+## Authentication re-enabled behind an imported identity (2026-09-21)
+
+Master-server authentication is no longer unconditionally off. It reports a real
+session when an Atlas identity has been imported, and when one has not it says
+how to get one.
+
+`ApplyAtlasIdentity` now records state rather than only applying the uid:
+
+| State | Condition |
+| --- | --- |
+| `PS4_AUTH_IMPORTED` | uid plus a 32-hex `playerToken` |
+| `PS4_AUTH_NO_IDENTITY` | no `atlas_identity.json` |
+| `PS4_AUTH_NO_TOKEN` | uid present, token absent |
+| `PS4_AUTH_BAD_IDENTITY` | unparseable, non-numeric uid, or a token that is not 32 hex |
+
+Each state carries a message naming the fix, and those messages are what
+`NSGetMasterServerAuthResult` and `NSGetAuthFailReason` return, so the menu
+shows an instruction rather than a bare failure. The state is logged at startup
+too, because that is where most people will look first.
+
+**Only two natives changed.** `Authenticated` was a single stub shared by eight
+registrations, so flipping it would have claimed HTTP requests, mod downloads
+and server-list requests all worked. `NSIsMasterServerAuthenticated` and
+`NSMasterServerConnectionSuccessful` now use a separate identity-backed
+function; everything else still reports unimplemented. `NSIsHttpEnabled` stays
+false deliberately: the transport exists now, but
+`NS_InternalMakeHttpRequest` does not, and a mod told HTTP is available would
+fail at the call instead of at the check.
+
+The player token is held in memory and **never logged** - verified by grepping a
+boot log for its first characters and finding none.
+
+**One regression this exposed and fixed.** Once authentication reported true,
+`ui/atlas_auth.nut` and `ui/panel_mainmenu.nut` began reaching
+`GetConVarBool("ns_auth_allow_insecure")`, which had never been registered on
+this client, raising `SCRIPT ERROR: [UI] ConVar ns_auth_allow_insecure is not
+valid`. It had been latent all along, hidden by the surrounding branches
+short-circuiting first. Registered with upstream's default `"0"`, and the boot
+is now free of script errors.
+
+**Next blocker for the multiplayer path.** `panel_mainmenu.nut` gates on
+`( NSIsMasterServerAuthenticated() && IsStryderAuthenticated() ) ||
+GetConVarBool("ns_auth_allow_insecure")`. The first half is satisfied now, but
+`IsStryderAuthenticated()` is the engine's own Stryder session, and PSN reports
+signed out on this platform. That gate, not the master-server half, is likely
+what stands between here and the menu enabling multiplayer.
+
+## Why "Launch Northstar" did nothing after authenticating (2026-09-21)
+
+Authenticating was not enough on its own. Three separate things stood between a
+successful sign-in and the local lobby starting.
+
+**The launch path.** `OnPlayNSButton_Activate` in `ui/panel_mainmenu.nut` runs:
+
+```squirrel
+NSTryAuthWithLocalServer()
+while ( NSIsAuthenticatingWithServer() ) WaitFrame()
+if ( NSWasAuthSuccessful() ) {
+    NSCompleteAuthWithLocalServer()
+    ClientCommand( "setplaylist tdm" )
+    ClientCommand( "map mp_lobby" )
+} else { ...dialog with NSGetAuthFailReason() }
+```
+
+`map mp_lobby` is what starts the local lobby and brings up the Northstar menus.
+
+**Two stubs blocked it.** `NSWasAuthSuccessful` was the shared always-false
+`Authenticated` stub, so the success branch never ran. Worse,
+`NSCompleteAuthWithLocalServer` was the shared `CompleteAuth` stub, which
+*raises a Squirrel error* - had the first been fixed alone, the script would
+have aborted between the success branch and the `map mp_lobby` that follows it.
+Both now have their own implementations, and the result of the last attempt is
+tracked separately from whether an identity exists, because having an identity
+is not the same as having tried to use it.
+
+There is nothing to negotiate for a local server here: PC authenticates with its
+own server through Atlas because its server half enforces auth, and this port
+does not hook `server.prx` at all.
+
+**The button was also locked.** `panel_mainmenu.nut` threads
+`UpdatePlayButton( file.fdButton )` onto the Launch Northstar button, and on
+this platform that compiles the `#elseif PS4_PROG` console permission chain,
+ending in `isLocked = file.mpButtonActivateFunc == null`. One of its branches is
+`!hasPermission || !isMPAllowed`, and `IsStryderAllowingMP()` is just
+`GetConVarInt( "mp_allowed" ) == 1`. This build boots with `mp_allowed` at
+`-1` - Stryder has not answered, and never will, because there is no Stryder
+session. Now set to `1` at startup.
+
+**Correction to the previous entry.** It predicted `IsStryderAuthenticated()`
+was the blocker. It is not: in the non-vanilla build that function
+*returns `true` unconditionally*, because Northstar does not care about Stryder
+when not using official servers. The PS4 script consults the console permission
+chain only because `PS4_PROG` is the branch that compiles.
+
+**Still unknown.** The same chain also gates on `Console_IsOnline`,
+`HasLatestPatch`, `Ps4_PSN_Is_Loggedin`,
+`Console_HasPermissionToPlayMultiplayer` and an age check. Those are natives,
+not convars, so they cannot be read or written the same way. The chain sets a
+localised `message` for whichever branch fires and the menu displays it under
+the button, so the on-screen text names the next blocker directly - worth
+reading before guessing. Note two branches (`PS4_NETWORK_STATUS_UNKNOWN` and
+`PS4_NETWORK_STATUS_IN_ERROR`) assign `LaunchMP` and would leave the button
+usable, so a failing network query is not automatically fatal here.
+
+## SERVER VM hooked; the lobby's compile error was a missing constant (2026-09-21)
+
+With the launch path fixed, `map mp_lobby` ran and died immediately:
+
+```
+FatalError: _items.nut: SERVER SCRIPT COMPILE ERROR: Undefined variable "VANILLA"
+```
+
+`VANILLA` is a compile-time define, not a script global. NorthstarLauncher sets
+it with `defconst(vm, "VANILLA", ...)` from `VMCreated`, which runs for every
+context. This module did the equivalent for UI and CLIENT by hooking client.prx's
+VM initializer, so the SERVER VM was the only one compiling Northstar scripts
+without the constants they are written against. `server.prx` had never been
+profiled or hooked at all.
+
+**Locating the server equivalents.** client.prx and server.prx embed the same
+Squirrel implementation, so each address was found by matching the client
+function's own bytes - choosing a stretch of body with no rip-relative operands,
+since those differ per module and defeat a naive match. A 48-byte window from
+each function found only `table insert`; the prologue alone matched 38 places.
+Picking distinctive non-relocated body instructions gave exactly one hit each:
+
+| | client | server |
+| --- | --- | --- |
+| VM initializer | 0x6746c0 | **0x625da0** |
+| its call site | 0x6717af | **0x622e8b** |
+| SQString::Create | 0x6a96a0 | **0x666600** |
+| table insert | 0x6ab3e0 | **0x668470** |
+| const-table gate | 0x6759d2 | **0x6270b2** |
+
+The two call sites corroborate each other: client's is `e8 0c 2f 00 00` and
+server's `e8 10 2f 00 00` - the same instruction reaching the same function from
+nearly the same distance, which is what one piece of code compiled into two
+modules looks like. The server initializer's 20-byte prologue is byte-identical
+to the client's.
+
+**The hook has to be lazy.** `server.prx` is not loaded at boot - it never
+appears in the module list the tracker logs - so it cannot be hooked at startup
+like client.prx. Installation is retried from the filesystem hook, throttled to
+one module enumeration per 64 opens, and a module that is found but fails its
+gate is not retried. In practice the module appears during an ordinary boot,
+well before any server starts, and the log shows
+`SERVER VM init hook installed base=... protection=0`.
+
+The key-string ownership fix the client path needs applies here with more force:
+`SQString::Create` writes neither the shared-state back-pointer at `+0x18` nor a
+reference, and the table's release path dereferences both at VM teardown. A
+SERVER VM is destroyed on every map change, so omitting it would fault far more
+often than it did on the client, where only leaving a map tore a VM down.
+
+**Not done here.** The script print sink gates on client.prx addresses, so
+SERVER script output is still invisible - worth adding, since it is the natural
+diagnostic channel for whatever the lobby does next.
+
+
+## Feature-parity audit and SERVER MapSpawn dispatch - 2026-09-23
+
+GOALS.md is now the current 26-goal tracker; the old contradictory chronology is archived in GOALS-HISTORY-2026-09-17.md. NATIVE-API-INVENTORY.md is generated by scripts/Update-NorthstarApiInventory.py from PC revision 4df8857814dd683147f1cc5fdae0b3b419a7f1cf and the current PS4 registration table. It lists 62 explicit PC registration declarations, their signatures/contexts and PS4 handlers. Counts do not imply completion; engine builtin hooks and non-script services have separate goals. Imported PC Atlas credentials are in scope, but token presence does not prove live authentication or persistence retrieval.
+
+Captured evidence preserved at work/parity-audit/pre-callback-fix.log. The log contains multiple boots: missing newPrimeTitans/prime-array paths are schema errors, whereas the unregistered EndUpdateCachedLoadouts signal is a missing initialization callback. The original Northstar.CustomServers `_loadouts_mp.gnut` registers it in SvLoadoutsMP_Init (also calls InitDefaultLoadouts). Its mod.json declares that function as ServerCallback.After. Prior SERVER support registered constants/natives but never dispatched those callbacks.
+
+Profile: server.prx SHA256 cb5164458a58dbba9568f98684255410460f77c60685253d899bef495125eee8. CodeCallback_MapSpawn string VA 0x88fe6a is referenced by LEA at 0x70cd5d; the call at 0x70cd64 (`e8 47 e4 f1 ff`) targets 0x62b1b0. The preceding owner load at 0x70cd56 and callback string LEA are gated as 14 exact bytes. The target has the same CSquirrelVM/name callback ABI as the client equivalent and a separately validated 17-byte prologue. No Windows offsets are used.
+
+runtime_server_vm.inl now loads enabled/ordered ServerCallback metadata on each successful SERVER VM initialization and dispatches Before -> native MapSpawn -> After at that call site. It resets owner/started even when the allocator reuses an owner address. Missing mod callbacks do not stop the chain; the engine result is preserved. Both VM-init and MapSpawn code pages are acquired before either call is patched and restored to RX afterward. SERVER Destroy and early InitScript/type lifecycle remain incomplete.
+
+Portable DispatchScriptInitCallbacks tests cover context filtering, source order, missing callbacks, engine failure and ignoring mod return values. All existing profile suites passed, including live KeyValues and RPAK configs. The PS4 build succeeded with the existing linker `_start` warning.
+
+Deployed PRX: 6c48660219ef7b358a7f4f73cb55905bed46b799aa12cb7144e9be005ce1a9ac, built in dist/northstar-parity-server. Startup probe work/stage2/iterations/20260923-140725/shad-new-lines.log passed in 48.31s, logging `SERVER VM init and MapSpawn hooks installed ... protection=0` and `UI lifecycle completed`. This verifies gates/install/startup, **not SERVER callback execution or resolution of the lobby errors**. Next: enter the local lobby, capture SERVER After: SvLoadoutsMP_Init and lifecycle completed, then repeat return/re-enter. Persistence schema compatibility, real account pdata and write-back remain unimplemented/incomplete. This change edits neither retail archives nor installed mod sources.
+
+
+## 2026-09-23: AI.Harness command transport and live parity probe
+
+`runtime_ai_harness.inl` adds UI-only, calling-mod-gated read/field/reply natives. `AI.Harness` starts a 250 ms UI polling thread via UICallback.After; consumes a fixed local mailbox request before executing; uses script ClientCommand for local execution. It mirrors the core main-menu local authentication sequence before mp_lobby. No unprofiled Cbuf address, HTTP callback or retail archive edit is involved. `console.txt` is imported explicitly by the host helper; the disabled legacy reader no longer truncates it.
+
+First live attempt caught native DecodeJSON table insertion failure (`string could not be stored`), so harness fields use the existing native metadata string parser. General JSON VM marshalling remains unresolved, not hidden by portable parser tests. EncodeJSON replies worked live.
+
+Build/deployed PRX SHA256: `370d806ec891702bd07161eaec89d78f497436b7c70c1853a40534631770114f`. Automatic launch and subsequent correlated status reply verified in iteration `20260923-165316`; SERVER lifecycle completed at approximately 64 seconds. Console disconnect and subsequent status both acknowledged. A 15-second console probe timed out during loading then was consumed later: callers must treat timeout as unknown, never as cancellation. UI VM recovery restarts the polling thread and does not replay consumed requests.
+
+The generated PDEF served 34217 bytes (34140-byte original prefix), resolving the observed newPrimeTitans/netWorth root lookups. Subsequent errors are newTitanExecutions (UI array count) and factionGiftsFixed (SERVER persistence read). Neither a fully working lobby nor complete persistence is claimed. See docs/AI-HARNESS.md for installation and command usage.
+
+
+## 2026-09-23: harness-driven multiplayer initialization repairs
+
+Pinned PC mod 231 declarations are validated before generating the PS4 929 cache. Added newTitanExecutions/unlockedTitanExecutions, factionGiftsFixed, newCommsIcons/unlockedCommsIcons, custom_emoji_initialized/custom_emoji, and random player/Titan/weapon/faction/Coliseum reward counters. Existing newPrimeTitans/netWorth handling remains. These address UI cache/inbox reads and SERVER InitPersistentData/AwardRandomItem failures without editing the callers.
+
+Next SERVER error was titanLoadouts[6].special = mp_titanweapon_stun_laser during Monarch initialization. Merge missing values from PC loadoutWeaponsAndAbilities and titanPassive by appending them inside the existing enums. Keep all existing PS4 entries and indices, including PS4-only entries; do not substitute PC numeric encodings. Enum-count-sized arrays may grow and downstream binary offsets change.
+
+Next UI error was unlockedPilotSkins[4] from OnLobbyMenu_Open. A scoped integer declaration pass expands literal int capacities to the PC capacity when larger, including scalar-to-array promotion. Match both enclosing struct and member name; never shrink, replace symbolic arrays with literal sizes, or copy incompatible types. This covers PC skin/feature/calling-card/icon capacities together instead of repeatedly patching menu callers. Tests verify scoped matching and repeated generation, including actual installed PDEF files. Full generation: 34140 -> 35206 bytes; no claim that old binary saves or PC pdata match this layout.
+
+Final deployed build `4cf10c9a765d65fae291e5487a0dfef1c84c9c781ae7bae56e41b46d526de25a`. Iteration 20260923-171208 reached mp_lobby; harness status and a second status after 20 seconds both confirm connected/lobby. Zero script errors across the session. A later disconnect terminated the emulator on GpuSchedPriorityPendingOpsRunner with access violation 0xc0000005 at 0x7ff93f72cca7. No guest script error or guest stack accompanied it. This is a separate unresolved teardown failure; see work/parity-audit/lobby-fix-session5.log. Do not count repeated in-process map transitions as verified.
+
+- **Repeat confirmed:** second fresh launch `20260923-171632` also reached and remained in mp_lobby; immediate and delayed harness replies both report connected/lobby true. `work/parity-audit/lobby-fix-repeat-session.log` has zero script errors or critical entries at capture; state evidence is in `lobby-fix-repeat-status.json` and `lobby-fix-repeat-stable.json`. Emulator left running in the lobby for user inspection. This verifies repeated fresh launches, not in-process leave/re-entry.

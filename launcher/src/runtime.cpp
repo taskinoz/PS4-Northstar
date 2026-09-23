@@ -8,8 +8,12 @@
 #include "northstar_ps4/mod_savefiles.h"
 #include "northstar_ps4/json_text.h"
 #include "northstar_ps4/keyvalues.h"
+#include "northstar_ps4/persistence_schema.h"
 
 #include <orbis/libkernel.h>
+#include <orbis/Net.h>
+#include <orbis/Ssl.h>
+#include <orbis/Http.h>
 #include <cstring>
 #include <cstdarg>
 #include <cerrno>
@@ -891,6 +895,8 @@ void ProbeModMetadata(void* cvar, ModFindVarFn findVar,
         conVarSlot);
 }
 #endif
+#include "runtime_auth.inl"
+
 void ProbeCvarInterface(
     OrbisKernelModule vstdlibHandle, std::uintptr_t engineBase,
     std::size_t engineSize) noexcept {
@@ -922,6 +928,9 @@ void ProbeCvarInterface(
     void* svCheats = findVar(cvar, "sv_cheats");
     LogFormat("[NorthstarPS4] cvar probe vtable=%p FindVar[16]=%p sv_cheats=%p\n",
         vtable, vtable[16], svCheats);
+    ProbeAuthConVars(cvar, findVar, engineBase, engineSize);
+    ApplyAtlasIdentity(cvar, findVar);
+    AllowMultiplayerMenu(cvar, findVar);
     // Always validated and resolved now: ns_allow_team_change and
     // ns_has_agreed_to_send_token below are unconditional, proven-required
     // registrations, not just the diagnostic/experimental ones.
@@ -1014,6 +1023,25 @@ void ProbeCvarInterface(
     LogFormat("[NorthstarPS4] ns_has_agreed_to_send_token convar registration result=%p expected=%p success=%d default=1 flags=0\n",
         agreedToSendTokenRegistered, agreedToSendTokenConVar,
         agreedToSendTokenRegistered == agreedToSendTokenConVar ? 1 : 0);
+
+    // ns_auth_allow_insecure: a server-side Northstar convar the *client* UI
+    // also reads. `ui/atlas_auth.nut` and `ui/panel_mainmenu.nut` both call
+    // `GetConVarBool("ns_auth_allow_insecure")`, and on this build that lookup
+    // raised `SCRIPT ERROR: [UI] ConVar ns_auth_allow_insecure is not valid`.
+    // It only began firing once master-server authentication started reporting
+    // true, because until then the surrounding branches short-circuited before
+    // reaching it. Registered with upstream's default of "0" so the client
+    // behaves as an ordinary authenticated client rather than skipping checks.
+    alignas(16) static std::uint8_t authAllowInsecureConVar[0x90]{};
+    void* authAllowInsecureRegistered = findVar(cvar, "ns_auth_allow_insecure");
+    if (authAllowInsecureRegistered == nullptr) {
+        constructor(authAllowInsecureConVar, "ns_auth_allow_insecure", "0", 0,
+            "Skip player authentication checks", nullptr);
+        authAllowInsecureRegistered = findVar(cvar, "ns_auth_allow_insecure");
+    }
+    LogFormat("[NorthstarPS4] ns_auth_allow_insecure convar registration result=%p expected=%p success=%d default=0 flags=0\n",
+        authAllowInsecureRegistered, authAllowInsecureConVar,
+        authAllowInsecureRegistered == authAllowInsecureConVar ? 1 : 0);
 
 #if defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
     ProbeModMetadata(cvar, findVar, engineBase, engineSize);
@@ -1574,6 +1602,9 @@ std::size_t NormalizeRequestedPath(const char* in, char* out, std::size_t capaci
 bool ModReadFromCache(void* self, const char* fileName, void* result) noexcept {
     char normalized[256]{};
     if (NormalizeRequestedPath(fileName, normalized, sizeof(normalized))) {
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+        if (!std::strcmp(normalized, "cfg/server/persistent_player_data_version_929.pdef")) return false;
+#endif
         for (int i = g_modRootCount - 1; i >= 0; --i) {
             char candidate[384]{};
             const int n = std::snprintf(candidate, sizeof(candidate), "%s/%s", g_modRoots[i], normalized);
@@ -1674,7 +1705,24 @@ bool BuildRuntimeManifest(void* self) noexcept {
     std::string initBlocks, modBlocks;
     ModDiscovery discovery{};
     CollectModNames(discovery);
-    int scriptCount = 0;
+    // Collected rather than appended directly, so a script path declared by
+    // more than one mod is resolved instead of emitted twice. The engine treats
+    // a repeat as fatal:
+    //
+    //   FatalError: Script "_custom_codecallbacks_client.gnut" is being loaded
+    //               more than once from "scripts/vscripts/scripts.rson"
+    //
+    // which is exactly what an override looks like - Northstar.PS4 ships its
+    // own copy of a script Northstar.Client also ships. The file overlay
+    // already resolves that by walking mod roots backwards so the highest
+    // LoadPriority wins; the manifest has to agree, or the overlay serves one
+    // file while the manifest asks for it twice.
+    //
+    // `discovery` is ordered by ascending LoadPriority, so last-wins matches
+    // both the overlay and PC's AddSearchPath semantics. The first occurrence
+    // keeps its position, because scripts.rson order is load order and an
+    // override should not reorder anything around it.
+    std::vector<std::pair<std::string, std::string>> scripts;  // normalized path, RunOn
     for (int i = 0; i < discovery.count; ++i) {
         char metadataPath[256]{};
         std::snprintf(metadataPath, sizeof(metadataPath), "%s/%s/mod.json", kModsRoot, discovery.names[i]);
@@ -1705,17 +1753,28 @@ bool BuildRuntimeManifest(void* self) noexcept {
                 !JsonExtractString(whenValue, when, sizeof(when)) ||
                 !NormalizeRequestedPath(path[0] == '/' ? path + 1 : path, normalized, sizeof(normalized)) ||
                 std::strpbrk(when, "\"\r\n") || std::strpbrk(path, "\"\r\n[]")) { LogFormat("[NorthstarPS4] manifest rejected mod=%s script=%s\n", info.name, path); return false; }
-            modBlocks += "When: \"";
-            modBlocks += when;
-            modBlocks += "\"\nScripts:\n[\n";
-            modBlocks += normalized;
-            modBlocks += "\n]\n";
-            ++scriptCount;
+            auto existing = scripts.end();
+            for (auto it = scripts.begin(); it != scripts.end(); ++it)
+                if (it->first == normalized) { existing = it; break; }
+            if (existing != scripts.end()) {
+                LogFormat("[NorthstarPS4] manifest override mod=%s script=%s\n", info.name, normalized);
+                existing->second = when;
+            } else {
+                scripts.emplace_back(normalized, when);
+            }
             entries = JsonSkipWs(JsonSkipValue(entries));
             if (*entries != ',') break;
             entries = JsonSkipWs(entries + 1);
         }
     }
+    for (const auto& script : scripts) {
+        modBlocks += "When: \"";
+        modBlocks += script.second;
+        modBlocks += "\"\nScripts:\n[\n";
+        modBlocks += script.first;
+        modBlocks += "\n]\n";
+    }
+    const int scriptCount = static_cast<int>(scripts.size());
     // Runtime compiled cache, like PC Northstar. Retail archives and mod sources
     // are only read. Init declarations precede scripts that reference their types.
     mkdir("/data/northstar_ps4", 0777);
@@ -1729,6 +1788,7 @@ bool BuildRuntimeManifest(void* self) noexcept {
 }
 
 #include "runtime_keyvalues.inl"
+#include "runtime_persistence_schema.inl"
 #endif
 
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
@@ -1737,6 +1797,9 @@ bool BuildRuntimeManifest(void* self) noexcept {
 // the engine allocates for the original and truncates the rest.
 std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noexcept {
     char normalized[256]{};
+    if ((!pathID || !std::strcmp(pathID, "GAME")) &&
+        NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
+        !std::strcmp(normalized, kPs4PdefPath) && PreparePersistenceSchema(self)) return g_pdefSize;
     if (kKeyValuesMergeEnabled && NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
         IsKeyValuePatched(normalized)) {
         std::uint64_t size = 0;
@@ -1752,10 +1815,14 @@ std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noex
 
 #include "runtime_vpks.inl"
 #include "runtime_rpaks.inl"
+#include "runtime_server_vm.inl"
 #include "runtime_console.inl"
+#include "runtime_http.inl"
 
 void* ModOpenEx(void* self, const char* fileName, const char* mode,
     std::uint32_t flags, const char* pathID, char** resolved) noexcept {
+    // server.prx arrives mid-map-load; this is the earliest hot path that sees it.
+    TryInstallServerVm();
     // Catch preload archives when the engine mounted its initial stock set
     // before our interface hook was installed. Run on the engine reader thread.
     if (fileName && std::strstr(fileName, "scripts/vscripts/scripts.rson"))
@@ -1778,6 +1845,15 @@ void* ModOpenEx(void* self, const char* fileName, const char* mode,
     }
 #endif
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    if (readOnly && (!pathID || !std::strcmp(pathID, "GAME")) &&
+        NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
+        !std::strcmp(normalized, kPs4PdefPath) && PreparePersistenceSchema(self)) {
+        void* handle = g_originalFsOpenEx(self, kGeneratedPdef, mode, flags, pathID, resolved);
+        if (handle) {
+            LogFormat("[NorthstarPS4] persistence schema served bytes=%llu\n", static_cast<unsigned long long>(g_pdefSize));
+            return handle;
+        }
+    }
     // KeyValues patches. A patched file is merged on its first request and the
     // single complete result is served in its place; later requests reuse it.
     // If the merge fails for any reason this falls through to the stock file,

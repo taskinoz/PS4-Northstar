@@ -6,6 +6,8 @@ The project now targets the PC Northstar install layout. Mods retain their origi
 
 **This is not yet a drop-in replacement for the PC launcher.** The runtime-manifest build completes UI startup, supports CLIENT lifecycle hooks and KeyValues overrides, and mounts enabled mods' VPKs through the PS4 filesystem. Reading the shipped BT model from Northstar.Custom is verified; rendering, RPAKs and several Northstar services remain incomplete. See [docs/GOALS.md](docs/GOALS.md).
 
+For the current feature-completeness roadmap and agent handoff, use [docs/GOALS.md](docs/GOALS.md). The [native API inventory](docs/NATIVE-API-INVENTORY.md) maps the pinned PC registrations to PS4 handlers and can be regenerated from source. Historical technical notes do not override the current tracker.
+
 ## Layout
 
 ```text
@@ -50,3 +52,5 @@ UI mod-setting changes are saved under guest `/data/northstar_ps4/enabledmods.js
 `launcher/include/northstar_ps4/mod_catalog.h` contains portable metadata, enabled-state and ordering policy. `launcher/src/runtime.cpp` contains PS4 module/ABI discovery and engine adapters. `Build-Stage2Poc.ps1` remains available for isolated diagnostic builds. `Invoke-Stage2Iteration.ps1` builds/deploys the PRX and observes emulator logs; it no longer generates script manifests.
 
 Run `.\scripts\Test-NorthstarProfile.ps1` for host catalog and package tests. Game data, extracted archives, downloaded reference sources, toolchains and generated output stay outside Git (`tools/`, `work/`, `dist/`).
+
+Development automation: [AI.Harness installation and commands](docs/AI-HARNESS.md).

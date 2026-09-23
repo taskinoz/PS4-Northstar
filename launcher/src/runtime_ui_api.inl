@@ -119,27 +119,77 @@ int ReloadMods(void* vm) {
     LogFormat("[NorthstarPS4] enabled settings committed; restart required to reload script VMs\n");
     return Error(vm, "Mod settings saved. Restart the game to apply them; live VM reload is not implemented on PS4");
 }
-// Transport is deliberately explicit: no PS4 Atlas session exists until the
-// networking backend is ported. Failed requests finish instead of hanging UI.
+// Most of these stay explicit about being unimplemented: a request that cannot
+// work should finish with a reason rather than hang the UI.
+//
+// Master-server authentication is the exception, and is no longer
+// unconditionally off. When an Atlas identity has been imported - see
+// runtime_auth.inl - the session is real; when it has not, the reason says how
+// to get one instead of only that it failed.
 std::string authFailure;
+// Result of the most recent auth attempt, which is what NSWasAuthSuccessful
+// reports. Kept separate from the identity state: having an identity is not the
+// same as having tried to use it.
+bool authSucceeded = false;
 int Authenticated(void* vm) { Boolean(vm, false); return 1; }
-int TryLocalAuth(void*) { authFailure = "Authentication is disabled in this Northstar PS4 build"; LogFormat("[NorthstarPS4] %s\n", authFailure.c_str()); return 0; }
-int TryRemoteAuth(void* vm) { return Error(vm, "No Northstar server list is available for authentication"); }
-int AuthFailReason(void* vm) { String(vm, authFailure.c_str()); return 1; }
+int MasterServerAuthenticated(void* vm) { Boolean(vm, AtlasIdentityReady()); return 1; }
+int AuthSuccessful(void* vm) { Boolean(vm, authSucceeded); return 1; }
+
+// "Launch Northstar" calls this, waits for NSIsAuthenticatingWithServer to go
+// false, then branches on NSWasAuthSuccessful: success runs
+// NSCompleteAuthWithLocalServer followed by `setplaylist tdm` and
+// `map mp_lobby`, which is what actually starts the local lobby and puts the
+// Northstar menus up. Failure shows NSGetAuthFailReason in a dialog.
+//
+// There is nothing to negotiate here. PC authenticates with its own server
+// through Atlas because its server half enforces auth; this port does not hook
+// server.prx at all, so the local lobby has no Northstar auth to satisfy. An
+// imported identity is therefore sufficient, and the attempt completes
+// immediately - NSIsAuthenticatingWithServer already reports false.
+int TryLocalAuth(void*) {
+    authSucceeded = AtlasIdentityReady();
+    authFailure = authSucceeded ? std::string() : std::string(AtlasIdentityMessage());
+    LogFormat("[NorthstarPS4] local server auth %s%s%s\n",
+        authSucceeded ? "succeeded" : "refused",
+        authSucceeded ? "" : ": ", authSucceeded ? "" : authFailure.c_str());
+    return 0;
+}
+int TryRemoteAuth(void* vm) {
+    authSucceeded = false;
+    return Error(vm, "No Northstar server list is available for authentication");
+}
+// Falls back to the identity message: nothing may have set a reason yet, and an
+// empty string in the menu tells the player nothing.
+int AuthFailReason(void* vm) {
+    String(vm, authFailure.empty() ? AtlasIdentityMessage() : authFailure.c_str());
+    return 1;
+}
 int CompleteAuth(void* vm) { return Error(vm, "No authenticated Northstar connection is pending"); }
+// Distinct from CompleteAuth: raising here would abort the script between the
+// success branch and the `map mp_lobby` that follows it, so the lobby would
+// never start even though authentication had succeeded.
+int CompleteLocalAuth(void* vm) {
+    if (!authSucceeded) return Error(vm, AtlasIdentityMessage());
+    LogFormat("[NorthstarPS4] local server auth completed; lobby launch follows\n");
+    return 0;
+}
 int ServerCount(void* vm) { Integer(vm, 0); return 1; }
 int GameServers(void* vm) { Array(vm); return 1; }
 int RequestServers(void*) { LogFormat("[NorthstarPS4] server-list request failed: transport unavailable\n"); return 0; }
 int ClearServers(void*) { return 0; }
 int AuthResult(void* vm) {
     Struct(vm, 3);
-    Boolean(vm, false); Seal(vm, 0);
-    String(vm, "PS4_AUTH_DISABLED"); Seal(vm, 1);
-    String(vm, "Authentication is disabled in this Northstar PS4 build"); Seal(vm, 2);
+    Boolean(vm, AtlasIdentityReady()); Seal(vm, 0);
+    String(vm, AtlasIdentityCode()); Seal(vm, 1);
+    String(vm, AtlasIdentityMessage()); Seal(vm, 2);
     return 1;
 }
 int RequestPromos(void*) { LogFormat("[NorthstarPS4] custom promo request failed: transport unavailable\n"); return 0; }
 int PromoData(void* vm) { return Error(vm, "Custom promo data is unavailable"); }
+// PC reports the mouse cursor. This platform is driven by a gamepad and has
+// no cursor to report, and the declared return type is "vector ornull", so
+// null is the honest answer rather than an invented coordinate.
+int CursorPosition(void*) { return 0; }
 // Match PC Northstar's defined behavior when its downloader is absent.
 // This completes the script ABI, not the download transport implementation.
 int DownloadUnavailable(void*) {
@@ -211,13 +261,76 @@ int CallingModName(void* vm) {
     return 1;
 }
 
+// SERVER-context natives.
+//
+// The SERVER VM compiles the same Northstar scripts the other two contexts do,
+// so every native those scripts name has to exist by the time they compile or
+// the load stops dead:
+//
+//   FatalError: sh_loadouts.nut: SERVER SCRIPT COMPILE ERROR:
+//               Undefined variable "NSDisconnectPlayer"
+//
+// These are the SERVER-only half of PC Northstar's native surface - the
+// entries above carrying kCtxServer cover the shared half. The implementations
+// are minimal but not fictional: each returns what is actually true of this
+// port, and the ones that would need engine plumbing this module has not
+// mapped yet say so in the log the first time a script calls them, rather than
+// quietly behaving as though they worked.
+enum ServerStub { kStubDisconnect, kStubClientPrint, kStubBroadcast, kStubPersistence, kStubMapNames, kStubSendMessage, kStubCount };
+bool serverStubWarned[kStubCount]{};
+void WarnServerStub(int stub, const char* name) {
+    if (serverStubWarned[stub]) return;
+    serverStubWarned[stub] = true;
+    LogFormat("[NorthstarPS4] native %s has no implementation on this port\n", name);
+}
+
+// PC reads the local player's Origin UID out of the engine; this port already
+// has it from the imported Atlas identity, and an empty string when nothing
+// has been imported - which is the same thing PC reports when not logged in.
+int ServerLocalPlayerUid(void* vm) { String(vm, g_atlasUid); return 1; }
+
+// Hosting a listen server on the console the identity belongs to means the
+// player this VM is asked about is the local one. Telling remote players apart
+// needs the client-array walk PC does, which is not mapped yet, so this is
+// correct for the lobby and private matches and optimistic beyond them.
+int ServerIsLocalPlayer(void* vm) { Boolean(vm, true); return 1; }
+
+// There is no dedicated-server build for this platform.
+int ServerIsDedicated(void* vm) { Boolean(vm, false); return 1; }
+
+// Persistence is never written by this module, so a write is never in flight.
+int ServerWritingPersistence(void* vm) { Boolean(vm, false); return 1; }
+int ServerWritePersistenceForLeave(void*) { WarnServerStub(kStubPersistence, "NSEarlyWritePlayerPersistenceForLeave"); return 0; }
+
+int ServerDisconnectPlayer(void* vm) { WarnServerStub(kStubDisconnect, "NSDisconnectPlayer"); Boolean(vm, false); return 1; }
+int ServerSendClientPrint(void*) { WarnServerStub(kStubClientPrint, "NSSendClientPrint"); return 0; }
+int ServerBroadcastMessage(void*) { WarnServerStub(kStubBroadcast, "NSBroadcastMessage"); return 0; }
+int ServerSendMessage(void*) { WarnServerStub(kStubSendMessage, "NSSendMessage"); return 0; }
+
+// PC returns the maps the server has loaded from disk. Enumerating those needs
+// the engine's map list, so the array is empty rather than invented.
+int ServerLoadedMapNames(void* vm) { WarnServerStub(kStubMapNames, "NSGetLoadedMapNames"); Array(vm); return 1; }
+
+// Userinfo convars are per-connected-client state this module does not read
+// yet, so each of these hands back the default the caller supplied. Echoing
+// the argument's own tag keeps the declared return type exact for the numeric
+// and boolean variants; strings and assets are pushed afresh so the new
+// reference is counted rather than aliasing the argument's.
+int UserInfoKvPrimitive(void* vm) { const auto& fallback = Arg(vm, 3); PushPrimitive(vm, fallback.tag, fallback.value); return 1; }
+int UserInfoKvString(void* vm) { const auto& fallback = Arg(vm, 3); String(vm, (fallback.tag & 0x08000000) ? reinterpret_cast<const char*>(fallback.value + 0x30) : ""); return 1; }
+int UserInfoKvAsset(void* vm) { const auto& fallback = Arg(vm, 3); Asset(vm, (fallback.tag & 0x08000000) ? reinterpret_cast<const char*>(fallback.value + 0x30) : ""); return 1; }
+
 // Script contexts a native is registered into, matching PC's ADD_SQFUNC
-// masks. SERVER is recorded for completeness; server.prx is not hooked yet,
-// so nothing registers into it.
+// masks. SERVER entries are live now that server.prx is hooked: they are
+// registered from RuntimeServerVmInit rather than from the client VM hook.
 constexpr int kCtxClient = 1, kCtxUi = 2, kCtxServer = 4;
 constexpr int kCtxAll = kCtxClient | kCtxUi | kCtxServer;
 struct Registration { const char* name; const char* returns; const char* args; int (*function)(void*); int contexts; };
+#include "runtime_ai_harness.inl"
 const Registration registrations[] = {
+    {"NSAIHarnessField", "string", "string json, string key", HarnessField, kCtxUi},
+    {"NSAIHarnessRead", "string", "", HarnessRead, kCtxUi},
+    {"NSAIHarnessReply", "void", "string response", HarnessReply, kCtxUi},
     {"NS_InternalMakeHttpRequest", "int", "int method, string baseUrl, table<string, array<string> > headers, table<string, array<string> > queryParams, string contentType, string body, int timeout, string userAgent", HttpUnavailable, kCtxAll},
     {"NSIsHttpEnabled", "bool", "", Authenticated, kCtxAll},
     {"NSIsLocalHttpAllowed", "bool", "", Authenticated, kCtxAll},
@@ -226,18 +339,18 @@ const Registration registrations[] = {
     {"NSDownloadMod", "void", "string name, string version", DownloadUnavailable, kCtxAll},
     {"NSGetModInstallState", "ModInstallState", "", ModInstallState, kCtxAll},
     {"NSCancelModDownload", "void", "", CancelDownload, kCtxAll},
-    {"NSIsMasterServerAuthenticated", "bool", "", Authenticated, kCtxUi},
+    {"NSIsMasterServerAuthenticated", "bool", "", MasterServerAuthenticated, kCtxUi},
     {"NSGetMasterServerAuthResult", "MasterServerAuthResult", "", AuthResult, kCtxUi},
     {"NSTryAuthWithLocalServer", "void", "", TryLocalAuth, kCtxUi},
     {"NSTryAuthWithServer", "void", "int serverIndex, string password = ''", TryRemoteAuth, kCtxUi},
     {"NSIsAuthenticatingWithServer", "bool", "", Authenticated, kCtxUi},
-    {"NSWasAuthSuccessful", "bool", "", Authenticated, kCtxUi},
+    {"NSWasAuthSuccessful", "bool", "", AuthSuccessful, kCtxUi},
     {"NSGetAuthFailReason", "string", "", AuthFailReason, kCtxUi},
-    {"NSCompleteAuthWithLocalServer", "void", "", CompleteAuth, kCtxUi},
+    {"NSCompleteAuthWithLocalServer", "void", "", CompleteLocalAuth, kCtxUi},
     {"NSConnectToAuthedServer", "void", "", CompleteAuth, kCtxUi},
     {"NSRequestServerList", "void", "", RequestServers, kCtxUi},
     {"NSIsRequestingServerList", "bool", "", Authenticated, kCtxUi},
-    {"NSMasterServerConnectionSuccessful", "bool", "", Authenticated, kCtxUi},
+    {"NSMasterServerConnectionSuccessful", "bool", "", MasterServerAuthenticated, kCtxUi},
     {"NSGetServerCount", "int", "", ServerCount, kCtxUi},
     {"NSClearRecievedServerList", "void", "", ClearServers, kCtxUi},
     {"NSGetGameServers", "array<ServerInfo>", "", GameServers, kCtxUi},
@@ -260,13 +373,35 @@ const Registration registrations[] = {
     {"NSRequestCustomMainMenuPromos", "void", "", RequestPromos, kCtxUi},
     {"NSHasCustomMainMenuPromoData", "bool", "", Authenticated, kCtxUi},
     {"NSGetCustomMainMenuPromoData", "var", "int promoDataKey", PromoData, kCtxUi},
+    {"NSGetCursorPosition", "vector ornull", "", CursorPosition, kCtxUi},
     {"NSChatWrite", "void", "int context, string text", ChatWrite, kCtxClient},
     {"NSChatWriteLine", "void", "int context, string text", ChatWriteLine, kCtxClient},
     {"NSChatWriteRaw", "void", "int context, string text", ChatWriteRaw, kCtxClient},
     {"NSSendMessage", "void", "string message, bool isIngame, bool isTeam", SendMessage, kCtxClient},
+    // Same name as the CLIENT native above, and deliberately a separate
+    // entry: PC declares NSSendMessage twice, once per context, with
+    // different arguments. The client one sends the local player's chat;
+    // the server one relays a named player's message to everyone.
+    {"NSSendMessage", "void", "int playerIndex, string text, bool isTeam", ServerSendMessage, kCtxServer},
     {"StringToAsset", "asset", "string assetName", ToAsset, kCtxAll},
     {"NSGetCurrentModName", "string", "", CurrentModName, kCtxAll},
     {"NSGetCallingModName", "string", "int depth = 0", CallingModName, kCtxAll},
+    // Mostly SERVER-only. Registered through server.prx's own registrar -
+    // see RegisterServerNatives in runtime_server_vm.inl.
+    {"NSGetLocalPlayerUID", "string", "", ServerLocalPlayerUid, kCtxAll},
+    {"NSIsPlayerLocalPlayer", "bool", "entity player", ServerIsLocalPlayer, kCtxServer},
+    {"NSIsDedicated", "bool", "", ServerIsDedicated, kCtxServer},
+    {"NSIsWritingPlayerPersistence", "bool", "", ServerWritingPersistence, kCtxServer},
+    {"NSEarlyWritePlayerPersistenceForLeave", "void", "entity player", ServerWritePersistenceForLeave, kCtxServer},
+    {"NSDisconnectPlayer", "bool", "entity player, string reason", ServerDisconnectPlayer, kCtxServer},
+    {"NSSendClientPrint", "void", "entity player, string msg", ServerSendClientPrint, kCtxServer},
+    {"NSBroadcastMessage", "void", "int fromPlayerIndex, int toPlayerIndex, string text, bool isTeam, bool isDead, int messageType", ServerBroadcastMessage, kCtxServer},
+    {"NSGetLoadedMapNames", "array<string>", "", ServerLoadedMapNames, kCtxAll},
+    {"GetUserInfoKVString_Internal", "string", "entity player, string key, string defaultValue = \"\"", UserInfoKvString, kCtxServer},
+    {"GetUserInfoKVAsset_Internal", "asset", "entity player, string key, asset defaultValue = $\"\"", UserInfoKvAsset, kCtxServer},
+    {"GetUserInfoKVInt_Internal", "int", "entity player, string key, int defaultValue = 0", UserInfoKvPrimitive, kCtxServer},
+    {"GetUserInfoKVFloat_Internal", "float", "entity player, string key, float defaultValue = 0", UserInfoKvPrimitive, kCtxServer},
+    {"GetUserInfoKVBool_Internal", "bool", "entity player, string key, bool defaultValue = false", UserInfoKvPrimitive, kCtxServer},
 };
 } // namespace uiapi
 bool RegisterRuntimeUiNatives(void* owner, int context, bool deferred = false) noexcept {

@@ -39,6 +39,7 @@ VmLifecycle* RuntimeLifecycleFor(int context) noexcept {
 // declared but never defined must not stop the mods that load after it.
 // Defined in runtime_console.inl, which is included later in the same unit.
 void RunConsoleSelfTest() noexcept;
+void RunHttpProbe() noexcept;
 void DrainConsoleCommandFile() noexcept;
 
 bool DispatchLifecycle(VmLifecycle& state, void* owner, const char* callback) noexcept {
@@ -60,6 +61,7 @@ bool DispatchLifecycle(VmLifecycle& state, void* owner, const char* callback) no
     // Late enough that the engine's command system is up, and it runs again on
     // every map and menu change, which is what gives queued commands a tick.
     RunConsoleSelfTest();
+    RunHttpProbe();
     DrainConsoleCommandFile();
     return result;
 }

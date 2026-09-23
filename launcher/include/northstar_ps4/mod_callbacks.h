@@ -33,4 +33,17 @@ inline bool ParseScriptCallbacks(const char* json, const char* contextKey, std::
         else return false;
     }
 }
+// PC continues after a missing mod callback and returns only the engine
+// callback's result. Keeping the order here makes that contract host-testable.
+template <typename Invoke>
+bool DispatchScriptInitCallbacks(const std::vector<ScriptCallback>& entries,
+                                 const char* original, Invoke&& invoke) {
+    for (const auto& entry : entries)
+        if (!entry.before.empty()) invoke(entry.before.c_str(), "Before");
+    const bool result = invoke(original, "Original");
+    for (const auto& entry : entries)
+        if (!entry.after.empty()) invoke(entry.after.c_str(), "After");
+    return result;
+}
+
 }

@@ -2,7 +2,8 @@
 param(
     [string] $Config = (Join-Path $PSScriptRoot '..\config\local.json'),
     [string] $Output = (Join-Path $PSScriptRoot '..\dist\northstar-profile'),
-    [switch] $IncludePs4CompatibilityMods
+    [switch] $IncludePs4CompatibilityMods,
+    [switch] $IncludeAIHarness
 )
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -15,11 +16,13 @@ if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Mod sour
 if (Test-Path -LiteralPath $outputRoot) { throw "Output already exists: $outputRoot. Choose a fresh -Output directory." }
 $profile = Join-Path $outputRoot 'R2Northstar'
 $sources = @($source)
-if ($IncludePs4CompatibilityMods) { $sources += Join-Path $repositoryRoot 'mods' }
+if ($IncludePs4CompatibilityMods -or $IncludeAIHarness) { $sources += Join-Path $repositoryRoot 'mods' }
 $folders = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 $plan = [Collections.Generic.List[object]]::new()
 foreach ($modRoot in $sources) {
     foreach ($directory in (Get-ChildItem -LiteralPath $modRoot -Directory | Sort-Object Name)) {
+        if ($directory.Name -eq 'AI.Harness' -and -not $IncludeAIHarness) { continue }
+        if ($modRoot -eq (Join-Path $repositoryRoot 'mods') -and -not $IncludePs4CompatibilityMods -and $directory.Name -ne 'AI.Harness') { continue }
         $metadata = Join-Path $directory.FullName 'mod.json'
         if (-not (Test-Path -LiteralPath $metadata -PathType Leaf)) { continue }
         if (-not $folders.Add($directory.Name)) { throw "Duplicate mod folder: $($directory.Name)" }

@@ -81,7 +81,7 @@ if ($EnableM6Localise) {
 if ($EnableRuntimeManifest) { $runtimeCompileArgs = @('-DNORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST=1') + $runtimeCompileArgs }
 & $clang @runtimeCompileArgs
 if ($LASTEXITCODE) { throw "OpenOrbis runtime compile failed: $LASTEXITCODE" }
-$linkArgs = @('-m','elf_x86_64','-pie','--script',(Join-Path $sourceRoot 'link.x'),'--eh-frame-hdr','-L',(Join-Path $toolchainRoot 'lib'),$object,$runtimeObject,'-lc','-lc++','-lkernel',(Join-Path $toolchainRoot 'lib\crtlib.o'),'-o',$elf)
+$linkArgs = @('-m','elf_x86_64','-pie','--script',(Join-Path $sourceRoot 'link.x'),'--eh-frame-hdr','-L',(Join-Path $toolchainRoot 'lib'),$object,$runtimeObject,'-lc','-lc++','-lkernel','-lSceNet','-lSceSsl','-lSceHttp',(Join-Path $toolchainRoot 'lib\crtlib.o'),'-o',$elf)
 & $lld @linkArgs
 if ($LASTEXITCODE) { throw "OpenOrbis link failed: $LASTEXITCODE" }
 # shadPS4 starts PRX DT_INIT but does not currently invoke OpenOrbis's hidden module_start.

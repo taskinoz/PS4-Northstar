@@ -1,0 +1,7 @@
+{
+  "Name": "AI.Harness",
+  "Description": "Opt-in local automation for PS4 Northstar development.",
+  "Version": "0.1.0",
+  "LoadPriority": 100,
+  "Scripts": [{"Path":"ui/ai_harness.nut","RunOn":"UI","UICallback":{"After":"AIHarness_Init"}}]
+}

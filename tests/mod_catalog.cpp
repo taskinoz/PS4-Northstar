@@ -77,6 +77,23 @@ int main() {
     assert(callbacks.size() == 2); // invalid input does not partially replace the callback set
     assert(ParseScriptCallbacks("{}", "UICallback", callbacks) && callbacks.empty());
 
+    // A missing mod callback must not suppress later callbacks; only the
+    // engine callback controls the return value (also when it fails).
+    assert(ParseScriptCallbacks(R"({"Scripts":[
+        {"ServerCallback":{"Before":"Missing","After":"SvLoadoutsMP_Init"}},
+        {"ServerCallback":{"Before":"Progression_Init","After":"Final"}},
+        {"ClientCallback":{"Before":"WrongContext"}}
+    ]})", "ServerCallback", callbacks));
+    std::vector<std::string> calls;
+    assert(!DispatchScriptInitCallbacks(callbacks, "CodeCallback_MapSpawn",
+        [&](const char* name, const char*) {
+            calls.push_back(name);
+            return std::strcmp(name, "Missing") && std::strcmp(name, "CodeCallback_MapSpawn");
+        }));
+    assert((calls == std::vector<std::string>{"Missing", "Progression_Init", "CodeCallback_MapSpawn", "SvLoadoutsMP_Init", "Final"}));
+    assert(DispatchScriptInitCallbacks(callbacks, "CodeCallback_MapSpawn",
+        [](const char* name, const char*) { return !std::strcmp(name, "CodeCallback_MapSpawn"); }));
+
     // Safe I/O policy: each mod may only reach paths inside its own folder.
     assert(SavePathSafe("data.json"));
     assert(SavePathSafe("nested/data.json"));

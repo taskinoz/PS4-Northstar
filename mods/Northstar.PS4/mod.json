@@ -5,10 +5,6 @@
   "LoadPriority": 99,
   "Scripts": [
     {
-      "Path": "_custom_codecallbacks_client.gnut",
-      "RunOn": "CLIENT"
-    },
-    {
       "Path": "ui/ns_ps4_presence_stub.nut",
       "RunOn": "UI || CLIENT"
     }
