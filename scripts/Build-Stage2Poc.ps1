@@ -125,9 +125,9 @@ $buildInfo = [ordered]@{
     runtimeManifest = [bool]$EnableRuntimeManifest
     filesystemOverrides = [bool]$EnableM6FsOverlay
     lateScriptInjection = [bool]$EnableM6ScriptInject
-    authentication = 'disabled'
+    authentication = 'atlas-imported-identity'
     fullNorthstarCompatibility = $false
-    knownBlocker = 'UI and CLIENT VM lifecycles dispatch, maps load and custom gamemodes run (fastball verified on mp_forwardbase_kodai). Mod KeyValues patches are merged in-module and mod VPKs are mounted. Mod rpak loading is implemented but disabled: the shipped mod paks are PC builds and stall the boot. SERVER VM, chat rendering and Atlas authentication are not implemented.'
+    knownBlocker = 'Atlas identity imported from a PC Northstar client (Export-AtlasCredentials.ps1); server browser and joining work, and the PS4 can host private matches (SERVER VM hooked). Remote matches can time out while shadPS4 compiles shaders after a map load, and returning to the lobby after a match crashes shadPS4 (a GPU-thread race on freed memory in the emulator). Mod rpak loading is implemented but disabled: the shipped mod paks are PC builds and stall the boot.'
 }
 $buildInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputRoot 'northstar_ps4.build.json') -Encoding UTF8
 [pscustomobject]@{ File=$file.FullName; Bytes=$file.Length; SHA256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); Toolchain=$toolchainRoot }
