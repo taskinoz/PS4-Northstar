@@ -49,6 +49,11 @@ void* ServerJoinWorker(void*) noexcept {
         // Parsed whatever the status: Atlas puts the reason for a 4xx/5xx in
         // the body.
         ParseServerAuthResponse(joinBuffer, joinResult);
+        // PC answers these by re-authenticating with Origin and retrying; the
+        // PS4 has only the imported token, so the dialog says how to renew it.
+        if (joinResult.errorEnum == "INVALID_MASTERSERVER_TOKEN" || joinResult.errorEnum == "PLAYER_NOT_FOUND")
+            joinResult.failureReason += ". Re-export atlas_identity.json with scripts/Export-AtlasCredentials.ps1 "
+                "while PC Northstar is signed in.";
     }
     if (joinResult.success)
         LogFormat("[NorthstarPS4] server auth succeeded: %s:%d\n", joinResult.ip.c_str(), joinResult.port);

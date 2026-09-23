@@ -259,6 +259,7 @@ inline bool IsAuthToken(const std::string& token) {
 struct ServerAuthResponse {
     bool success = false;
     std::string ip, authToken, failureReason;
+    std::string errorEnum;  // Atlas's error.enum, when it sent one
     int port = 0;
 };
 
@@ -273,6 +274,7 @@ inline bool ParseServerAuthResponse(const char* text, ServerAuthResponse& out) {
     const char* root = text ? JsonSkipWs(text) : nullptr;
     if (!root || *root != '{') return false;
     if (const char* error = JsonFindMember(root, "error")) {
+        if (!DecodeJsonString(JsonFindMember(error, "enum"), out.errorEnum)) out.errorEnum.clear();
         std::string reason;
         if (DecodeJsonString(JsonFindMember(error, "msg"), reason) && !reason.empty())
             out.failureReason = reason;

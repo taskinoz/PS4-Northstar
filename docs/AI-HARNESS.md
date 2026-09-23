@@ -23,12 +23,15 @@ From the repository in PowerShell:
 ./scripts/Send-AIHarnessCommand.ps1 -Action console -Command 'disconnect'
 ./scripts/Send-AIHarnessCommand.ps1 -Action menu -Menu 'MainMenu'
 ./scripts/Send-AIHarnessCommand.ps1 -Action back
+./scripts/Send-AIHarnessCommand.ps1 -Action json -Command '{"a":1,"b":[true,"x"]}'
 
 # Explicitly submit the legacy console.txt contents (file remains intact).
 ./scripts/Send-AIHarnessCommand.ps1 -FromConsoleFile
 ```
 
 `launch` follows Northstar's local authentication sequence, completes local authentication, then queues `setplaylist tdm` and `map mp_lobby`. Authentication failure is returned as an error. A successful reply says **queued**, not that the map loaded successfully. Check the fresh session log for script errors and actual lobby readiness. `status` confirms the UI polling thread is responding and now reports `connected`, `lobby`, and `level` from game state. These do not prove that every initialization callback succeeded; also inspect the current session for script errors.
+
+`json` passes `-Command` through `DecodeJSON(text, true)` and `EncodeJSON` and returns the result in the reply's `json` field, to test the JSON natives in the UI VM. Member order follows the Squirrel table, not the input.
 
 `menu` opens a registered menu and `back` closes the active menu. These are script operations, not physical button clicks. Arbitrary button event injection and controller emulation are not implemented.
 
@@ -38,4 +41,4 @@ The helper publishes a UTF-8 JSON request atomically, with a unique ID and a 16 
 
 A timeout is an unknown outcome, not cancellation. Inspect `request.json`, `claimed.json`, `response.json` and the current game log before retrying. A crash after consumption does not replay the request on restart. If a stale request needs removing, first stop the game and check its ID. Do not send credentials through console commands or log them.
 
-The legacy native console dispatcher remains disabled because its profiled address sends commands to a server instead of executing locally. Its reader now leaves console.txt untouched while disabled. Use the explicit helper import above. The harness deliberately avoids the currently incomplete HTTP callback API and Squirrel DecodeJSON table insertion path.
+The legacy native console dispatcher remains disabled because its profiled address sends commands to a server instead of executing locally. Its reader now leaves console.txt untouched while disabled. Use the explicit helper import above. The harness's own request parsing still uses its native field reader rather than DecodeJSON, and it avoids the incomplete HTTP callback API.

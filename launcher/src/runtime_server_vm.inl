@@ -86,6 +86,8 @@ bool RegisterServerConstants(void* owner) noexcept {
         ++*reinterpret_cast<std::uint32_t*>(static_cast<char*>(keyString) + 8);
         const std::uint64_t key[2] = {0x8000010, reinterpret_cast<std::uintptr_t>(keyString)};
         const std::uint64_t value[2] = {0x5000002, static_cast<std::uint64_t>(entry.value)};
+        // 1 for a new slot, 0 when the key landed in an existing node - including
+        // after a rehash, so 0 is not a failure (see TableStoreTop).
         const int result = insert(constants, key, value);
         LogFormat("[NorthstarPS4] SERVER constant name=%s value=%lld result=%d\n",
             entry.name, static_cast<long long>(entry.value), result);

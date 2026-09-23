@@ -24,6 +24,7 @@ void function AIHarness_Poll()
                 id = NSAIHarnessField( raw, "id" )
                 string action = NSAIHarnessField( raw, "action" )
                 string result = "completed"
+                string json = ""
                 if ( action == "launch" )
                 {
                     SetConVarString( "communities_hostname", "" )
@@ -52,9 +53,12 @@ void function AIHarness_Poll()
                     AdvanceMenu( GetMenu( NSAIHarnessField( raw, "menu" ) ) )
                 else if ( action == "back" )
                     CloseActiveMenu()
+                // Round-trips the command text through the natives, for testing them.
+                else if ( action == "json" )
+                    json = EncodeJSON( DecodeJSON( NSAIHarnessField( raw, "command" ), true ) )
                 else if ( action != "status" )
                     throw "Unknown harness action"
-                NSAIHarnessReply( EncodeJSON( { id = id, status = result, action = action, connected = IsConnected(), lobby = IsLobby(), level = GetActiveLevel() } ) )
+                NSAIHarnessReply( EncodeJSON( { id = id, status = result, action = action, connected = IsConnected(), lobby = IsLobby(), level = GetActiveLevel(), json = json } ) )
                 print( "[AI.Harness] " + action + " " + result )
             }
         }

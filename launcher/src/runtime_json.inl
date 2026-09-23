@@ -32,9 +32,21 @@ void Float(void* vm, float value) {
 void Null(void* vm) { PushPrimitive(vm, kSqNull, 0); }
 
 // Stores the value currently on top of the stack into `table` under `key`,
-// then pops it. The client increments the refcount of anything it hands to the
-// table insert (see VA 0x684555), so the same is done here before the pop
-// releases the stack's reference.
+// then pops it.
+//
+// The insert (SQTable::NewSlot, VA 0x6ab3e0) takes its own reference to the
+// value (0x6ab7af / 0x6ab7d3), so none is added here: the reference the client
+// takes at 0x684555 belongs to its local SQObjectPtr and is dropped again at
+// 0x6845ab. Adding one leaked every decoded string, array and table.
+//
+// Its bool is *not* success. It is false whenever the key ends up in an
+// existing node, which includes every insert that grows the table: the key is
+// written into its main position before the free-node search (0x6ab59f), so
+// after Rehash the retry finds it and takes the replace path (0x6ab7e0). That
+// is why a JSON object with more than a few members failed with "string could
+// not be stored", and why the NS_VERSION_PATCH constant logs result=0 while
+// working. Nothing on either path can fail short of allocation, so the result
+// is ignored.
 bool TableStoreTop(void* vm, void* table, const char* key) {
     auto shared = *reinterpret_cast<void**>(static_cast<char*>(vm) + 0x50);
     if (!shared || !table) return false;
@@ -46,12 +58,9 @@ bool TableStoreTop(void* vm, void* table, const char* key) {
     *reinterpret_cast<void**>(static_cast<char*>(keyString) + 0x18) = shared;
     ++*reinterpret_cast<std::uint32_t*>(static_cast<char*>(keyString) + 8);
     const Object keyObject{kSqString, reinterpret_cast<std::uint64_t>(keyString)};
-    Object& value = Top(vm);
-    if (value.tag & 0x08000000)
-        ++*reinterpret_cast<std::uint32_t*>(reinterpret_cast<char*>(value.value) + 8);
-    const bool stored = At<bool (*)(void*, const void*, const void*)>(0x6ab3e0)(table, &keyObject, &value);
+    At<bool (*)(void*, const void*, const void*)>(0x6ab3e0)(table, &keyObject, &Top(vm));
     Pop(vm, 1);
-    return stored;
+    return true;
 }
 
 // Builds Squirrel values as JsonParse walks the document. Every completed

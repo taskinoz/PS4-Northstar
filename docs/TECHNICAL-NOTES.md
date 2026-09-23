@@ -3641,3 +3641,63 @@ without it 2/2 load. The crash follows the main thread's large `sceKernelMunmap`
 from that memory; the probe overhead was delaying the main thread enough for them to
 drain. `kModFileIndexEnabled = false` until the race is fixed in shadPS4 or guarded here.
 This also makes the race reproducible on demand, which is useful for a shadPS4 report.
+
+
+## Level-transition crash, pipeline cache and DecodeJSON (2026-09-24)
+
+**Pipeline cache on for CUSA04013.** `custom_configs/CUSA04013.json` now has
+`pipeline_cache_enabled: true` (backup in `work/stage2/harness-archive/`). The cache is
+written incrementally under `%APPDATA%\shadPS4\cache\CUSA04013`, so a killed session keeps
+what it compiled. Second visit to Kodai: 144 graphics pipeline compiles -> 16, boot 93 s ->
+76 s. This is the fix aimed at the remote-match timeout (229 compiles after load on
+`mp_complex3`); each MP map was then visited once to fill the cache (one boot per map,
+because leaving a map crashes).
+
+**The transition crash is any exit from a loaded map, not just returning to the lobby.**
+Harness hops lobby -> Kodai -> `mp_complex3` crash on the second hop with the same
+`VCRUNTIME140+0x1cca7` on `GpuSchedPriorityPendingOpsRunner`. Emulator: shadPS4 v0.18.1 WIP
+`5b92da8` (Pre-release, 2026-09-16).
+
+**A guest-side unmap delay does not fix it (tested, removed).** The game modules'
+`sceKernelMunmap` imports can be redirected by value: the GOT slot holds the same resolved
+address as this module's own import (`0x7000008c37d0`), and exactly one slot matched in each
+of `titanfall2_ps4`, `libSceLibcInternal`, `libc`, `libSceNpToolkit` and `tier0`. With every
+main-thread (`MainThrd`, matched by `scePthreadGetname`; the UI VM is created on `Thread4`)
+unmap of >= 1 MB of mapped memory delayed 5 ms, and then 50 ms, `mp_complex3` still crashed
+3/3. In the 50 ms run the fault landed during model loading with no unmap nearby. So the
+correlation with large unmaps noted under "Mod file index" was coincidental, and the
+explanation there (probe overhead letting copies drain) is withdrawn. The experiment is in
+the session scratchpad, not the tree.
+
+What the logs do show: the game's texture-streaming threads reserve a range and map only its
+tail (`sceKernelReserveVirtualRange` 0x158000 at `0x694c54000`, then
+`sceKernelMapNamedDirectMemory` 0x8000 at `0x694da4000`), and the GPU command processor
+later tracks the whole range (`UpdatePageWatchers: Tracking memory region 0x694c54000 -
+0x694dab000 which is not fully GPU mapped`). A buffer-cache copy over such a range would
+read uncommitted host pages, which fits a source-side fault in a large memcpy, but no single
+warning precedes every crash, so this is a lead, not a finding. Upstream rewrote the buffer
+manager after this build (`965c97c8`, #5047, "sparse arenas"); the Sept 23 pre-release
+`ca89b01` includes it and is the next thing to test.
+
+**DecodeJSON "string could not be stored" was a misread return value.** 0x6ab3e0 is
+`SQTable::NewSlot`. Its bool is "a new node was created", and it is false whenever the key
+ends up in an existing node. That includes every insert that grows the table, because the key
+is written into its main position (0x6ab59f) before the free-node search, and the retry after
+`Rehash` (0x6ab400) finds it and takes the replace path (`xor eax, eax` at 0x6ab7e0). So any
+object with more members than the initial node count failed. It is also why the constants log
+shows `NS_VERSION_PATCH ... result=0` while the constant works. `TableStoreTop` now ignores
+the result. It also no longer adds a reference to the value: NewSlot takes its own
+(0x6ab7af / 0x6ab7d3), and the client's increment at 0x684555 belongs to its local
+`SQObjectPtr`, released at 0x6845ab, so the old extra increment leaked every decoded
+string, array and table. The key's extra reference stays (the verified teardown fix; at worst
+an interned key string is never freed). The harness has a `json` action that round-trips text
+through DecodeJSON/EncodeJSON in the UI VM. Verified live (PRX `3bc339ee`): a 20-member
+object with nested arrays and objects, floats, bools, escapes, `\u00e9` and a duplicate key
+came back intact (last duplicate wins; the null member dropped, as on PC), and a truncated
+document raised `Failed parsing json file: encountered parse error "expected ',' or ']'" at
+offset 9`. The lobby stayed up with no script errors.
+
+**Expired identity at join.** Atlas answers a stale imported token with
+`INVALID_MASTERSERVER_TOKEN` (or `PLAYER_NOT_FOUND`). PC recovers by re-authenticating with
+Origin; the PS4 cannot, so the join dialog now appends how to re-export the identity. The
+parser records `error.enum` separately and keeps PC's reason text.

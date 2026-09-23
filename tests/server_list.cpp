@@ -91,9 +91,13 @@ int main(int argc, char** argv) {
     assert(!ParseServerAuthResponse("{\"success\":false,\"error\":{\"enum\":\"UNAUTHORIZED_PWD\","
         "\"msg\":\"Wrong password\"}}", auth) && auth.failureReason == "Wrong password");
     assert(!ParseServerAuthResponse("{\"success\":false,\"error\":{\"enum\":\"PLAYER_NOT_FOUND\"}}", auth) &&
-        auth.failureReason == "PLAYER_NOT_FOUND");
+        auth.failureReason == "PLAYER_NOT_FOUND" && auth.errorEnum == "PLAYER_NOT_FOUND");
+    assert(!ParseServerAuthResponse("{\"success\":false,\"error\":{\"enum\":\"INVALID_MASTERSERVER_TOKEN\","
+        "\"msg\":\"Invalid or expired masterserver token\"}}", auth) &&
+        auth.errorEnum == "INVALID_MASTERSERVER_TOKEN" &&
+        auth.failureReason == "Invalid or expired masterserver token");
     assert(!ParseServerAuthResponse("{\"success\":false,\"error\":{}}", auth) &&
-        auth.failureReason == "No error message provided");
+        auth.failureReason == "No error message provided" && auth.errorEnum.empty());
     assert(!ParseServerAuthResponse("not json", auth) && auth.failureReason == "Authentication Failed");
     assert(!ParseServerAuthResponse("{\"success\":true,\"ip\":\"1.2.3.4\"}", auth));
     // Hostile or malformed values never reach the connect command.
