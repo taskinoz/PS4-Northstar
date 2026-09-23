@@ -224,6 +224,9 @@ constexpr std::size_t kAtlasIdentityMax = 4096;
 enum class AtlasIdentityState { Missing, Incomplete, Malformed, Ready };
 AtlasIdentityState g_atlasIdentityState = AtlasIdentityState::Missing;
 char g_atlasUid[32]{};
+// platform_user_id, kept for EnsureConnectUid below. Null until
+// ApplyAtlasIdentity has found it.
+void* g_platformUserIdConVar = nullptr;
 char g_atlasToken[40]{};
 
 // Shown in the UI when authentication is unavailable, so the message has to say
@@ -330,6 +333,7 @@ void ApplyAtlasIdentity(void* cvar, ModFindVarFn findVar) noexcept {
         LogFormat("[NorthstarPS4] atlas identity: platform_user_id not found\n");
         return;
     }
+    g_platformUserIdConVar = platformUserId;
     // Copied, not held: the pointer aliases the convar's own storage, so
     // reading it after the write reports the new value and the log line claims
     // the uid was already what we just set it to.
@@ -353,6 +357,38 @@ void ApplyAtlasIdentity(void* cvar, ModFindVarFn findVar) noexcept {
 // join path (runtime_server_join.inl) can do the same without a convar lookup
 // at join time. Null until startup has found it, or if writes are unavailable.
 void* g_serverFilterConVar = nullptr;
+
+// The uid a connect packet carries, re-applied immediately before `connect`.
+//
+// A Northstar server accepts a player only if the uid in the connect packet
+// equals the uid Atlas issued the auth token for (CheckAuthentication). The
+// PS4 builds that packet at engine+0x155516: it parses platform_user_id's
+// string value to a 64-bit number and writes it, then the name, then
+// serverFilter. So platform_user_id is the right convar - but setting it once
+// at startup is not enough. At engine+0xb87d3 the engine rewrites it from the
+// PSN account id it fetches into engine+0x2e7a310 (`%llu`), or to the literal
+// "1" when that id is zero. Under shadPS4 PSN is signed out, the id is zero,
+// and every join after that refresh went out as uid 1 - exactly what a PC
+// server's log showed ("shadPS4's (uid 1) connection was rejected:
+// Authentication Failed."), and why Atlas accepting the join was not enough.
+//
+// Seeding the account-id global would not hold: the engine re-fetches it
+// before each rewrite. So the join path calls this right before issuing
+// `connect`, and it logs what it found, which confirms or refutes the
+// overwrite on the first join.
+bool EnsureConnectUid() noexcept {
+    if (!g_platformUserIdConVar || !g_atlasUid[0]) return false;
+    char before[64]{};
+    if (const char* current = ReadConVarValue(g_platformUserIdConVar))
+        std::snprintf(before, sizeof(before), "%s", current);
+    if (!std::strcmp(before, g_atlasUid)) {
+        LogFormat("[NorthstarPS4] connect uid already %s\n", g_atlasUid);
+        return true;
+    }
+    if (!SetConVarString(g_platformUserIdConVar, g_atlasUid)) return false;
+    LogFormat("[NorthstarPS4] connect uid was \"%s\" (engine rewrite); reset to %s\n", before, g_atlasUid);
+    return true;
+}
 
 void CaptureServerFilter(void* cvar, ModFindVarFn findVar) noexcept {
     if (!cvar || !findVar || !g_authConVarWriteReady) return;

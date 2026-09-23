@@ -1567,6 +1567,109 @@ constexpr std::size_t kModRootCapacity = 128;
 std::uintptr_t g_fsVtableCopy[kFsVtableCopySlots]{};
 char g_modRoots[kMaxModRoots][kModRootCapacity]{};
 std::int32_t g_modRootCount = 0;
+
+// Every file under every mod root, indexed once per boot.
+//
+// The overlay used to find mod files by trying `open()` on each mod root, for
+// every file the engine asked for. Nearly every request is for a stock file
+// no mod ships, so nearly every probe failed: in one session that joined a
+// server, 55,513 of 55,590 failed opens (99.9%) were these probes, 19,280 of
+// them between connecting and the "Connection to server timed out" - each a
+// host syscall plus two log lines, piled onto shadPS4's shader compiles in the
+// window where the client has to keep up with the server. PC Northstar
+// indexes mod files up front for the same reason (ModManager's file map).
+//
+// Mods cannot change mid-session (enabling one already requires a restart), so
+// one walk at overlay install is enough. Keys are lowercased because the host
+// filesystem is case-insensitive and the probe it replaces matched that way.
+// A sorted vector rather than a map: this module's static constructors never
+// run, and a zeroed vector is a valid empty one.
+//
+// **Disabled, deliberately.** It works - 800 files across 6 roots, failed opens
+// per session 55,590 -> 103, boot to the Northstar lobby 70-74 s -> 52-57 s - but
+// it turns a shadPS4 race from occasional into certain. Harness A/B, lobby ->
+// `map mp_forwardbase_kodai`: with the index 3/3 crash 12 s in at
+// VCRUNTIME140+0x1cca7 (memcpy on shadPS4's GpuSchedPriorityPendingOpsRunner
+// reading freed memory); without it 2/2 load. The crash follows the main
+// thread's large sceKernelMunmap calls during the transition, while the GPU
+// thread still has copies pending from that memory. The probes' overhead kept
+// the main thread busy long enough for those copies to finish first, which is
+// the only reason the transition usually survived. Joining a server is the same
+// kind of transition, so the index stays off until the race is fixed in shadPS4
+// or guarded here (e.g. by delaying large unmaps until pending GPU work drains).
+constexpr bool kModFileIndexEnabled = false;
+struct ModFileEntry { std::string key; std::int32_t root; };
+std::vector<ModFileEntry> g_modFileIndex;
+std::atomic<bool> g_modFileIndexReady{false};
+
+std::string ModFileKey(const char* normalized) {
+    std::string key(normalized);
+    for (auto& c : key)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    return key;
+}
+
+void IndexModDirectory(std::int32_t root, const std::string& absolute, const std::string& relative,
+    int depth) noexcept {
+    if (depth > 16) return;
+    DIR* dir = opendir(absolute.c_str());
+    if (!dir) return;
+    while (dirent* entry = readdir(dir)) {
+        if (!std::strcmp(entry->d_name, ".") || !std::strcmp(entry->d_name, "..")) continue;
+        const std::string childAbsolute = absolute + "/" + entry->d_name;
+        const std::string childRelative = relative.empty() ? std::string(entry->d_name)
+                                                           : relative + "/" + entry->d_name;
+        struct stat info{};
+        if (stat(childAbsolute.c_str(), &info) != 0) continue;
+        if (S_ISDIR(info.st_mode)) IndexModDirectory(root, childAbsolute, childRelative, depth + 1);
+        else g_modFileIndex.push_back({ModFileKey(childRelative.c_str()), root});
+    }
+    closedir(dir);
+}
+
+void BuildModFileIndex() noexcept {
+    g_modFileIndex.clear();
+    for (std::int32_t root = 0; root < g_modRootCount; ++root)
+        IndexModDirectory(root, g_modRoots[root], std::string(), 0);
+    // Highest root (priority) first within each key, then keep only that one.
+    std::sort(g_modFileIndex.begin(), g_modFileIndex.end(),
+        [](const ModFileEntry& a, const ModFileEntry& b) {
+            return a.key != b.key ? a.key < b.key : a.root > b.root;
+        });
+    g_modFileIndex.erase(std::unique(g_modFileIndex.begin(), g_modFileIndex.end(),
+        [](const ModFileEntry& a, const ModFileEntry& b) { return a.key == b.key; }),
+        g_modFileIndex.end());
+    g_modFileIndexReady.store(true, std::memory_order_release);
+    LogFormat("[NorthstarPS4] mod file index: %zu files across %d roots\n",
+        g_modFileIndex.size(), g_modRootCount);
+}
+
+// The highest-priority mod root that ships `normalized`, or -1. Falls back to
+// the old per-root probe if the index was never built, so a failure here can
+// only cost speed, never mods.
+std::int32_t FindModFileRoot(const char* normalized) noexcept {
+    if (!g_modFileIndexReady.load(std::memory_order_acquire)) {
+        for (std::int32_t i = g_modRootCount - 1; i >= 0; --i) {
+            char candidate[384];
+            const int n = std::snprintf(candidate, sizeof(candidate), "%s/%s", g_modRoots[i], normalized);
+            if (n < 0 || static_cast<std::size_t>(n) >= sizeof(candidate)) continue;
+            const int fd = open(candidate, O_RDONLY);
+            if (fd < 0) continue;
+            close(fd);
+            return i;
+        }
+        return -1;
+    }
+    const std::string key = ModFileKey(normalized);
+    auto it = std::lower_bound(g_modFileIndex.begin(), g_modFileIndex.end(), key,
+        [](const ModFileEntry& entry, const std::string& k) { return entry.key < k; });
+    return (it != g_modFileIndex.end() && it->key == key) ? it->root : -1;
+}
+
+bool ModCandidate(std::int32_t root, const char* normalized, char* out, std::size_t capacity) noexcept {
+    const int n = std::snprintf(out, capacity, "%s/%s", g_modRoots[root], normalized);
+    return n > 0 && static_cast<std::size_t>(n) < capacity;
+}
 FsOpenFn g_originalFsOpen = nullptr;
 using FsOpenExFn = void* (*)(void*, const char*, const char*, std::uint32_t, const char*, char**);
 FsOpenExFn g_originalFsOpenEx = nullptr;
@@ -1606,13 +1709,7 @@ bool ModReadFromCache(void* self, const char* fileName, void* result) noexcept {
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
         if (!std::strcmp(normalized, "cfg/server/persistent_player_data_version_929.pdef")) return false;
 #endif
-        for (int i = g_modRootCount - 1; i >= 0; --i) {
-            char candidate[384]{};
-            const int n = std::snprintf(candidate, sizeof(candidate), "%s/%s", g_modRoots[i], normalized);
-            if (n < 0 || static_cast<std::size_t>(n) >= sizeof(candidate)) continue;
-            const int fd = open(candidate, O_RDONLY);
-            if (fd < 0) continue;
-            close(fd);
+        if (FindModFileRoot(normalized) >= 0) {
             LogFormat("[NorthstarPS4] bypass cached mod file: %s\n", normalized);
             return false;
         }
@@ -1869,18 +1966,14 @@ bool ModReadFile(void* self, const char* fileName, const char* pathID, void* buf
         if (RewrittenByOpenEx(normalized)) {
             LogFormat("[NorthstarPS4] ReadFile of rewritten file left stock: %s\n", normalized);
         } else {
-            for (std::int32_t i = g_modRootCount - 1; i >= 0; --i) {
-                char candidate[384]{};
-                const int n = std::snprintf(candidate, sizeof(candidate), "%s/%s", g_modRoots[i], normalized);
-                if (n < 0 || static_cast<std::size_t>(n) >= sizeof(candidate)) continue;
-                const int fd = open(candidate, O_RDONLY);
-                if (fd < 0) continue;
-                close(fd);
+            const std::int32_t root = FindModFileRoot(normalized);
+            char candidate[384];
+            if (root >= 0 && ModCandidate(root, normalized, candidate, sizeof(candidate))) {
                 if (g_originalFsReadFile(self, candidate, pathID, buffer, maxBytes, startingByte, alloc)) {
                     LogFormat("[NorthstarPS4] mod file read: %s\n", candidate);
                     return true;
                 }
-                LogFormat("[NorthstarPS4] mod file read failed, trying next: %s\n", candidate);
+                LogFormat("[NorthstarPS4] mod file read failed, using stock: %s\n", candidate);
             }
         }
     }
@@ -1938,13 +2031,9 @@ void* ModOpenEx(void* self, const char* fileName, const char* mode,
 #endif
     if (readOnly && (!pathID || std::strcmp(pathID, "GAME") == 0) &&
         NormalizeRequestedPath(fileName, normalized, sizeof(normalized))) {
-        for (std::int32_t i = g_modRootCount - 1; i >= 0; --i) {
-            char candidate[384]{};
-            const int n = std::snprintf(candidate, sizeof(candidate), "%s/%s", g_modRoots[i], normalized);
-            if (n < 0 || static_cast<std::size_t>(n) >= sizeof(candidate)) continue;
-            const int fd = open(candidate, O_RDONLY);
-            if (fd < 0) continue;
-            close(fd);
+        const std::int32_t root = FindModFileRoot(normalized);
+        char candidate[384];
+        if (root >= 0 && ModCandidate(root, normalized, candidate, sizeof(candidate))) {
             void* handle = g_originalFsOpenEx(self, candidate, mode, flags, pathID, resolved);
             if (handle) {
                 LogFormat("[NorthstarPS4] mod file served: %s\n", candidate);
@@ -2078,6 +2167,7 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
         ++g_modRootCount;
     }
     if (g_modRootCount == 0) return;
+    if (kModFileIndexEnabled) BuildModFileIndex();
     OrbisKernelModuleInfo fsInfo{};
     fsInfo.size = sizeof(fsInfo);
     if (sceKernelGetModuleInfo(fsHandle, &fsInfo) != 0 || fsInfo.segmentCount == 0) return;

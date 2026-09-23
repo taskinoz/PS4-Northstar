@@ -40,13 +40,11 @@ bool CallingModFolder(void* vm, int depth, char* out, std::size_t capacity) noex
     const char* source = CallingSource(vm, depth);
     char normalized[256]{};
     if (!source || !NormalizeRequestedPath(source, normalized, sizeof(normalized))) return false;
-    for (std::int32_t i = g_modRootCount - 1; i >= 0; --i) {
-        char candidate[512]{};
-        const int n = std::snprintf(candidate, sizeof(candidate), "%s/scripts/vscripts/%s", g_modRoots[i], normalized);
-        if (n < 0 || static_cast<std::size_t>(n) >= sizeof(candidate)) continue;
-        const int fd = open(candidate, O_RDONLY);
-        if (fd < 0) continue;
-        close(fd);
+    char scriptPath[300];
+    const int written = std::snprintf(scriptPath, sizeof(scriptPath), "scripts/vscripts/%s", normalized);
+    if (written < 0 || static_cast<std::size_t>(written) >= sizeof(scriptPath)) return false;
+    const std::int32_t i = FindModFileRoot(scriptPath);
+    if (i >= 0) {
         // g_modRoots entries are "<mods>/<folder>/mod"; PC keys storage on the
         // same mod directory name rather than the display name.
         const char* root = g_modRoots[i];

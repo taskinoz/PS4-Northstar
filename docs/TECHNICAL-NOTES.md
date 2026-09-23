@@ -3602,3 +3602,42 @@ the deployed profile reports `InSync=True` with no changes. The submodules must 
 out with `core.autocrlf=false`, `core.eol=lf` (the script sets this): upstream commits some
 files with CRLF and marks localisation `working-tree-encoding=UTF-16LE-BOM` with `text`,
 so a Windows-default checkout differs from the release in line endings.
+
+**Joining: the connect uid, not the token (2026-09-23).** With a fresh export, Atlas
+accepted the join (`server auth succeeded: 172.250.149.199:37015`) and the game server then
+refused it: `Connection rejected: Authentication Failed.` The PS4's connect packet is built
+at engine `0x155516`: it parses `platform_user_id`'s string (`call 0x658`, base 0) into a
+64-bit uid, writes it, then the name, then `serverFilter`. So the convar is right, but at
+engine `0xb87d3` the engine rewrites it from the PSN account id it fetches into
+`engine+0x2e7a310` (`%llu`), or to the literal `"1"` when that id is zero (`0x34bc8c`), as it
+is under shadPS4 with PSN signed out. That is the `uid 1` a PC server logged earlier.
+Seeding the global does not hold (re-fetched at `0xb7bd4` before each rewrite), so
+`EnsureConnectUid` re-applies the imported uid immediately before `connect` and logs the
+value it found. Unverified until the next join.
+
+**`copy_gpu_buffers` does not fix the teardown crash.** Harness transition test
+(lobby -> `map mp_forwardbase_kodai` -> `map mp_lobby`): with it off, Kodai loads and the
+return to the lobby crashes in 8 s at `VCRUNTIME140+0x1cca7` (reproducible). With it on,
+the *first* lobby load hangs: no `LevelLoadingFinished` after 7 minutes, main thread
+silent. Left off for this title.
+
+**Joined a public server (2026-09-23).** With `EnsureConnectUid` the log shows
+`connect uid was "1" (engine rewrite); reset to 1000108120826`, the server accepted the
+connection and the client loaded `mp_complex3` (Attrition), CLIENT lifecycle complete,
+in spectator waiting to spawn. It then failed with `Connection to server timed out.`
+and shadPS4 crashed on the way back to the menu (the known teardown race). The whole
+session was 2-3 minutes by the log's 60 s play-time ticks, so the load itself was not
+slow. What happened after the load, before the timeout: **229 Vulkan pipeline compiles**
+(11 during the load) and 19,304 overlay probe misses. Pipeline caching is off for this
+title, so every compile repeats on every visit. The compiles, not the probes, are the
+likely stall; enabling the pipeline cache and pre-visiting maps is the next thing to try.
+
+**Mod file index (built, disabled).** Replacing per-root `open()` probes with a
+one-time index of mod files cut failed opens per session from 55,590 to 103 and boot to
+the Northstar lobby from 70-74 s to 52-57 s. But harness A/B on lobby ->
+`map mp_forwardbase_kodai`: with the index 3/3 crash 12 s in at `VCRUNTIME140+0x1cca7`;
+without it 2/2 load. The crash follows the main thread's large `sceKernelMunmap` calls
+(3.3 MB, 5.4 MB) during the transition while the GPU thread still has copies pending
+from that memory; the probe overhead was delaying the main thread enough for them to
+drain. `kModFileIndexEnabled = false` until the race is fixed in shadPS4 or guarded here.
+This also makes the race reproducible on demand, which is useful for a shadPS4 report.

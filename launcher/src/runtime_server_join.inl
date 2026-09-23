@@ -139,6 +139,10 @@ int CompleteAuth(void* vm) {
     pendingConnection = PendingConnection{};
     if (!g_serverFilterConVar || !SetConVarString(g_serverFilterConVar, connection.authToken.c_str()))
         return Error(vm, "Cannot set serverfilter for the connection");
+    // The other half the server checks: the uid in the connect packet must be
+    // the one Atlas issued this token for. See EnsureConnectUid.
+    if (!EnsureConnectUid())
+        return Error(vm, "Cannot set the connect uid (platform_user_id)");
     // Both parts were validated by ParseServerAuthResponse (dotted IPv4, port
     // 1-65535), so nothing but an address reaches the command line.
     char command[64];
