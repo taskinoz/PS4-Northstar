@@ -56,9 +56,12 @@ void function AIHarness_Poll()
                 // Round-trips the command text through the natives, for testing them.
                 else if ( action == "json" )
                     json = EncodeJSON( DecodeJSON( NSAIHarnessField( raw, "command" ), true ) )
+                // Reads a convar; the value comes back in the reply's json field.
+                else if ( action == "cvar" )
+                    json = GetConVarString( NSAIHarnessField( raw, "command" ) )
                 else if ( action != "status" )
                     throw "Unknown harness action"
-                NSAIHarnessReply( EncodeJSON( { id = id, status = result, action = action, connected = IsConnected(), lobby = IsLobby(), level = GetActiveLevel(), json = json } ) )
+                NSAIHarnessReply( EncodeJSON( { id = id, status = result, action = action, connected = IsConnected(), lobby = IsLobby(), level = GetActiveLevel(), playlist = IsConnected() ? GetCurrentPlaylistName() : "", privateMatch = IsConnected() && IsPrivateMatch(), json = json } ) )
                 print( "[AI.Harness] " + action + " " + result )
             }
         }

@@ -17,6 +17,7 @@
 #include <cstring>
 #include <cstdarg>
 #include <cerrno>
+#include <cstddef>
 #include <cstdio>
 #include <dirent.h>
 #include <fcntl.h>
@@ -1790,6 +1791,7 @@ bool RegisterRuntimeConstants(void* owner, int context) noexcept {
 }
 
 #include "runtime_vm_lifecycle.inl"
+#include "runtime_concommands.inl"
 
 bool BuildRuntimeManifest(void* self) noexcept {
     void* source = g_originalFsOpenEx(self, "scripts/vscripts/scripts.rson", "rb", 0, "GAME", nullptr);
@@ -2517,6 +2519,9 @@ void* ModuleTracker(void*) noexcept {
 #endif
     if (vstdlibHandle != static_cast<OrbisKernelModule>(-1)) {
         ProbeCvarInterface(vstdlibHandle, engineBase, engineSize);
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+        RegisterNativeConCommands(engineBase, engineSize);
+#endif
         if (engineHandle != static_cast<OrbisKernelModule>(-1)) {
             ProbeRegistrationExports(engineHandle, vstdlibHandle);
             ProbeEngineClientInterface(engineHandle, engineBase, engineSize);

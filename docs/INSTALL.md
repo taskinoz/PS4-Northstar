@@ -14,7 +14,7 @@ A PRX being present, or mod folders being discovered, does not prove scripts exe
 - Original retail VPKs. Do not run old Stage 1 repacking/merge scripts or restore archives from a modded backup.
 - Original Northstar mod folders containing `mod.json`, `mod/`, and any other package content. Keep these files unchanged.
 - shadPS4 configured to launch this exact PS4 game folder, **pre-release `ca89b01` (2026-09-23) or newer**. Older builds, including v0.18.0 and the 2026-09-16 pre-release `5b92da8`, crash whenever you leave a loaded map (after a match, map to map, or joining a server from the lobby).
-- Recommended per-game settings for CUSA04013: `pipeline_cache_enabled: true` (avoids shader-compile stalls that time out remote matches), `copy_gpu_buffers: false`, and log filter `*:Info Lib.Http:Warning` (shadPS4 otherwise writes the Atlas player token into its log with every request URL).
+- Recommended per-game settings for CUSA04013: `pipeline_cache_enabled: true` (avoids shader-compile stalls that time out remote matches; a cache made by an older shadPS4 build is ignored by `ca89b01`, so delete or rename `%APPDATA%\shadPS4\cache\CUSA04013` after upgrading), `copy_gpu_buffers: false`, and log filter `*:Info Lib.Http:Warning` (shadPS4 otherwise writes the Atlas player token into its log with every request URL).
 - PowerShell and the LLVM/OpenOrbis tools listed in [tools/README.md](../tools/README.md) to build from source.
 
 PC DLLs cannot be used as PS4 binaries. The runtime and eboot bootstrap below are the PS4 replacements. Windows plugins and platform-specific assets require their own ports.

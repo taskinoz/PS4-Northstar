@@ -3738,3 +3738,79 @@ Info in four places (`sceHttpCreateConnectionWithURL`, `sceHttpCreateRequestWith
 `*:Info Lib.Http:Warning` removes them (verified: 0 token lines, 0 `Lib.Http` Info lines in
 the next session) without affecting this module's `[Tty]` output. Per-game `Log.append` is
 now on so a crash log survives the next launcher start.
+## Backlog from v0.2.1 user testing (2026-09-25)
+
+**Native console commands (`runtime_concommands.inl`).** NorthstarLauncher adds console
+commands the stock game lacks, and on PS4 they silently did nothing. Two user reports
+traced to that:
+
+- *Quitting a private match to the main menu, then entering multiplayer again, rebuilt the
+  private match.* "Launch Northstar" runs `setplaylist tdm` then `map mp_lobby`, and
+  `_lobby.gnut` picks the lobby type from `GetCurrentPlaylistName()`. `setplaylist` is a
+  Northstar command (shared/playlist.cpp). Harness evidence before the fix: after a normal
+  launch the playlist read "Load a map on the command line"; after private match ->
+  `disconnect` -> launch it read `private_match` with `IsPrivateMatch()` true. After:
+  `tdm`/false.
+- *Leaving a match stalled.* A server ends every leave with
+  `ClientCommand( player, "ns_start_reauth_and_leave_to_lobby" )`
+  (`_menu_callbacks.gnut`), also a Northstar command (shared/misccommands.cpp), so remote
+  servers and non-host leaves never returned. Now it checks the imported identity (PS4
+  local auth), requires a CLIENT VM as PC's second half does, sets the playlist to `tdm` and
+  runs `map mp_lobby` through the UI VM's `NSPS4_ClientCommand`. Verified three ways, each
+  back to a `tdm` lobby in 10-11 s: the command from the console; `LeaveMatch` with
+  `ns_should_return_to_lobby 0`, which is the server-sent path a remote server uses; and
+  `LeaveMatch` as host with the default 1 (`GameRules_EndMatch`, lands in the private lobby
+  as on PC).
+
+Engine profile: `ConCommand::ConCommand(this, name, callback, help, flags, completion)` is
+engine 0x204e60 (the engine's static constructors call it that way, e.g. `disconnect` at
+0x122bd1; objects 0x58 apart; name +0x18, help +0x20, flags +0x28, callback +0x40). It
+registers immediately when the cvar system is up. Callbacks get a PC-layout `CCommand`
+(argc +0, ArgS +0x10, argv +0x410; `connect` 0x62bd0, Tokenize 0x204b70).
+`SetCurrentPlaylist(const char*)` is engine 0x14a3a0, found through server.prx's
+`SetCurrentPlaylist` native (0x6ce0a0), which calls slot 81 of the engine server interface;
+its vtable (0x3acfd8) was located from the engine's relocations by slot 185 = 0x2dba90. Flag
+values match PC (`connect`/`map` 0x20000 DONTRECORD; SERVER_CAN_EXECUTE 1<<28).
+`setplaylistvaroverrides` is not added yet: Northstar's own menus use the
+`PrivateMatchSetPlaylistVarOverride` client command instead. One build (`344c37b8`) logged
+no registration at all, for reasons not established; the next build with only an extra log
+line (`91cf0df3`) registered on every one of 6+ boots.
+
+**`mp_box` has no map on either platform.** Northstar.Custom ships only its level script,
+rson and loading screen. `maps/mp_box.bsp` is in no PS4 VPK and nowhere in the PC install
+(PC VPKs listed with tf2-vpklist; no loose file). `map mp_box` on PS4 leaves the game with
+no level and an unresponsive UI: while connected, the engine's `map` callback (0x1224a0)
+tears down the current game (0x120d80) *before* checking the map (an interface at
+engine+0x51e9b60, slot 0x328, then `VEngineServer::IsMapValid`, vtable slot 2 = 0x2d7470),
+and a failed check just returns. A guard that ran both checks first stopped the main thread
+instead (no "map load failed" line; only the chat thread kept logging), so it was removed
+(kept in the session scratchpad). Loading mp_box needs a map mod that ships the BSP.
+
+**Custom modes menu on a controller.** `menu_mode_select.nut` shows 15 rows and scrolls
+only with the mouse wheel or the slider, so modes past the first page were unreachable on a
+pad. Northstar.PS4 overrides the script: d-pad/stick past the bottom row (or above the top
+row while there is more above) scrolls by one and keeps focus on that row (the server
+browser's dummy-button behaviour; the mode rows are nested panels, so explicit nav links are
+not available), L1/R1 page by five with footer hints, and opening the menu always focuses a
+mode. A press that moved focus within the list in the same frame is left alone, and the
+re-focus waits a frame, so it holds whichever order the engine handles navigation and the
+callback in. Verified: the override is served and compiles, and the menu opens from a
+private lobby with no script errors. Controller behaviour itself needs a pad.
+
+**VRAM (busy-server crash).** The 2026-09-24 session on a 29-mod server ended in
+`vk::Result=ErrorOutOfDeviceMemory` on a 6 GB GTX 1060. Harness hops with `nvidia-smi`:
+Eden peaks at 5.3-5.7 GB, others 2-4.7 GB, and memory is not fully returned between maps
+(lobby 1.1 GB at boot, 3.0 GB after three maps, 3.6 GB after seven, but it also falls
+again, e.g. Eden 5.3 -> lobby 2.7 -> Eden 4.2). Halving the game's texture streaming
+budget (`stream_memory` 800000 -> 400000) with `stream_drop_unused 1` did not lower the
+peak (Eden 5.5 GB), so the budget is not what fills VRAM; shadPS4's own GPU caches are.
+There is no shadPS4 setting that caps it. A crowded match on a heavy map will need more
+than 6 GB until shadPS4 bounds its caches.
+
+**Old pipeline cache is ignored by `ca89b01`.** Its log says `Pipeline cache profile has
+unexpected size (60 != 64). Ignoring the cache`: the cache built on `5b92da8` is a different
+format, so the pre-warming from 2026-09-24 did nothing on the new build, and the new build
+did not write to that folder either. After an unexpected power-off, boots hung at the same
+point twice (log cut mid-line after the Northstar.Client localisation file). With the old
+folder moved aside (`cache/CUSA04013.after-power-loss`) they succeeded every time. The cause
+is not established.
