@@ -1791,7 +1791,6 @@ bool RegisterRuntimeConstants(void* owner, int context) noexcept {
 }
 
 #include "runtime_vm_lifecycle.inl"
-#include "runtime_concommands.inl"
 
 bool BuildRuntimeManifest(void* self) noexcept {
     void* source = g_originalFsOpenEx(self, "scripts/vscripts/scripts.rson", "rb", 0, "GAME", nullptr);
@@ -1838,9 +1837,10 @@ bool BuildRuntimeManifest(void* self) noexcept {
             // creation for every context it hooks, so the manifest must only
             // declare the contexts it does not hook. Declaring a hooked context
             // here compiles the InitScript twice in that VM, and the second pass
-            // fails ("Redefinition of enumeration ..."). SERVER lives in
-            // server.prx and is still unhooked; once it is, this block goes away
-            // entirely rather than gaining another context.
+            // fails ("Redefinition of enumeration ..."). SERVER's initializer
+            // hook (runtime_server_vm.inl) sets up constants, natives and
+            // callbacks but does not compile InitScripts, so SERVER keeps them
+            // here.
             initBlocks += g_runtimeVmInitHooked ? "When: \"SERVER\"\nScripts:\n[\n" : "When: \"SERVER || CLIENT || UI\"\nScripts:\n[\n";
             initBlocks += info.initScript;
             initBlocks += "\n]\n";
@@ -1914,6 +1914,10 @@ std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noex
 
 #include "runtime_vpks.inl"
 #include "runtime_rpaks.inl"
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+// After runtime_vpks.inl: the map command guard checks mod map archives.
+#include "runtime_concommands.inl"
+#endif
 #include "runtime_server_vm.inl"
 #include "runtime_console.inl"
 #include "runtime_http.inl"
@@ -2193,6 +2197,9 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
     if (!matches) return;
     g_originalFsOpen = originalOpen;
     g_originalFsOpenEx = reinterpret_cast<FsOpenExFn>(vtable[76]);
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    g_fsInstance = fs;
+#endif
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     g_originalFsRead = originalRead;
     g_originalFsClose = originalClose;

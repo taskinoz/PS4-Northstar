@@ -1,7 +1,25 @@
 # Ideas
 
-Things worth building, with enough detail to pick any of them up cold. Nothing
-here is committed work.
+Things worth building, with enough detail to pick any of them up cold.
+
+## Status (2026-09-27)
+
+Most of this has since been built; the sections below are kept for their
+design notes.
+
+- **Idea 1 (test-connect mod):** superseded. The opt-in `AI.Harness` mod
+  ([AI-HARNESS.md](AI-HARNESS.md)) launches the local lobby by itself and runs
+  console commands, including `connect`. The server browser joins public servers
+  through Atlas.
+- **Idea 2 (agent harness):** largely built. There's `AI.Harness` (launch, status,
+  console, menu, back, json, cvar, localize), `scripts/Send-PadInput.ps1` for pad
+  input and `scripts/Capture-GameWindow.ps1` for screenshots. Still missing:
+  structured events, assertion manifests and a machine-readable verdict.
+- **Idea 3 (console pipe):** built as the AI.Harness mailbox under
+  `/data/northstar_ps4/ai_harness`, executed on the UI thread through
+  `ClientCommand`. The runtime also registers native console commands now
+  (`runtime_concommands.inl`), through the engine's ConCommand constructor.
+  Local `Cbuf` execution is still not identified.
 
 ## Correction that unblocks two of these
 

@@ -36,12 +36,12 @@ This inventories explicit registrations, **not implementation or runtime compati
 | `NSIsMasterServerAuthenticated` | `bool` / `` | `ScriptContext::UI` | `MasterServerAuthenticated` / `kCtxUi` | `scripts/client/scriptoriginauth.cpp:6` |
 | `NSGetMasterServerAuthResult` | `MasterServerAuthResult` / `` | `ScriptContext::UI` | `AuthResult` / `kCtxUi` | `scripts/client/scriptoriginauth.cpp:21` |
 | `NSRequestServerList` | `void` / `` | `ScriptContext::UI` | `RequestServers` / `kCtxUi` | `scripts/client/scriptserverbrowser.cpp:9` |
-| `NSIsRequestingServerList` | `bool` / `` | `ScriptContext::UI` | `Authenticated` / `kCtxUi` | `scripts/client/scriptserverbrowser.cpp:16` |
-| `NSMasterServerConnectionSuccessful` | `bool` / `` | `ScriptContext::UI` | `MasterServerAuthenticated` / `kCtxUi` | `scripts/client/scriptserverbrowser.cpp:22` |
+| `NSIsRequestingServerList` | `bool` / `` | `ScriptContext::UI` | `IsRequestingServers` / `kCtxUi` | `scripts/client/scriptserverbrowser.cpp:16` |
+| `NSMasterServerConnectionSuccessful` | `bool` / `` | `ScriptContext::UI` | `MasterServerReachable` / `kCtxUi` | `scripts/client/scriptserverbrowser.cpp:22` |
 | `NSGetServerCount` | `int` / `` | `ScriptContext::UI` | `ServerCount` / `kCtxUi` | `scripts/client/scriptserverbrowser.cpp:28` |
 | `NSClearRecievedServerList` | `void` / `` | `ScriptContext::UI` | `ClearServers` / `kCtxUi` | `scripts/client/scriptserverbrowser.cpp:34` |
 | `NSTryAuthWithServer` | `void` / `int serverIndex, string password = ''` | `ScriptContext::UI` | `TryRemoteAuth` / `kCtxUi` | `scripts/client/scriptserverbrowser.cpp:43` |
-| `NSIsAuthenticatingWithServer` | `bool` / `` | `ScriptContext::UI` | `Authenticated` / `kCtxUi` | `scripts/client/scriptserverbrowser.cpp:75` |
+| `NSIsAuthenticatingWithServer` | `bool` / `` | `ScriptContext::UI` | `IsAuthenticating` / `kCtxUi` | `scripts/client/scriptserverbrowser.cpp:75` |
 | `NSWasAuthSuccessful` | `bool` / `` | `ScriptContext::UI` | `AuthSuccessful` / `kCtxUi` | `scripts/client/scriptserverbrowser.cpp:81` |
 | `NSConnectToAuthedServer` | `void` / `` | `ScriptContext::UI` | `CompleteAuth` / `kCtxUi` | `scripts/client/scriptserverbrowser.cpp:87` |
 | `NSTryAuthWithLocalServer` | `void` / `` | `ScriptContext::UI` | `TryLocalAuth` / `kCtxUi` | `scripts/client/scriptserverbrowser.cpp:117` |

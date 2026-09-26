@@ -34,11 +34,9 @@
 // back exactly what was written, which proves the token half of the handshake
 // can be driven from here without a server in the loop.
 //
-// `nucleus_pid` also exists and currently holds `"0"`, which is the shape of a
-// convar holding a persona id. Whether writing it changes the uid the server
-// receives is **not** established - the captured server log shows the client
-// arriving as `uid 1`, not `0`, so the connect uid may come from somewhere else
-// entirely. That needs a server to test.
+// `nucleus_pid` also exists and holds `"0"`. The connect uid does not come from
+// it: the connect packet is built from `platform_user_id` (engine 0x155516),
+// which the engine rewrites before each connect - see EnsureConnectUid.
 //
 // The ConVar layout for this build, from the same probe: +0x18 name, +0x20
 // help, +0x40 default value, +0x48 current value.
@@ -212,11 +210,10 @@ void ProbeAuthConVars(void* cvar, ModFindVarFn findVar,
 // Nothing happens without that file, so a profile with no exported identity
 // behaves exactly as before.
 //
-// **Unverified:** whether the engine actually reads this convar when building
-// the connect handshake. The captured server log shows the PS4 arriving as
-// `uid 1` while the convar reads "0", so either it is not the source or it is
-// sampled somewhere else. That needs a server to settle, and until it is
-// settled this only changes a convar.
+// The engine does build the connect packet from this convar (engine 0x155516),
+// but rewrites it from the PSN account id first (0xb87d3), to "1" when that id
+// is zero as it is under shadPS4. EnsureConnectUid re-applies the imported uid
+// right before every connect; verified against public servers.
 constexpr const char* kAtlasIdentityFile = "/data/northstar_ps4/atlas_identity.json";
 constexpr std::size_t kAtlasIdentityMax = 4096;
 

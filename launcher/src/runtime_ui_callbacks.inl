@@ -31,7 +31,7 @@ bool g_runtimeCallbackHooked = false;
 VmLifecycle* RuntimeLifecycleFor(int context) noexcept {
     if (context == 2) return &g_runtimeUiLifecycle;
     if (context == 1) return &g_runtimeClientLifecycle;
-    return nullptr;   // SERVER lives in server.prx and is not hooked yet
+    return nullptr;   // SERVER: g_runtimeServerLifecycle in runtime_server_vm.inl
 }
 
 // PC ignores each mod callback's result and always runs the rest; only the

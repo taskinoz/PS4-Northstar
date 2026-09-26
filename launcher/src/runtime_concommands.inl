@@ -88,6 +88,78 @@ void ConCommandLeaveToLobby(const CCommandView*) {
         "NSPS4_ClientCommand missing (Northstar.PS4 not loaded?)");
 }
 
+// `map` with a map the game does not have (e.g. `mp_box`, which neither the PS4
+// nor the PC game ships) left the game with no level and no menu. While
+// connected, the engine's callback (0x1224a0) tears the current game down
+// (0x120d80) before it checks the map, and a failed check just returns. PC
+// reports "map load failed" and stays where it is.
+//
+// The guard decides whether the map exists before the original runs, without
+// calling the engine's map check: a first attempt that called
+// VEngineServer::IsMapValid (0x2d7470) from here stopped the main thread. A map
+// is present when any of these holds:
+//   - its retail archive exists: /app0/vpk_ps4/englishclient_<map>.bsp.pak000_dir.vpk
+//     (per-map archives are mounted only once the load starts, so the
+//     filesystem cannot see their contents yet);
+//   - an enabled mod ships an archive for it (stem client_<map>.bsp);
+//   - maps/<map>.bsp opens through the game filesystem (maps inside common
+//     archives, such as mp_lobby in mp_common, and loose mod maps).
+// Names outside [A-Za-z0-9_] are passed through untouched.
+constexpr std::uintptr_t kMapCommandObjectVa = 0x3ef2ce8;
+constexpr std::uintptr_t kMapCommandNameVa = 0x33e7f0;
+constexpr std::uintptr_t kMapCommandCallbackVa = 0x1224a0;
+
+void* g_fsInstance = nullptr;  // VFileSystem017, set by the filesystem probe
+ConCommandCallbackFn g_originalMapCommand = nullptr;
+
+bool PlainMapName(const char* name) noexcept {
+    if (!name || !*name) return false;
+    for (const char* c = name; *c; ++c)
+        if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') || *c == '_'))
+            return false;
+    return std::strlen(name) < 64;
+}
+
+bool MapPresent(const char* name) noexcept {
+    char path[160];
+    std::snprintf(path, sizeof(path), "/app0/vpk_ps4/englishclient_%s.bsp.pak000_dir.vpk", name);
+    const int fd = open(path, 0);
+    if (fd >= 0) { close(fd); return true; }
+    const std::string stem = std::string("client_") + name + ".bsp";
+    for (const auto& vpk : g_modVpks)
+        if (vpk.stem == stem) return true;
+    if (g_fsInstance && g_originalFsOpenEx && g_originalFsClose) {
+        std::snprintf(path, sizeof(path), "maps/%s.bsp", name);
+        void* handle = g_originalFsOpenEx(g_fsInstance, path, "rb", 0, "GAME", nullptr);
+        if (handle) {
+            g_originalFsClose(static_cast<char*>(g_fsInstance) + 8, handle);
+            return true;
+        }
+    }
+    return false;
+}
+
+void GuardedMapCommand(const CCommandView* args) {
+    if (args->argc >= 2 && PlainMapName(args->argv[1]) && !MapPresent(args->argv[1])) {
+        LogFormat("[NorthstarPS4] map load failed: %s not found\n", args->argv[1]);
+        return;
+    }
+    g_originalMapCommand(args);
+}
+
+void InstallMapCommandGuard(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
+    constexpr std::uint8_t callbackBytes[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x53, 0x50};
+    auto object = reinterpret_cast<std::uintptr_t*>(engineBase + kMapCommandObjectVa);
+    if (!ValidateEnginePreimage(engineBase, engineSize, kMapCommandCallbackVa, callbackBytes, sizeof(callbackBytes)) ||
+        object[0x18 / 8] != engineBase + kMapCommandNameVa || object[0x40 / 8] != engineBase + kMapCommandCallbackVa) {
+        LogFormat("[NorthstarPS4] map command guard refused: engine profile mismatch\n");
+        return;
+    }
+    g_originalMapCommand = reinterpret_cast<ConCommandCallbackFn>(object[0x40 / 8]);
+    object[0x40 / 8] = reinterpret_cast<std::uintptr_t>(&GuardedMapCommand);
+    LogFormat("[NorthstarPS4] map command guard installed\n");
+}
+
 bool g_nativeConCommandsRegistered = false;
 
 void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
@@ -132,4 +204,5 @@ void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize
         LogFormat("[NorthstarPS4] native concommand registered: %s\n", definitions[i].name);
     }
     g_nativeConCommandsRegistered = true;
+    InstallMapCommandGuard(engineBase, engineSize);
 }

@@ -16,17 +16,20 @@ Nothing under `tools/` is original project content — it's downloaded toolchain
 
 | Path | What it is | Notes |
 | --- | --- | --- |
-| `tools/tf2vpk/` (source), `tools/tf2vpk-bin/` (built exes) | VPK inspection/unpacking CLI | [pg9182/tf2vpk](https://github.com/pg9182/tf2vpk). Used interactively to extract vanilla content (e.g. `tools/vanilla-scripts` above) and inspect PS4 VPK chunk layout. Build from source with the Go toolchain below, or use a prebuilt exe. |
+| `tools/tf2vpk/` (source), `tools/tf2vpk-bin/` (built exes) | VPK inspection/unpacking CLI | [pg9182/tf2vpk](https://github.com/pg9182/tf2vpk). Used interactively to list and extract vanilla content (for example to check whether a map ships in a VPK) and to inspect PS4 VPK chunk layout. Build from source with the Go toolchain below, or use a prebuilt exe. |
 | `tools/go-portable/` | A portable Go toolchain | Only needed to build `tf2vpk` from source if you don't already have Go installed. Not required if you have your own Go, or if you already have built `tf2vpk-bin`. |
 | `tools/python-packages/` (`capstone`, `lief`) | Vendored Python packages for disassembling/parsing the retail PRX/ELF files during reverse-engineering | Not called by any script; used ad hoc for analysis (see `docs/TECHNICAL-NOTES.md` for examples). Reproduce with `python -m pip install --target tools/python-packages capstone lief`, or just `pip install capstone lief` into your own environment and skip vendoring. |
-| `tools/RSPNVPK/` | RSPNVPK source (C#) | [taskinoz/RSPNVPK](https://github.com/taskinoz/RSPNVPK). Only needed if rebuilding `RSPNVPK-bin` yourself. |
+| `tools/RSPNVPK/` | RSPNVPK source (C#) | [taskinoz/RSPNVPK](https://github.com/taskinoz/RSPNVPK). Only used by the retired Stage 1 VPK repacking ([FOUNDATION.md](../docs/FOUNDATION.md)); not needed for the current runtime. |
 
 ## Reference-only clones — not needed to build or run anything
 
 | Path | What it is |
 | --- | --- |
-| `tools/NorthstarLauncher-reference/` | Read-only clone of [R2Northstar/NorthstarLauncher](https://github.com/R2Northstar/NorthstarLauncher) (PC Windows client/launcher). Source of truth for what native services Northstar needs — **never reuse its Windows `engine.dll`/`client.dll` offsets on PS4**; PS4 addresses must always come from analyzing the PS4 binaries directly. Also the reference implementation to read before starting Atlas auth work (Goal 8 in `docs/GOALS.md`). |
+| `tools/NorthstarLauncher-reference/` | Read-only clone of [R2Northstar/NorthstarLauncher](https://github.com/R2Northstar/NorthstarLauncher) (PC Windows client/launcher). Source of truth for what native services Northstar needs — **never reuse its Windows `engine.dll`/`client.dll` offsets on PS4**; PS4 addresses must always come from analyzing the PS4 binaries directly. Also the reference implementation for every native service the port reproduces (see the G-rows in `docs/GOALS.md`). |
 | `tools/Enhanced-Menu-Mod-reference/` | Read-only clone of a PC Northstar UI mod, useful as an example of how Northstar UI script mods are structured. |
+| `tools/Atlas-reference/` | Read-only clone of [R2Northstar/Atlas](https://github.com/R2Northstar/Atlas), the master server. Source of truth for its HTTP API and error codes. |
+
+Emulator builds downloaded for testing (for example the shadPS4 CI builds used to bisect regressions) go under `work/shadps4-builds/`, not here.
 
 ## Safety note
 

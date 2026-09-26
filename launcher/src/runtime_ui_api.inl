@@ -142,10 +142,11 @@ int AuthSuccessful(void* vm) { Boolean(vm, authSucceeded); return 1; }
 // Northstar menus up. Failure shows NSGetAuthFailReason in a dialog.
 //
 // There is nothing to negotiate here. PC authenticates with its own server
-// through Atlas because its server half enforces auth; this port does not hook
-// server.prx at all, so the local lobby has no Northstar auth to satisfy. An
-// imported identity is therefore sufficient, and the attempt completes
-// immediately - NSIsAuthenticatingWithServer already reports false.
+// through Atlas because its server half enforces auth; this port's SERVER hooks
+// (runtime_server_vm.inl) do not enforce Northstar auth, so the local lobby has
+// none to satisfy. An imported identity is therefore sufficient, and the
+// attempt completes immediately - NSIsAuthenticatingWithServer already reports
+// false.
 int TryLocalAuth(void*) {
     authSucceeded = AtlasIdentityReady();
     authFailure = authSucceeded ? std::string() : std::string(AtlasIdentityMessage());

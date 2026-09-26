@@ -2,8 +2,8 @@ bool g_runtimeVmInitHooked = false;
 // PS4 CreateNewVM calls this initializer with owner in RDI, context in ESI,
 // and initial time in XMM0. owner+0x3c records the context (6746fb).
 // Context values match PC's ScriptContext: 0 SERVER, 1 CLIENT, 2 UI. SERVER
-// lives in server.prx, which this module does not hook, so only the two
-// client.prx contexts are set up here.
+// lives in server.prx and has its own initializer hook (runtime_server_vm.inl),
+// so only the two client.prx contexts are set up here.
 bool RuntimeVmInit(void* owner, int context, float time) noexcept {
     using Init = bool (*)(void*, int, float);
     const bool result = reinterpret_cast<Init>(g_runtimeClientBase + 0x6746c0)(owner, context, time);

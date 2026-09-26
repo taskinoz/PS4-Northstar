@@ -29,8 +29,8 @@
 // from nearly the same distance, which is what the same code compiled into two
 // modules looks like.
 //
-// The script print sink is deliberately not installed here. It gates on
-// client.prx addresses, so SERVER output stays invisible for now.
+// The script print sink is installed per SERVER VM in RuntimeServerVmInit,
+// with server.prx's own `print` addresses, so SERVER output reaches the log.
 constexpr std::uintptr_t kServerVmInitVa = 0x625da0;
 constexpr std::uintptr_t kServerVmInitCallVa = 0x622e8b;
 constexpr std::uintptr_t kServerInternVa = 0x666600;

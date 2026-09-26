@@ -1,6 +1,6 @@
 {
   "Name": "Northstar.PS4",
-  "Description": "PS4-port-specific modifications to Northstar content: localisation tokens and content overrides that exist only for the PS4 build and are not part of the PC mods (Northstar.Client/Custom/DirectConnect). Listed last so its files take precedence in the mod search-path overlay.",
+  "Description": "PS4-specific fixes to Northstar, as overrides of Northstar files rather than edits to them: the save layout (PC 231 plus the console black market), controller-friendly menus, and small script bridges the PS4 runtime uses. Required by the PS4 runtime. Load priority 99 so its files take precedence in the mod search-path overlay.",
   "Version": "0.1.0",
   "LoadPriority": 99,
   "Scripts": [

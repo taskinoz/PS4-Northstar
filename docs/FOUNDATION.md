@@ -2,7 +2,7 @@
 
 # Foundation: static PS4 content integration
 
-**Status: complete (Goal 0 in [GOALS.md](GOALS.md)).** This document is kept as reference for how the currently-installed PS4 game state was produced, and to reproduce it from scratch if needed. The tooling described here (`scripts/Build-AndDeployStage1Vpks.ps1` and friends) is still required — the native runtime work in [TECHNICAL-NOTES.md](TECHNICAL-NOTES.md) boots on top of these patched VPKs, not instead of them. See "Retiring the Goal 0 VPK patches" in GOALS.md before removing any of it.
+**Status: retired.** This records the first, static approach: repacking Northstar scripts into the PS4 VPKs. The native runtime replaced it. It now runs on unmodified retail VPKs and loads mods from `R2Northstar/mods`, so none of this tooling is part of installation. An install that still has Stage 1 patched VPKs must be returned to clean retail archives before using the current runtime (see [INSTALL.md](INSTALL.md)).
 
 ## Goal
 
@@ -34,4 +34,4 @@ This phase does not modify the script compiler. Native registration of Northstar
 - The client loads into a controlled Northstar server without missing script, VPK, RPAK, or network-table errors.
 - The original game can be restored using clean archive backups.
 
-All four criteria are met as of the last verified build. See [GOALS.md](GOALS.md) for what has happened since.
+All four criteria were met by this approach before it was retired. See [GOALS.md](GOALS.md) for the current work.

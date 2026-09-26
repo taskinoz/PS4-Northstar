@@ -2,9 +2,9 @@
 
 This is the detailed, chronological technical log behind the native runtime port: exact hashes, virtual addresses, byte preimages, run IDs, and the reasoning behind each fix. For current status and what to do next, start at [GOALS.md](GOALS.md) instead — this file is the evidence trail, not the status tracker. Section headings below still say "Milestone N" / "Stage 1" in places; read those as historical labels (they map onto the Goals in GOALS.md) rather than an active framing.
 
-Last verified: 2026-08-14, Titanfall 2 PS4 CUSA04013, PS4 build `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM` (PC counterpart `Titanfall2_v2_0_11_0`), running under shadPS4.
+Entries run from the first boot (2026-08-14) to the present, oldest first, and a later entry can correct an earlier one (look for **Correction**). All results are Titanfall 2 PS4 CUSA04013, build `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM` (PC counterpart `Titanfall2_v2_0_11_0`), under shadPS4; the emulator revision matters (see GOALS.md for the build to use).
 
-## Current result
+## First result (2026-08-14)
 
 The game boots to the main menu with a native OpenOrbis PRX loaded before Titanfall begins loading its normal game modules. The PRX initializer executes and starts a detached diagnostic thread. No retail PRX is modified.
 
@@ -3910,3 +3910,24 @@ frame shows film grain and HUD only. The clean session logs the same two `Color1
 view errors and nothing Critical. Filed as shadps4-emu/shadPS4#5124, with screenshots and the
 clean log on the `media/shadps4-5110` branch of this repo. The user saw occasional lighter
 flashes on bad builds; a 16-frame burst did not catch any.
+## Missing-map guard on `map`; repository review (2026-09-27)
+
+**`map <missing>` no longer strands the game.** The engine's `map` callback (0x1224a0)
+tears the current game down before checking the map, so `map mp_box` (no BSP on PS4 or PC)
+left no level and a dead UI. The first guard called `VEngineServer::IsMapValid` itself and
+stopped the main thread. The new guard (`runtime_concommands.inl`) swaps the `map`
+ConCommand's callback (object engine+0x3ef2ce8, +0x40) and checks presence without that call.
+A map is present if any of these holds: its retail archive
+`/app0/vpk_ps4/englishclient_<map>.bsp.pak000_dir.vpk` exists; an enabled mod ships
+`client_<map>.bsp`; or `maps/<map>.bsp` opens through the game filesystem (`mp_lobby` lives
+in `mp_common`). Missing maps are refused with `map load failed: <map> not found`, and names
+outside `[A-Za-z0-9_]` pass through. On `2b5666b3` with PRX `7eb56728`: `map mp_box` refused
+with the lobby and harness still responsive; `map mp_forwardbase_kodai` loaded; the
+leave-to-lobby command (which runs `map mp_lobby`) returned to the lobby.
+
+**Review.** GOALS.md was rewritten against current evidence; its superseded handoff,
+backlog and checkpoints moved to GOALS-HISTORY-2026-09-27.md. Also updated: README (status,
+supported build, the port's mods), FOUNDATION (retired), IDEAS (what has been built),
+tools/README, stale code comments (the SERVER VM is hooked; the connect uid is settled), the
+build manifest's blocker text, and the regenerated NATIVE-API-INVENTORY (three
+server-browser rows still named placeholder handlers).
