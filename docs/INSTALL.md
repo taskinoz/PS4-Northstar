@@ -2,9 +2,11 @@
 
 ## Release status
 
-The target is PC Northstar behavior with unchanged mod packages, except authentication is disabled. **The current build has not reached that target**, though it is considerably closer than before: the UI script VM now compiles the core mods and runs Northstar's full UI startup, including every mod Before/After callback, in load order.
+The target is PC Northstar behaviour with unchanged mod packages. This is an alpha, tested only under shadPS4, not on PS4 hardware.
 
-What still does not work: the CLIENT and SERVER script VMs have no lifecycle support, so anything those contexts provide is absent; authentication is deliberately disabled; and mod downloads and the server browser have no transport. No map load has been validated.
+What works: the Northstar lobby and menus; signing in with an Atlas identity exported from a PC; the server browser; joining public servers; hosting private matches; leaving a match back to the lobby; mod localisation; and controller navigation in the game mode menu.
+
+What does not yet: mod downloads, mod rpaks (the shipped ones are PC builds), live mod reload, and loading maps whose files the PS4 game lacks (for example `mp_box`). Crowded, heavily modded servers can exhaust a 6 GB GPU under shadPS4. See the [release notes](https://github.com/taskinoz/PS4-Northstar/releases) for the current list.
 
 A PRX being present, or mod folders being discovered, does not prove scripts executed. The bootstrap-only build in the rollback section deliberately loads no mods.
 
@@ -51,7 +53,7 @@ Use a new output directory each time:
 .\scripts\New-NorthstarProfile.ps1 -Output .\dist\install-profile
 ```
 
-This copies mod folders byte-for-byte and verifies their hashes. It also copies the source profile's `enabledmods.json` when present. It does not modify game archives. Do not add `-IncludePs4CompatibilityMods` for the unchanged-PC-mod configuration.
+This copies mod folders byte-for-byte and verifies their hashes. It also copies the source profile's `enabledmods.json` when present. It does not modify game archives. Add `-IncludePs4CompatibilityMods` to include this port's own mods, `Northstar.PS4` and `Northstar.DirectConnect`. The runtime needs `Northstar.PS4`: it carries the PS4 fixes (save layout, controller menus, client command bridge) as overrides, so the Northstar mods themselves stay unchanged. `scripts\Sync-NorthstarProfile.ps1` keeps an existing install in sync the same way. Release builds ship both mods in `northstar-ps4-mods-<version>.zip`.
 
 For a fresh installation, copy `dist/install-profile/R2Northstar` beside the game's `eboot.bin`. If a profile already exists there, preserve it outside the active game folder before replacing it; do not merge an old modded profile into the fresh one.
 
@@ -87,7 +89,7 @@ Close the game before replacing its PRX.
 
 The deployment script backs up the previous PRX in `work/stage2/deploy-backups` and verifies the installed hash. The build produces `northstar_ps4.build.json` beside the PRX; retain it to identify the build. The default `Build-Northstar.ps1` lacks runtime-manifest loading. The older `-EnableExperimentalScriptLoading` flag selects a different late-injection experiment; do not use it for this installation.
 
-**This experimental build completes UI startup but is not a finished port.** CLIENT lifecycle support is implemented; SERVER context support, downloads and the server browser remain incomplete, and further map/asset validation is required. Use it for development and log collection, not as a working replacement for the PC launcher.
+**This is an alpha.** Lobby, server browser, joining and private matches work under shadPS4; see "Release status" above for what does not yet.
 
 ## 4. Enable the eboot bootstrap once
 
@@ -141,7 +143,7 @@ The console picks the file up at startup, applies the uid to `platform_user_id`,
 
 **The exported file is a live credential.** Anyone holding it can authenticate to Atlas as that account. It expires after 24 hours, and sooner if the PC client authenticates again, which mints a replacement and invalidates the copy. Do not commit or share it; re-export when it stops working.
 
-Joining a server that verifies also needs a per-connection token from Atlas, which is not wired up yet, so this currently signs in rather than completing a verified join. Servers running `ns_auth_allow_insecure 1` do not check either value.
+Joining uses the imported identity to request a per-connection token from Atlas (`auth_with_server`), as PC does, so verified servers accept the connection. If the token has expired, the join dialog says to re-export it.
 
 Mods that use Northstar's Safe I/O API keep their data under guest `/data/northstar_ps4/save_data/<mod folder>`, one folder per mod, with the same rules PC applies: ASCII-only paths that cannot leave the mod's own folder, `.txt` and `.json` writes only, and a 50 MiB per-mod cap. As with enabled settings, the host location of that guest path depends on the emulator's data mount.
 
