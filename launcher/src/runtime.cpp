@@ -2360,10 +2360,19 @@ void ProbeLocaliseInterface(OrbisKernelModule localizeHandle,
             continue;
         }
         for (std::int32_t f = 0; f < mod.localisationCount; ++f) {
+            // The PS4 AddFile does not expand %language%: given the token it only
+            // probes the stock resource folders and returns true without opening
+            // anything, so every mod-only token stayed unresolved. With the name
+            // spelled out (as the self-test below always was) it loads through the
+            // mod overlay. English is what PC falls back to; picking the system
+            // language is not done yet.
+            std::string resolved = mod.localisationFiles[f];
+            const std::size_t token = resolved.find("%language%");
+            if (token != std::string::npos) resolved.replace(token, 10, "english");
             const bool ok = addFile(reinterpret_cast<void*>(thisAddr),
-                mod.localisationFiles[f], nullptr, false);
+                resolved.c_str(), nullptr, false);
             LogFormat("[NorthstarPS4] localise %s file=%s result=%d\n",
-                mod.name, mod.localisationFiles[f], ok ? 1 : 0);
+                mod.name, resolved.c_str(), ok ? 1 : 0);
             ++totalFiles;
             if (ok) ++loadedFiles;
         }

@@ -3890,3 +3890,23 @@ Color2D` twice, so (b) is the likelier cause: a shader expecting a 1D texture ge
 view. That is not proven. Newest good build: `work/shadps4-builds/2b5666b3/shadPS4.exe`
 (25 commits past `ca89b01`). The pipeline cache was disabled for the bisect and has been
 turned back on.
+## Mod localisation fixed; shadPS4 issue filed (2026-09-27)
+
+**Correction to "Mod localisation does not load" (2026-09-26).** Northstar.Client's tokens do
+*not* come from the stock `frontend` VPK. The live VPKs are retail; the only copies with
+Northstar content are under `.codex-validation-sparse/`, a test folder the game does not
+mount. They resolved because the localise probe also calls `AddFile` with the explicit name
+`resource/northstar_client_localisation_english.txt`, and that loads. The failing calls were
+the ones passing `%language%`: the PS4 `AddFile` does not expand it, only probes the stock
+`resource` folders, and returns true without opening anything. The probe now substitutes
+`english` before calling `AddFile` (PC's fallback language; choosing the system language is
+not done). Verified: every mod's file is added under its `_english` name, and the harness
+`localize` action resolves `#MENU_DIRECT_CONNECT` to "Direct Connect". PRX `a22ae48c`.
+
+**shadPS4 issue.** Reproduced on an unmodified game (retail eboot restored with
+`Enable-Stage2Bootstrap.ps1 -Disable`, since restored): at the start of the Pilot's Gauntlet,
+`2b5666b3` renders the training pod and `fc5d2cc2` draws only the HUD. Brightened 8x, the bad
+frame shows film grain and HUD only. The clean session logs the same two `Color1D`/`Color2D`
+view errors and nothing Critical. Filed as shadps4-emu/shadPS4#5124, with screenshots and the
+clean log on the `media/shadps4-5110` branch of this repo. The user saw occasional lighter
+flashes on bad builds; a 16-frame burst did not catch any.
