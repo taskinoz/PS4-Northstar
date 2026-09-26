@@ -13,7 +13,11 @@ A PRX being present, or mod folders being discovered, does not prove scripts exe
 - The supported PS4 Titanfall 2 build: `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM` (this workspace uses CUSA04013).
 - Original retail VPKs. Do not run old Stage 1 repacking/merge scripts or restore archives from a modded backup.
 - Original Northstar mod folders containing `mod.json`, `mod/`, and any other package content. Keep these files unchanged.
-- shadPS4 configured to launch this exact PS4 game folder, **pre-release `ca89b01` (2026-09-23) or newer**. Older builds, including v0.18.0 and the 2026-09-16 pre-release `5b92da8`, crash whenever you leave a loaded map (after a match, map to map, or joining a server from the lobby).
+- shadPS4 configured to launch this exact PS4 game folder, using **nightly `2b5666b3` (2026-09-25)**, the latest build it is known to run on. Get it from the shadPS4 CI run (needs a GitHub login; CI artifacts expire after about 90 days):
+  `gh run download 36164450310 -R shadps4-emu/shadPS4 -n shadps4-win64-sdl-2026-09-25-2b5666b`
+  (https://github.com/shadps4-emu/shadPS4/actions/runs/36164450310 has the Linux and macOS builds too). In the Qt launcher, put `shadPS4.exe` in its own folder under `%APPDATA%\shadPS4QtLauncher\versions` and add it to `versions.json` (or run it directly).
+  - Builds before `ca89b01` (2026-09-23), including v0.18.0, crash whenever you leave a loaded map (after a match, map to map, or joining a server from the lobby).
+  - Builds from `c6fa48c7` (#5110, 2026-09-25) on, including the 2026-09-26 pre-releases, draw matches black apart from the HUD. Use `2b5666b3` until that is fixed upstream.
 - Recommended per-game settings for CUSA04013: `pipeline_cache_enabled: true` (avoids shader-compile stalls that time out remote matches; a cache made by an older shadPS4 build is ignored by `ca89b01`, so delete or rename `%APPDATA%\shadPS4\cache\CUSA04013` after upgrading), `copy_gpu_buffers: false`, and log filter `*:Info Lib.Http:Warning` (shadPS4 otherwise writes the Atlas player token into its log with every request URL).
 - PowerShell and the LLVM/OpenOrbis tools listed in [tools/README.md](../tools/README.md) to build from source.
 

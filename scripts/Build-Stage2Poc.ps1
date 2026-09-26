@@ -127,7 +127,7 @@ $buildInfo = [ordered]@{
     lateScriptInjection = [bool]$EnableM6ScriptInject
     authentication = 'atlas-imported-identity'
     fullNorthstarCompatibility = $false
-    knownBlocker = 'Atlas identity imported from a PC Northstar client (Export-AtlasCredentials.ps1); server browser and joining work, and the PS4 can host private matches (SERVER VM hooked). Requires shadPS4 pre-release ca89b01 or newer: older builds crash when leaving a loaded map. Enable the pipeline cache for CUSA04013, or remote matches can time out while shaders compile after a map load. Mod rpak loading is implemented but disabled: the shipped mod paks are PC builds and stall the boot.'
+    knownBlocker = 'Atlas identity imported from a PC Northstar client (Export-AtlasCredentials.ps1); server browser and joining work, and the PS4 can host private matches (SERVER VM hooked). Runs on shadPS4 nightly 2b5666b3 (2026-09-25). Builds before ca89b01 crash when leaving a loaded map; builds from c6fa48c7 (#5110) on render matches black. Enable the pipeline cache for CUSA04013, or remote matches can time out while shaders compile after a map load. Mod localisation files do not load yet. Mod rpak loading is implemented but disabled: the shipped mod paks are PC builds and stall the boot.'
 }
 $buildInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputRoot 'northstar_ps4.build.json') -Encoding UTF8
 [pscustomobject]@{ File=$file.FullName; Bytes=$file.Length; SHA256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); Toolchain=$toolchainRoot }
