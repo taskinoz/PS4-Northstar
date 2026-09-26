@@ -79,7 +79,9 @@ Execute **G01 -> G02/G03 -> G04/G05 -> G06**, then the remaining feature familie
 Reported by the user after v0.2.1-alpha, on shadPS4 `ca89b01`.
 
 **Status 2026-09-25** (details in TECHNICAL-NOTES, "Backlog from v0.2.1 user testing"):
-1. Controller support added through a Northstar.PS4 override of `menu_mode_select.nut`; compiles and opens cleanly, **needs a pad test**.
+1. Controller support added through a Northstar.PS4 override of `menu_mode_select.nut`. First pad test: paging worked, reopening broke down-navigation; fixed 2026-09-26 (selected mode scrolled into view and focused a frame after opening). **Needs another pad test.**
+6. New: mod localisation files never load (`AddFile` only probes stock `resource` folders), so mod-only tokens such as `#MENU_DIRECT_CONNECT` show raw.
+7. New: shadPS4 `fc5d2cc2` renders matches black (HUD only); emulator regression after `ca89b01`.
 2. `mp_box` cannot load: no BSP in the PS4 or PC game files. `map mp_box` still leaves the game stuck; a guard attempt hung and was removed. Open.
 3. **Fixed**: native `ns_start_reauth_and_leave_to_lobby`; all three leave paths return to a `tdm` lobby in 10-11 s on the harness. Needs a remote-server check.
 4. **Fixed**: native `setplaylist`/`playlist`; private match -> main menu -> multiplayer gives a normal lobby.

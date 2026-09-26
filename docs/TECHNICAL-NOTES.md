@@ -3814,3 +3814,37 @@ did not write to that folder either. After an unexpected power-off, boots hung a
 point twice (log cut mid-line after the Northstar.Client localisation file). With the old
 folder moved aside (`cache/CUSA04013.after-power-loss`) they succeeded every time. The cause
 is not established.
+## Modes menu follow-up, mod localisation, shadPS4 fc5d2cc2 (2026-09-26)
+
+**Modes menu on reopen.** User report: after paging and selecting, reopening the menu
+allowed up but not down. The list kept its old scroll position (e.g. the last page) and the
+override focused a row in MENU_OPEN, after which the engine restores the menu's previous
+focus. So the highlighted row and the focused one disagreed, and at the end of the list down
+had nowhere to go. Now, one frame after opening, the list scrolls the selected mode
+(`PrivateMatch_GetSelectedMode()`) to the middle and focuses it; the stock
+"first mode when none is selected" focus is kept. Screenshots of reopening with
+FFA, Frontier Defense: Hard and Skirmish selected show that mode centred and focused.
+
+**Screenshots.** `CaptureGame.ps1` (session scratchpad) grabs only the shadPS4 window with
+`PrintWindow(PW_CLIENTONLY | PW_RENDERFULLCONTENT)`, which works while the window is covered.
+
+**Mod localisation does not load.** `CLocalise::AddFile` (localize.prx 0x5c60) returns true
+for every mod's `Localisation` entry but never opens the file: the log shows only directory
+probes of `/app0/{platform,,r2,r2_doNotShip,r1_doNotShip}/resource`. The new harness
+`localize` action confirms it: `#MENU_DIRECT_CONNECT` (Northstar.PS4) comes back unresolved,
+while retail tokens and Northstar.Client's tokens resolve (the latter are in the stock
+`frontend` VPK). So the Direct Connect label and any other mod-only token show raw. The
+modes menu footer therefore uses literal `%[L_SHOULDER|]% Prev Page` text. The retail
+`#LB_BUTTON_BROWSE_PREVPAGE` resolves to `%[L_SHOULDER]% Prev Page` (no pipe), which renders
+blank in this footer.
+
+**shadPS4 `fc5d2cc2`: black 3D view in matches.** The user's newest pre-release (41 commits
+after `ca89b01`) renders the lobby but shows only the HUD in a match. Reproduced on Kodai
+with the current runtime and with the v0.2.1 release runtime (`5b4acd32`), which rendered
+normally for the user on `ca89b01`, so it is an emulator regression. Candidates in the range
+include the buffer-cache/memory-tracker rework (#5100), `invalidate cached images after raw
+buffer writes` (#5092) and several shader recompiler changes. The next pre-release
+(`c6b24ec`) adds only renderer optimisations (#5112). A CI build of `ca89b01`
+(`shadps4-win64-sdl-2026-09-23-ca89b01`, run 35853065697) is still available for rollback or
+bisecting. The user's last logged session also ran v0.18.0 (`e3ce810f`, 108 commits before
+`ca89b01`), which has the transition crash.

@@ -94,9 +94,11 @@ void function InitModesMenu()
 
 	AddMenuFooterOption( file.menu, BUTTON_A, "#A_BUTTON_SELECT" )
 	AddMenuFooterOption( file.menu, BUTTON_B, "#B_BUTTON_BACK", "#BACK" )
-	// PS4: shoulder buttons page the list, as the mouse wheel does
-	AddMenuFooterOption( file.menu, BUTTON_SHOULDER_LEFT, "#NS_PS4_LB_PAGE_UP", "" )
-	AddMenuFooterOption( file.menu, BUTTON_SHOULDER_RIGHT, "#NS_PS4_RB_PAGE_DOWN", "" )
+	// PS4: shoulder buttons page the list, as the mouse wheel does. Literal text:
+	// mod localisation files do not load on this port yet, and the retail
+	// #LB_BUTTON_BROWSE_PREVPAGE form ("%[L_SHOULDER]%", no pipe) renders blank here.
+	AddMenuFooterOption( file.menu, BUTTON_SHOULDER_LEFT, "%[L_SHOULDER|]% Prev Page", "" )
+	AddMenuFooterOption( file.menu, BUTTON_SHOULDER_RIGHT, "%[R_SHOULDER|]% Next Page", "" )
 }
 
 void function NSSetModeCategory( string mode, int category )
@@ -167,16 +169,55 @@ void function OnOpenModesMenu()
 	UpdateVisibleModes()
 
 	// Set to the first mode if there's no mode focused
-	// PS4: always, so a controller starts inside the list rather than on nothing
-	array<var> panels = GetElementsByClassname( file.menu, "ModeSelectorPanel" )
-	foreach ( var panel in panels )
+	if ( level.ui.privatematch_mode == 0 )
 	{
-		if ( Hud_IsEnabled( Hud_GetChild( panel, "BtnMode" ) ) )
+		array<var> panels = GetElementsByClassname( file.menu, "ModeSelectorPanel" )
+		foreach ( var panel in panels )
 		{
-			Hud_SetFocused( Hud_GetChild( panel, "BtnMode" ) )
-			break
+			if ( Hud_IsEnabled( Hud_GetChild( panel, "BtnMode" ) ) )
+			{
+				Hud_SetFocused( Hud_GetChild( panel, "BtnMode" ) )
+				break
+			}
 		}
 	}
+
+	// PS4: the engine restores the menu's previous focus after this handler,
+	// and the list keeps its old scroll position, so on reopening the
+	// highlighted row and the focused one could differ (down did nothing).
+	thread FocusSelectedModeOnOpen()
+}
+
+// PS4: one frame after opening, scroll the selected mode into the middle of the
+// list and focus it, so focus, highlight and scroll position agree.
+void function FocusSelectedModeOnOpen()
+{
+	WaitFrame()
+	if ( GetActiveMenu() != file.menu || file.sortedModes.len() == 0 )
+		return
+	string selected = ""
+	try
+	{
+		selected = PrivateMatch_GetSelectedMode()
+	}
+	catch ( ex )
+	{
+	}
+	int index = file.sortedModes.find( selected )
+	if ( index < 0 )
+		index = 0
+	int maxOffset = file.sortedModes.len() - MODES_PER_PAGE
+	if ( maxOffset < 0 )
+		maxOffset = 0
+	int offset = index - MODES_PER_PAGE / 2
+	if ( offset > maxOffset )
+		offset = maxOffset
+	if ( offset < 0 )
+		offset = 0
+	file.scrollOffset = offset
+	UpdateVisibleModes()
+	UpdateListSliderPosition( file.sortedModes.len() )
+	FocusSlot( index - offset + 1, 1 )
 }
 
 void function OnCloseModesMenu()
@@ -218,14 +259,20 @@ int function VisibleSlotCount()
 	return remaining < MODES_PER_PAGE ? remaining : MODES_PER_PAGE
 }
 
-// Re-focuses a row after the list moved under it. A category header's button
-// is disabled, so this steps toward the first enabled row in `direction`.
-// Waits a frame so it runs after the engine's own navigation for the same press.
+// Re-focuses a row after the list moved under it. Waits a frame so it runs
+// after the engine's own navigation for the same press.
 void function FocusSlotAfterScroll( int slot, int direction )
 {
 	WaitFrame()
 	if ( GetActiveMenu() != file.menu )
 		return
+	FocusSlot( slot, direction )
+}
+
+// Focuses a row. A category header's button is disabled, so this steps toward
+// the first enabled row in `direction`.
+void function FocusSlot( int slot, int direction )
+{
 	int count = VisibleSlotCount()
 	for ( int tries = 0; tries < count; tries++ )
 	{

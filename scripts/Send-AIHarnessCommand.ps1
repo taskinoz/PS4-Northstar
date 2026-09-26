@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('status','launch','console','menu','back','json','cvar')][string] $Action = 'status',
+    [ValidateSet('status','launch','console','menu','back','json','cvar','localize')][string] $Action = 'status',
     [string] $Command,
     [string] $Menu,
     [string] $Mailbox = (Join-Path $env:APPDATA 'shadPS4\data\northstar_ps4\ai_harness'),
@@ -15,7 +15,7 @@ if ($FromConsoleFile) {
 }
 if ($Action -eq 'console' -and [string]::IsNullOrWhiteSpace($Command)) { throw 'Supply -Command or -FromConsoleFile.' }
 if ($Action -eq 'json' -and [string]::IsNullOrWhiteSpace($Command)) { throw 'Supply -Command with the JSON text to round-trip.' }
-if ($Action -eq 'cvar' -and [string]::IsNullOrWhiteSpace($Command)) { throw 'Supply -Command with the convar name.' }
+if ($Action -in 'cvar','localize' -and [string]::IsNullOrWhiteSpace($Command)) { throw 'Supply -Command with the convar name.' }
 if ($Action -eq 'menu' -and [string]::IsNullOrWhiteSpace($Menu)) { throw 'Supply -Menu with a registered menu name.' }
 New-Item -ItemType Directory -Force -Path $Mailbox | Out-Null
 # Hold an exclusive writer lock through the reply. A timeout does not cancel execution.

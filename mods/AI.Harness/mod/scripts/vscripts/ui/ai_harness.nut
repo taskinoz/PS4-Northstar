@@ -59,6 +59,9 @@ void function AIHarness_Poll()
                 // Reads a convar; the value comes back in the reply's json field.
                 else if ( action == "cvar" )
                     json = GetConVarString( NSAIHarnessField( raw, "command" ) )
+                // Resolves a localisation token; the text comes back in the json field.
+                else if ( action == "localize" )
+                    json = Localize( NSAIHarnessField( raw, "command" ) )
                 else if ( action != "status" )
                     throw "Unknown harness action"
                 NSAIHarnessReply( EncodeJSON( { id = id, status = result, action = action, connected = IsConnected(), lobby = IsLobby(), level = GetActiveLevel(), playlist = IsConnected() ? GetCurrentPlaylistName() : "", privateMatch = IsConnected() && IsPrivateMatch(), json = json } ) )
