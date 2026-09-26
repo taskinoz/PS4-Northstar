@@ -3848,3 +3848,45 @@ buffer writes` (#5092) and several shader recompiler changes. The next pre-relea
 (`shadps4-win64-sdl-2026-09-23-ca89b01`, run 35853065697) is still available for rollback or
 bisecting. The user's last logged session also ran v0.18.0 (`e3ce810f`, 108 commits before
 `ca89b01`), which has the transition crash.
+## Pad navigation in the modes menu; shadPS4 regression bisected (2026-09-27)
+
+**Why a pad could not move in the modes menu.** On PS4 the engine moves focus with the d-pad
+only along explicit `navUp`/`navDown`/`navLeft`/`navRight` links in a `.menu` file. The
+user's Direct Connect menu (github.com/taskinoz/Direct-Connect-Menu) became pad-usable only
+after gaining those links on every control, plus `tabPosition 1` on the first field. The
+stock `mode_select.menu` has none, and its rows are nested panels (`PanelN` containing
+`BtnMode`), which such links cannot join. The override now does all pad movement in script,
+from d-pad/left-stick callbacks:
+- up/down through the list, skipping category headers and scrolling at either edge;
+- up/down through the search/filter/clear column;
+- right from a row to the search box, and left back to the row it came from (the filter
+  switch keeps left/right).
+
+A press is ignored when focus already moved in the same frame, in case the engine does
+navigate somewhere.
+
+Verified with pad input (`scripts/Send-PadInput.ps1`) and window captures on shadPS4
+`2b5666b3`:
+- down 3 from Skirmish, skipping the PvPvE header;
+- down to the end of the list (Turbo LTS);
+- right to search, down to Clear, up, then left back to Turbo LTS;
+- up 16 scrolling to the top;
+- Cross on Capture the Flag, reopen (opens centred on it), down 2 to Marked For Death.
+
+Locked rows (Frontier Defense on this map) take focus but ignore Cross, as on PC.
+
+**shadPS4 regression bisected to #5110.** CI builds of the 41 commits `ca89b01..fc5d2cc2`
+(29 have a Windows artifact) were fetched with `gh run download` into
+`work/shadps4-builds/`. Each was tested by harness boot -> `map mp_forwardbase_kodai` ->
+window capture -> mean brightness of the screen centre (black < 25; `ca89b01` 136):
+`2b5666b3` renders (104), `b77d194e` (10), `2f40f87b` (16) and `776b5fdb` (16) are black.
+Between the last good and first bad build are only `c6fa48c7` (no CI build) and `776b5fdb`
+(an `#include` and USB-toy code). So the break is **c6fa48c7, "texture_cache: Fix some image
+validation issues" (#5110)**. It (a) drops the storage usage flag from multisampled images
+when `shaderStorageImageMultisample` is unsupported, and (b) when a view type is
+incompatible with its image, now creates the view with the image's type instead of only
+logging. The black runs log `image view type Color1D is incompatible with image type
+Color2D` twice, so (b) is the likelier cause: a shader expecting a 1D texture gets a 2D
+view. That is not proven. Newest good build: `work/shadps4-builds/2b5666b3/shadPS4.exe`
+(25 commits past `ca89b01`). The pipeline cache was disabled for the bisect and has been
+turned back on.

@@ -35,7 +35,17 @@ From the repository in PowerShell:
 
 `json` passes `-Command` through `DecodeJSON(text, true)` and `EncodeJSON` and returns the result in the reply's `json` field, to test the JSON natives in the UI VM. Member order follows the Squirrel table, not the input.
 
-`menu` opens a registered menu and `back` closes the active menu. These are script operations, not physical button clicks. Arbitrary button event injection and controller emulation are not implemented.
+Two helpers work alongside the harness while the game runs:
+
+```powershell
+# Presses pad buttons through shadPS4's keyboard mapping (input_config/default.ini),
+# by posting key messages to the game window, so it works without taking focus.
+./scripts/Send-PadInput.ps1 -Key down -Times 3   # up/down/left/right/l1/r1/cross/circle
+# Saves a PNG of just the game window (PrintWindow, works while covered).
+./scripts/Capture-GameWindow.ps1 -Out shot.png
+```
+
+`menu` opens a registered menu and `back` closes the active menu. These are script operations, not physical button clicks. Pad input goes through `Send-PadInput.ps1` above, which depends on the default keyboard mapping.
 
 ## Transport and recovery
 

@@ -99,6 +99,16 @@ void function InitModesMenu()
 	// #LB_BUTTON_BROWSE_PREVPAGE form ("%[L_SHOULDER]%", no pipe) renders blank here.
 	AddMenuFooterOption( file.menu, BUTTON_SHOULDER_LEFT, "%[L_SHOULDER|]% Prev Page", "" )
 	AddMenuFooterOption( file.menu, BUTTON_SHOULDER_RIGHT, "%[R_SHOULDER|]% Next Page", "" )
+
+	// PS4: record focus arriving on the side column too, so the controller
+	// handlers can tell a press the engine already acted on this frame
+	foreach ( string name in [ "BtnModeSearch", "SwtModeLabel", "BtnModeFiltersClear" ] )
+		AddButtonEventHandler( Hud_GetChild( file.menu, name ), UIE_GET_FOCUS, OnSideColumnFocus )
+}
+
+void function OnSideColumnFocus( var button )
+{
+	file.focusTime = Time() // PS4
 }
 
 void function NSSetModeCategory( string mode, int category )
@@ -153,6 +163,10 @@ void function OnOpenModesMenu()
 	RegisterButtonPressedCallback( STICK1_UP, OnControllerUp )
 	RegisterButtonPressedCallback( BUTTON_DPAD_DOWN, OnControllerDown )
 	RegisterButtonPressedCallback( STICK1_DOWN, OnControllerDown )
+	RegisterButtonPressedCallback( BUTTON_DPAD_LEFT, OnControllerLeft )
+	RegisterButtonPressedCallback( STICK1_LEFT, OnControllerLeft )
+	RegisterButtonPressedCallback( BUTTON_DPAD_RIGHT, OnControllerRight )
+	RegisterButtonPressedCallback( STICK1_RIGHT, OnControllerRight )
 	file.focusedSlot = 0
 
 	// Reset filters
@@ -232,6 +246,10 @@ void function OnCloseModesMenu()
 		DeregisterButtonPressedCallback( STICK1_UP, OnControllerUp )
 		DeregisterButtonPressedCallback( BUTTON_DPAD_DOWN, OnControllerDown )
 		DeregisterButtonPressedCallback( STICK1_DOWN, OnControllerDown )
+		DeregisterButtonPressedCallback( BUTTON_DPAD_LEFT, OnControllerLeft )
+		DeregisterButtonPressedCallback( STICK1_LEFT, OnControllerLeft )
+		DeregisterButtonPressedCallback( BUTTON_DPAD_RIGHT, OnControllerRight )
+		DeregisterButtonPressedCallback( STICK1_RIGHT, OnControllerRight )
 	}
 	catch ( ex )
 	{
@@ -289,33 +307,133 @@ void function FocusSlot( int slot, int direction )
 	}
 }
 
-// A press that just moved focus within the list is ordinary navigation, not a
-// press past the end of it. Whichever order the engine runs the two in, the
-// focus change of this frame is either already recorded here or never happens.
-bool function FocusMovedThisFrame()
+// On PS4 the engine moves focus with the d-pad only along explicit
+// navUp/navDown/navLeft/navRight links in the .menu file (the Direct Connect
+// menu needed them to work on a pad). The mode rows are nested panels with no
+// links, so a pad could not move between them at all, and nothing links the list
+// to the search/filter column either. Movement is therefore done here: through
+// the list, scrolling at its edges; through the column; and between the two.
+void function OnControllerRight( var button )
 {
-	return file.focusTime == Time()
+	if ( file.focusTime == Time() )
+		return
+	if ( FocusedListSlot() != 0 )
+		Hud_SetFocused( Hud_GetChild( file.menu, "BtnModeSearch" ) )
+}
+
+void function OnControllerLeft( var button )
+{
+	if ( file.focusTime == Time() )
+		return
+	// The filter switch may use left/right to change its value, so it keeps them.
+	var focus = GetFocus()
+	if ( focus != Hud_GetChild( file.menu, "BtnModeSearch" ) && focus != Hud_GetChild( file.menu, "BtnModeLabel" ) &&
+		focus != Hud_GetChild( file.menu, "BtnModeFiltersClear" ) )
+		return
+	int slot = file.focusedSlot
+	int count = VisibleSlotCount()
+	if ( slot < 1 || slot > count )
+		slot = 1
+	FocusSlot( slot, 1 )
+	if ( FocusedListSlot() == 0 )
+		FocusSlot( slot, -1 )
 }
 
 void function OnControllerDown( var button )
 {
-	if ( FocusMovedThisFrame() )
-		return
-	if ( file.focusedSlot != VisibleSlotCount() || file.scrollOffset + MODES_PER_PAGE >= file.sortedModes.len() )
-		return
-	int slot = file.focusedSlot
-	OnDownArrowSelected( null )
-	thread FocusSlotAfterScroll( slot, -1 )
+	MoveVertically( 1 )
 }
 
 void function OnControllerUp( var button )
 {
-	if ( FocusMovedThisFrame() )
+	MoveVertically( -1 )
+}
+
+void function MoveVertically( int direction )
+{
+	// Guard in case the engine does navigate for some control: focus that
+	// already moved this frame was that navigation, not a press to handle.
+	if ( file.focusTime == Time() )
 		return
-	if ( file.focusedSlot != 1 || file.scrollOffset == 0 )
+	int slot = FocusedListSlot()
+	if ( slot == 0 )
+	{
+		MoveInSideColumn( direction )
 		return
-	OnUpArrowSelected( null )
-	thread FocusSlotAfterScroll( 1, 1 )
+	}
+	int next = NextEnabledSlot( slot, direction )
+	if ( next != 0 )
+	{
+		FocusSlot( next, direction )
+		return
+	}
+	// At the edge of the visible rows: scroll one row at a time until an
+	// enabled row (a mode, not a category header) reaches that edge.
+	for ( int guard = 0; guard < MODES_PER_PAGE; guard++ )
+	{
+		if ( direction > 0 && file.scrollOffset + MODES_PER_PAGE >= file.sortedModes.len() )
+			return
+		if ( direction < 0 && file.scrollOffset == 0 )
+			return
+		if ( direction > 0 )
+			OnDownArrowSelected( null )
+		else
+			OnUpArrowSelected( null )
+		int edge = direction > 0 ? VisibleSlotCount() : 1
+		var edgeButton = ModeButtonForSlot( edge )
+		if ( edgeButton != null && Hud_IsEnabled( edgeButton ) )
+		{
+			FocusSlot( edge, direction )
+			return
+		}
+	}
+}
+
+// The list row (1-based) that has focus, or 0 when focus is elsewhere.
+int function FocusedListSlot()
+{
+	var focus = GetFocus()
+	if ( focus == null )
+		return 0
+	int count = VisibleSlotCount()
+	for ( int slot = 1; slot <= count; slot++ )
+	{
+		if ( ModeButtonForSlot( slot ) == focus )
+			return slot
+	}
+	return 0
+}
+
+// The next visible row after `slot` in `direction` holding a mode, or 0.
+int function NextEnabledSlot( int slot, int direction )
+{
+	int count = VisibleSlotCount()
+	for ( int next = slot + direction; next >= 1 && next <= count; next += direction )
+	{
+		var button = ModeButtonForSlot( next )
+		if ( button != null && Hud_IsEnabled( button ) )
+			return next
+	}
+	return 0
+}
+
+// The search box, filter switch and clear button stack vertically.
+void function MoveInSideColumn( int direction )
+{
+	array<var> column = [
+		Hud_GetChild( file.menu, "BtnModeSearch" ),
+		Hud_GetChild( file.menu, "SwtModeLabel" ),
+		Hud_GetChild( file.menu, "BtnModeFiltersClear" )
+	]
+	var focus = GetFocus()
+	if ( focus == Hud_GetChild( file.menu, "BtnModeLabel" ) )
+		focus = column[0]
+	int index = column.find( focus )
+	if ( index < 0 )
+		return
+	int next = index + direction
+	if ( next >= 0 && next < column.len() )
+		Hud_SetFocused( column[next] )
 }
 
 void function OnControllerPageDown( var button )
