@@ -3931,3 +3931,31 @@ supported build, the port's mods), FOUNDATION (retired), IDEAS (what has been bu
 tools/README, stale code comments (the SERVER VM is hooked; the connect uid is settled), the
 build manifest's blocker text, and the regenerated NATIVE-API-INVENTORY (three
 server-browser rows still named placeholder handlers).
+## Custom map: `mp_box` (2026-09-27)
+
+`mp_box` is a community map converted from Titanfall Online, shipped as the
+`bobthebob.mp_box` mod (version 0.0.999). It contains:
+- a loose `mod/maps/mp_box.bsp` (rBSP v37, same as the PS4 game), plus its `.ent`, `.stbsp`,
+  AI graph and navmesh files;
+- a PC VPK `vpk/client_mp_box.bsp`, with `vpk.json` `{"Preload": {"mp_box.bsp": false}}`;
+- a loading-screen rpak;
+- a script that calls `AddPrivateMatchMap( "mp_box" )`.
+
+On `2b5666b3` with PRX `7eb56728`:
+- **Discovery:** the mod, its VPK (preload 0) and its script were found at boot, with no
+  script errors.
+- **Load:** `map mp_box` passed the missing-map guard (the mod archive's stem is
+  `client_mp_box.bsp`). The engine read the loose BSP through the overlay. Its mount of
+  `vpk_ps4/client_mp_box.bsp` failed, and the MountVPK hook then mounted the mod's archive,
+  as PC does for map-supplied mod archives. The level loaded in about 11 s.
+- **In the level:** SERVER and CLIENT lifecycles completed with zero script errors. The
+  player spawned with weapon and HUD, and the geometry and sky render. The minimap shows the
+  missing-texture checkerboard: the mod has no overview asset, and its own comment says the
+  same happens on PC.
+- **Return:** the leave-to-lobby command came back to a `tdm` lobby.
+
+In the private match map menu, which moves fine on a pad as shipped, Box is listed last,
+with no thumbnail (its loading-screen rpak isn't loaded, since mod rpaks are disabled), and
+it's locked. `IsLocked` requires the map to be in the selected mode's playlist, and no
+playlist lists `mp_box`. That's the same on PC, so Box is reached with `map mp_box` or a
+server's rotation.
