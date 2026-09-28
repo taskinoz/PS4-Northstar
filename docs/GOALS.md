@@ -81,7 +81,8 @@ Work order: G04/G05 (real persistence) and G06 (per-VM helpers, frame queue) are
 
 | Goal | State | Next concrete test |
 |---|---|---|
-| G20/G08 | Download, install, enable and live reload verified with the harness `download` action | Re-export the Atlas identity, then `Send-AIHarnessCommand.ps1 -Action join -Command '<server name text>'` against a server requiring a verified mod (e.g. `lexi.lexire125`); then join a vanilla server so the reload disables it. Test cancel and a corrupt archive. |
+| G20/G08 | Download, install, enable and live reload verified with the harness `download` action; the user downloaded and joined Parkour through the real browser. Fixed after that: CLIENT/UI callbacks now reload, and the lobby resets `mp_gamemode` to `tdm` | Re-export the Atlas identity (starting PC Northstar replaces it), rejoin a Parkour server and confirm HUD, jumping and the return to a `tdm` lobby; then join a vanilla server so the reload disables it. Test cancel and a corrupt archive. |
+| G15/G23 | PC -> PS4-hosted match refused ("binary is different", exact text unknown); two PS4s with one account refused as on PC (`-allowdupeaccounts` in `ns_startup_args.txt` now allows it, untested with two machines) | Get the exact PC message and the connecting PC's nslog; test two machines with the flag. |
 | G22 | Mode menu pad navigation done in script and tested with scripted input | User confirms with a real pad; then audit the other Northstar menus (mod settings, custom match settings, server browser filters) with `Send-PadInput.ps1`. |
 | G15/G03 | Leave-to-lobby verified locally, including the server-sent command path | Leave a populated remote match and confirm return to a `tdm` lobby. |
 | G04/G05 | Local READY_INSECURE only | Implement `NSEarlyWritePlayerPersistenceForLeave`/`NSIsWritingPlayerPersistence` against the real client; then remote pdata. |

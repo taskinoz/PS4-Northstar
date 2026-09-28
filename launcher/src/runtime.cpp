@@ -17,6 +17,7 @@
 #include <orbis/Ssl.h>
 #include <orbis/Http.h>
 #include <cstring>
+#include <cctype>
 #include <cstdarg>
 #include <cerrno>
 #include <cstddef>

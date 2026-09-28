@@ -4063,3 +4063,54 @@ host-tested, including against the real playlist and all eight shipped files.
 Now eight patches build at boot (font table, playlists and six weapons), and
 `npc_pilot_elite` builds at the first map load. A hosted Kodai match plays with them.
 
+## Parkour server follow-up: client callbacks after a reload, lobby game mode, duplicate accounts (2026-09-28)
+
+PRX `a4537912fe29c211ef54f21d6de89f60f41b89748afe4418359e01ce6aa2039a`, shadPS4 `2b5666b3`.
+
+The user downloaded `Parkour` 0.3.6 through the server browser and joined Parkour servers
+three times (sessions at log lines 2605609, 2725709 and 2957945). Each time the browser
+enabled the mod, `NSReloadMods` ran and the server's `pk` gamemode loaded. In game the HUD
+was missing, the screen blurred and jumping didn't work. After leaving, the game stuck on a
+half-drawn blurred frame. Two causes:
+
+- **Stale UI and CLIENT callbacks.** The lifecycle callback lists for UI and CLIENT were
+  read once, when their hooks were installed; SERVER rereads its list at every VM.
+  After a reload the CLIENT VM compiled Parkour's scripts but never ran its `PKMode_Init`
+  "Before" callback. The gamemode was never created, `GAMEDESC_CURRENT = GAMETYPE_DESC[GAMETYPE]`
+  failed ("The index pk does not exist"), and the client then raised "The index roundBased
+  does not exist" and "HideMeleePrompt" thousands of times per match. `ReloadModState` now
+  rereads both lists. Checked by hosting `pk` on `mp_thaw` after a reload:
+  `CLIENT Before: PKMode_Init` runs and the client errors are gone. The local server then
+  stops in the mod's own `utils/perks.nut` line 157: `GiveWeapon( PK_perks.weapon )` runs
+  with an empty name when no perks were configured (a real Parkour server gets them from
+  its API). That is a mod bug outside its `if`, not a port difference.
+- **The lobby kept the remote server's game mode.** After each Parkour match the local
+  lobby started with `SERVER GAMETYPE: pk`, and after an attrition server with `aitdm`.
+  `ns_start_reauth_and_leave_to_lobby` had set the `tdm` playlist, as PC does. But the
+  local server takes its mode from `mp_gamemode`, which still held the remote server's
+  replicated value; PC's engine reverts replicated convars on disconnect. The native
+  `SetPlaylist` now also sets `mp_gamemode tdm` whenever the playlist becomes `tdm`,
+  which both routes to the local lobby do. Checked: after an `aitdm` match on Glitch, the
+  leave command logged `mp_gamemode aitdm -> tdm`, both VMs reported `GAMETYPE: tdm`, and
+  the lobby menu appeared.
+
+**Duplicate accounts.** A second shadPS4 machine was refused with "Player's account is
+already on the server". Both machines import the same Atlas identity, so they send the
+same uid; shadPS4 user names don't change it. PC refuses this too, unless the host is
+started with `-allowdupeaccounts`, which patches engine 0x114510. The PS4 check is the
+`je` at engine+0xe734c, taken when a connected client's uid (client+0x2d3d5) equals the
+connecting one's. With `-allowdupeaccounts` in `/data/northstar_ps4/ns_startup_args.txt`
+(PC reads `ns_startup_args.txt` the same way), the runtime replaces that branch with six
+NOPs, gated on the 13 bytes from 0xe7345. Checked that the patch applies at boot; a second
+machine joining has not been tested.
+
+**Not resolved.** A PC connecting to a PS4-hosted private match was refused with a message
+reported as "binary is different". The PS4 host logs nothing for it. The PS4 engine has the
+Source protocol checks ("Client has network protocol %i, server has network protocol %i")
+and the PC has "Client persistent data definition cache version mismatch with server"; the
+PS4 persistence layout is 929, not PC's 231. The exact message is needed to tell which.
+
+Separately, the newer shadPS4 build `4cbd23ef` stopped at boot on "Invalid or corrupted
+deserialization container/shader cache": a pipeline cache written by `2b5666b3`. Moving
+`cache/CUSA04013` aside gets past it, as with every build change.
+

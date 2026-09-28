@@ -90,6 +90,14 @@ void ReloadModState() noexcept {
 
     CollectKeyValuePatches();
 
+    // UI and CLIENT callbacks are read when their hooks are installed; SERVER
+    // rereads at every VM. Without this, a mod enabled by the reload had its
+    // scripts compiled but its callbacks never run: joining a Parkour server
+    // skipped PKMode_Init in the CLIENT VM, the gamemode was never created, and
+    // every frame raised "The index roundBased does not exist" with no HUD.
+    if (!LoadLifecycleCallbacks(g_runtimeUiLifecycle) || !LoadLifecycleCallbacks(g_runtimeClientLifecycle))
+        LogFormat("[NorthstarPS4] reload: UI/CLIENT callback metadata could not be read\n");
+
     if (g_modConVarCvar && g_modConVarFindVar && g_modConVarConstructor) {
         static ModDiscovery discovery;
         static char json[kModJsonBufferSize];

@@ -126,6 +126,8 @@ Reloading mods works live, as on PC: the server browser switches client-required
 
 Mods that servers require are downloaded, as on PC, when they are on Northstar's [verified list](https://github.com/R2Northstar/VerifiedMods) and `allow_mod_auto_download` is on. They go to guest `/data/northstar_ps4/runtime/remote/mods` (PC: `R2Northstar/runtime/remote/mods`), are checked against the list's SHA-256, and are only switched on for servers that need them.
 
+Launch flags go in guest `/data/northstar_ps4/ns_startup_args.txt`, as PC Northstar reads them from `ns_startup_args.txt`. The one the PS4 runtime understands is `-allowdupeaccounts`: a host started with it lets several machines signed in with the same Atlas identity join its match (without it the second one is refused with "Player's account is already on the server", as on PC).
+
 ### Signing in to Atlas
 
 The PS4 build has no Origin session of its own, so it cannot perform the Origin exchange Northstar uses on PC. Instead it reads an identity exported from a PC that is already signed in. No EA credential ever reaches the console: only the account uid and the Northstar player token are copied.

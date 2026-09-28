@@ -46,11 +46,30 @@ using SetCurrentPlaylistFn = bool (*)(const char*);
 
 SetCurrentPlaylistFn g_setCurrentPlaylist = nullptr;
 
+// `tdm` is what both roads to the local lobby set before `map mp_lobby`: the
+// leave-to-lobby command and "Launch Northstar". The local server takes its
+// game mode from `mp_gamemode`, and that still holds the last remote server's
+// replicated value: after a Parkour server the lobby started as `pk` and ran
+// the gamemode's scripts in the lobby; after an attrition server, as `aitdm`.
+// PC's engine reverts replicated convars on disconnect, so its lobby is `tdm`;
+// the PS4 build keeps them. So the lobby's mode is set with its playlist.
+void ResetLobbyGameMode() noexcept {
+    if (!g_modConVarCvar || !g_modConVarFindVar) return;
+    void* gamemode = g_modConVarFindVar(g_modConVarCvar, "mp_gamemode");
+    const char* current = gamemode ? ReadConVarValue(gamemode) : nullptr;
+    if (!current || !std::strcmp(current, "tdm")) return;
+    char previous[64];
+    std::snprintf(previous, sizeof(previous), "%s", current);
+    if (SetConVarString(gamemode, "tdm"))
+        LogFormat("[NorthstarPS4] mp_gamemode %s -> tdm for the tdm playlist\n", previous);
+}
+
 bool SetPlaylist(const char* name) noexcept {
     if (!g_setCurrentPlaylist || !name) return false;
     const bool ok = g_setCurrentPlaylist(name);
     // PC logs every change from its SetCurrentPlaylist hook.
     LogFormat("[NorthstarPS4] %s playlist %s\n", ok ? "set" : "could not set", name);
+    if (ok && !std::strcmp(name, "tdm")) ResetLobbyGameMode();
     return ok;
 }
 
@@ -192,6 +211,50 @@ void InstallReloadLocalizationGuard(std::uintptr_t engineBase, std::size_t engin
     LogFormat("[NorthstarPS4] reload_localization guard installed\n");
 }
 
+// PC Northstar reads extra launch arguments from ns_startup_args.txt. The PS4
+// has no command line to add to, so the same file lives in the app's storage.
+constexpr const char* kStartupArgsFile = "/data/northstar_ps4/ns_startup_args.txt";
+
+bool StartupArgPresent(const char* arg) noexcept {
+    char text[2048];
+    std::size_t size = 0;
+    if (!ReadFileIntoBuffer(kStartupArgsFile, text, sizeof(text), size)) return false;
+    const std::size_t length = std::strlen(arg);
+    for (const char* at = std::strstr(text, arg); at; at = std::strstr(at + 1, arg)) {
+        const bool startOk = at == text || std::isspace(static_cast<unsigned char>(at[-1]));
+        const bool endOk = at[length] == '\0' || std::isspace(static_cast<unsigned char>(at[length]));
+        if (startOk && endOk) return true;
+    }
+    return false;
+}
+
+// PC's -allowdupeaccounts (serverauthentication.cpp patches engine 0x114510):
+// lets two clients with the same account join one server, which is how one
+// player tests with two machines. Off by default, as on PC: the engine
+// otherwise rejects the second with "Player's account is already on the
+// server". On PS4 the check is the `je` at engine+0xe734c, taken when a
+// connected client's uid (+0x2d3d5) equals the connecting one's; it becomes
+// six NOPs.
+void InstallDuplicateAccountOption(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
+    if (!StartupArgPresent("-allowdupeaccounts")) return;
+    constexpr std::uintptr_t kCheckVa = 0xe7345;
+    constexpr std::uint8_t checkBytes[] = {0x48, 0x39, 0x8e, 0xd5, 0xd3, 0x02, 0x00, 0x0f, 0x84, 0x9a, 0x00, 0x00, 0x00};
+    if (!ValidateEnginePreimage(engineBase, engineSize, kCheckVa, checkBytes, sizeof(checkBytes))) {
+        LogFormat("[NorthstarPS4] -allowdupeaccounts refused: engine profile mismatch\n");
+        return;
+    }
+    const auto jump = engineBase + kCheckVa + 7;
+    void* page = reinterpret_cast<void*>(jump & ~std::uintptr_t(0x3fff));
+    const std::size_t span = ((jump + 6 - 1) & ~std::uintptr_t(0x3fff)) != (jump & ~std::uintptr_t(0x3fff)) ? 0x8000 : 0x4000;
+    if (sceKernelMprotect(page, span, 7) != 0) {
+        LogFormat("[NorthstarPS4] -allowdupeaccounts failed: mprotect\n");
+        return;
+    }
+    std::memset(reinterpret_cast<void*>(jump), 0x90, 6);
+    sceKernelMprotect(page, span, 5);
+    LogFormat("[NorthstarPS4] -allowdupeaccounts: duplicate accounts may join this server\n");
+}
+
 bool g_nativeConCommandsRegistered = false;
 
 void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
@@ -238,4 +301,5 @@ void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize
     g_nativeConCommandsRegistered = true;
     InstallMapCommandGuard(engineBase, engineSize);
     InstallReloadLocalizationGuard(engineBase, engineSize);
+    InstallDuplicateAccountOption(engineBase, engineSize);
 }
