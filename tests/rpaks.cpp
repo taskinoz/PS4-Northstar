@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
 
     // --- request path -------------------------------------------------------
     // Absolute: a relative name is passed to the filesystem verbatim and fails.
-    assert(ModRpakRequestPath("Northstar.Custom", "a.rpak") ==
+    assert(ModRpakRequestPath("/app0/R2Northstar/mods/Northstar.Custom", "a.rpak") ==
         "/app0/R2Northstar/mods/Northstar.Custom/paks/a.rpak");
 
     // --- name matching ------------------------------------------------------

@@ -135,6 +135,57 @@ bool HttpRequest(int method, const char* url, char* out, std::size_t capacity, i
     return ok;
 }
 
+// A GET whose body goes to `onChunk` as it is read, for downloads too large
+// for a buffer. `contentLength` is the response's Content-Length, or 0 when
+// the server sent none. Success means the whole body was read and every chunk
+// accepted; the status is the caller's to check. `cancel`, when set, stops
+// the read between chunks.
+bool HttpStream(const char* url, HttpChunkFn onChunk, void* user, std::uint64_t& contentLength,
+    int& status, const std::atomic<bool>* cancel) noexcept {
+    status = 0;
+    contentLength = 0;
+    if (!InitHttpTransport() || !url || !onChunk) return false;
+    const int connection = sceHttpCreateConnectionWithURL(g_httpTemplate, url, 1);
+    if (connection < 0) {
+        LogFormat("[NorthstarPS4] http connect failed 0x%x\n", connection);
+        return false;
+    }
+    const int request = sceHttpCreateRequestWithURL(connection, kSceHttpMethodGet, url, 0);
+    if (request < 0) {
+        LogFormat("[NorthstarPS4] http request create failed 0x%x\n", request);
+        sceHttpDeleteConnection(connection);
+        return false;
+    }
+    bool ok = false;
+    const int sent = sceHttpSendRequest(request, nullptr, 0);
+    if (sent < 0) {
+        LogFormat("[NorthstarPS4] http send failed 0x%x\n", sent);
+    } else if (sceHttpGetStatusCode(request, &status) < 0) {
+        LogFormat("[NorthstarPS4] http status unavailable\n");
+    } else {
+        int lengthResult = 0;
+        std::size_t length = 0;
+        if (sceHttpGetResponseContentLength(request, &lengthResult, &length) >= 0 && lengthResult == 0)
+            contentLength = length;
+        static constexpr std::size_t kChunk = 64 * 1024;
+        auto* chunk = new std::uint8_t[kChunk];
+        for (;;) {
+            if (cancel && cancel->load(std::memory_order_relaxed)) break;
+            const int read = sceHttpReadData(request, chunk, kChunk);
+            if (read < 0) {
+                LogFormat("[NorthstarPS4] http read failed 0x%x\n", read);
+                break;
+            }
+            if (read == 0) { ok = true; break; }
+            if (!onChunk(chunk, static_cast<std::size_t>(read), user)) break;
+        }
+        delete[] chunk;
+    }
+    sceHttpDeleteRequest(request);
+    sceHttpDeleteConnection(connection);
+    return ok;
+}
+
 bool HttpGet(const char* url, char* out, std::size_t capacity, int& status) noexcept {
     return HttpRequest(kSceHttpMethodGet, url, out, capacity, status);
 }

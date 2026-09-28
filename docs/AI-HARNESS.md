@@ -26,6 +26,12 @@ From the repository in PowerShell:
 ./scripts/Send-AIHarnessCommand.ps1 -Action json -Command '{"a":1,"b":[true,"x"]}'
 ./scripts/Send-AIHarnessCommand.ps1 -Action cvar -Command 'stream_memory'
 ./scripts/Send-AIHarnessCommand.ps1 -Action localize -Command '#A_BUTTON_SELECT'
+# Mod auto-download without a server: fetch the verified list, download and install
+# (Northstar's own dialogs), enable, ReloadMods. Replies with the mod's state.
+./scripts/Send-AIHarnessCommand.ps1 -Action download -Command 'lexi.lexire125|1.0.7' -TimeoutSeconds 180
+# The server browser's join for the first listed server whose name contains the text:
+# auth, download missing verified mods, switch client-required mods, ReloadMods, connect.
+./scripts/Send-AIHarnessCommand.ps1 -Action join -Command 'VAMP D' -TimeoutSeconds 180
 
 # Explicitly submit the legacy console.txt contents (file remains intact).
 ./scripts/Send-AIHarnessCommand.ps1 -FromConsoleFile
@@ -34,6 +40,8 @@ From the repository in PowerShell:
 `launch` follows Northstar's local authentication sequence, completes local authentication, then queues `setplaylist tdm` and `map mp_lobby`. Authentication failure is returned as an error. A successful reply says **queued**, not that the map loaded successfully. Check the fresh session log for script errors and actual lobby readiness. `status` confirms the UI polling thread is responding and now reports `connected`, `lobby`, `level`, `playlist` and `privateMatch` from game state (the last two only while connected). `cvar` returns a convar's value, and `localize` a token's localised text, in the reply's `json` field. These do not prove that every initialization callback succeeded; also inspect the current session for script errors.
 
 `json` passes `-Command` through `DecodeJSON(text, true)` and `EncodeJSON` and returns the result in the reply's `json` field, to test the JSON natives in the UI VM. Member order follows the Squirrel table, not the input.
+
+`download` and `join` run Northstar's own download helpers (`FetchVerifiedModsManifesto`, `DownloadMod` and the error dialog) and its `ReloadMods()`, so the dialogs appear as they would from the server browser. Both reply before the queued `uiscript_reset` runs, and the harness is ready again once the UI VM rebuilds. `join` needs a current Atlas identity and refuses password-protected servers. The reply says **queued**: check the log for the connect's outcome.
 
 Two helpers work alongside the harness while the game runs:
 

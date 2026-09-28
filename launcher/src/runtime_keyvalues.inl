@@ -37,13 +37,9 @@ std::int32_t g_keyValuePatchCount = 0;
 char g_keyValueBuiltPaths[kMaxKeyValuePatches][kKeyValuePathCapacity]{};
 std::int32_t g_keyValueBuiltCount = 0;
 
-// `<mods>/<name>/mod` -> `<mods>/<name>/keyvalues`
-bool KeyValuesRootForMod(std::int32_t index, char* out, std::size_t capacity) noexcept {
-    const char* root = g_modRoots[index];
-    const char* tail = std::strrchr(root, '/');
-    if (!tail || std::strcmp(tail, "/mod") != 0) return false;
-    const std::size_t length = static_cast<std::size_t>(tail - root);
-    const int n = std::snprintf(out, capacity, "%.*s/keyvalues", static_cast<int>(length), root);
+// `<mod directory>/keyvalues`
+bool KeyValuesRootForMod(const ModOverlay& overlay, std::size_t index, char* out, std::size_t capacity) noexcept {
+    const int n = std::snprintf(out, capacity, "%s/keyvalues", overlay.dirs[index].c_str());
     return n > 0 && static_cast<std::size_t>(n) < capacity;
 }
 
@@ -80,9 +76,10 @@ void ScanKeyValueDirectory(const char* absolute, const char* relative, int depth
 void CollectKeyValuePatches() noexcept {
     g_keyValuePatchCount = 0;
     g_keyValueBuiltCount = 0;
-    for (std::int32_t i = 0; i < g_modRootCount; ++i) {
+    const ModOverlay* overlay = CurrentModOverlay();
+    for (std::size_t i = 0; overlay && i < overlay->dirs.size(); ++i) {
         char keyvalues[512];
-        if (!KeyValuesRootForMod(i, keyvalues, sizeof(keyvalues))) continue;
+        if (!KeyValuesRootForMod(*overlay, i, keyvalues, sizeof(keyvalues))) continue;
         ScanKeyValueDirectory(keyvalues, "", 0);
     }
     for (std::int32_t i = 0; i < g_keyValuePatchCount; ++i)
@@ -181,12 +178,14 @@ bool BuildKeyValuesPatch(void* self, const char* normalized) noexcept {
         LogFormat("[NorthstarPS4] keyvalues base parse failed %s: %s\n", normalized, error.c_str());
         return false;
     }
-    // Ascending priority: g_modRoots[0] is the lowest, and the last merge wins,
-    // so the highest-priority mod must be applied last.
+    const KeyValueList original = merged;
+    // Ascending priority: the first mod directory is the lowest, and the last
+    // merge wins, so the highest-priority mod must be applied last.
     int applied = 0;
-    for (std::int32_t i = 0; i < g_modRootCount; ++i) {
+    const ModOverlay* overlay = CurrentModOverlay();
+    for (std::size_t i = 0; overlay && i < overlay->dirs.size(); ++i) {
         char keyvalues[512], absolute[768];
-        if (!KeyValuesRootForMod(i, keyvalues, sizeof(keyvalues))) continue;
+        if (!KeyValuesRootForMod(*overlay, i, keyvalues, sizeof(keyvalues))) continue;
         if (std::snprintf(absolute, sizeof(absolute), "%s/%s", keyvalues, normalized) < 0) continue;
         std::string patchText;
         if (!ReadModKeyValues(absolute, patchText)) continue;
@@ -205,12 +204,14 @@ bool BuildKeyValuesPatch(void* self, const char* normalized) noexcept {
     // is longer than the one it measured, and dropping the tabs buys about
     // 24 KB on the playlist - far more than the patches add.
     const std::string output = SerialiseKeyValues(merged, false);
-    // A merge can only add to or replace within the original, so a result much
-    // smaller than the input means something went wrong. Refuse rather than
-    // serve it: an empty playlist is a boot failure, not a degraded mode.
-    if (output.size() < originalText.size() / 2) {
-        LogFormat("[NorthstarPS4] keyvalues refused %s: merged %zu bytes from %zu, suspiciously small\n",
-            normalized, output.size(), originalText.size());
+    // A merge can only add to or replace within the original, so a result that
+    // lost any of the original's keys means something went wrong. Refuse
+    // rather than serve it: an empty playlist is a boot failure, not a degraded
+    // mode. (This used to compare byte sizes, which refused
+    // melee_pilot_arena.txt: its comments make the compact merge less than
+    // half the original's size.)
+    if (!KeyValuesKeepsKeys(original, merged)) {
+        LogFormat("[NorthstarPS4] keyvalues refused %s: the merge lost keys of the original\n", normalized);
         return false;
     }
     // The engine sizes its parse buffer from the original file and reads only

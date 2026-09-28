@@ -55,6 +55,7 @@ static int FitCheck(int argc, char** argv) {
         std::fprintf(stderr, "fit check: %s does not parse: %s\n", argv[2], error.c_str());
         return 1;
     }
+    const KeyValueList original = merged;
     for (int i = 3; i < argc; ++i) {
         const std::string patchText = ReadFile(argv[i]);
         if (patchText.empty()) continue;
@@ -71,10 +72,12 @@ static int FitCheck(int argc, char** argv) {
         std::fprintf(stderr, "fit check: merged %s does not parse back: %s\n", argv[2], error.c_str());
         return 1;
     }
+    // The runtime serves a merge only when it fits and kept every original key.
     const bool fits = compact.size() <= originalText.size();
-    std::printf("  %-44s original %7zu  merged %7zu  %s\n",
-        argv[2], originalText.size(), compact.size(), fits ? "fits" : "TOO LARGE, would be refused");
-    return fits ? 0 : 1;
+    const bool kept = KeyValuesKeepsKeys(original, merged);
+    std::printf("  %-44s original %7zu  merged %7zu  %s\n", argv[2], originalText.size(), compact.size(),
+        !fits ? "TOO LARGE, would be refused" : !kept ? "LOST KEYS, would be refused" : "fits");
+    return fits && kept ? 0 : 1;
 }
 
 int main(int argc, char** argv) {
@@ -167,6 +170,16 @@ int main(int argc, char** argv) {
     assert(CountKeyValue(FindKeyValue(dupBase, "root")->children, "lang") == 2);
     assert(FindKeyValue(FindKeyValue(dupBase, "root")->children, "other")->value == "2");
 
+    // The runtime's served-merge check: every original key survives, duplicates
+    // matched in order, and a lost key is caught.
+    const KeyValueList dupOriginal = Parse("root { lang { a 1 } lang { b 2 } other 1 }");
+    assert(KeyValuesKeepsKeys(dupOriginal, dupBase));
+    assert(!KeyValuesKeepsKeys(dupOriginal, Parse("root { lang { a 1 } other 2 }")));
+    assert(!KeyValuesKeepsKeys(dupOriginal, Parse("root { lang { a 1 } lang { c 2 } other 2 }")));
+    assert(!KeyValuesKeepsKeys(dupOriginal, KeyValueList{}));
+    assert(KeyValuesKeepsKeys(Parse("root { f x [$PC] f y [$GAMECONSOLE] }"),
+        Parse("root { f x [$PC] f z [$GAMECONSOLE] g 1 }")));
+
     // A block replacing a scalar takes the patch wholesale.
     KeyValueList shape = Parse("root { thing scalar }");
     MergeKeyValues(shape, Parse("root { thing { nested 1 } }"));
@@ -209,6 +222,11 @@ int main(int argc, char** argv) {
     // merge wins, so the highest-priority mod (Northstar.Custom) goes last.
     MergeKeyValues(merged, Parse(serversText.c_str()));
     MergeKeyValues(merged, Parse(customText.c_str()));
+    // The runtime refuses a merge that lost any original key; this one must pass.
+    if (!KeyValuesKeepsKeys(Parse(originalText.c_str()), merged)) {
+        std::fprintf(stderr, "live-file check: the playlist merge would be refused as lossy\n");
+        return 1;
+    }
 
     playlists = FindKeyValue(merged, "playlists");
     const KeyValue* gamemodes = FindKeyValue(playlists->children, "Gamemodes");

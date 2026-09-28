@@ -4,9 +4,9 @@
 
 The target is PC Northstar behaviour with unchanged mod packages. This is an alpha, tested only under shadPS4, not on PS4 hardware.
 
-What works: the Northstar lobby and menus; signing in with an Atlas identity exported from a PC; the server browser; joining public servers; hosting private matches; leaving a match back to the lobby; mod localisation; and controller navigation in the game mode menu.
+What works: the Northstar lobby and menus; signing in with an Atlas identity exported from a PC; the server browser; joining public servers; hosting private matches; leaving a match back to the lobby; custom map mods (tested with `mp_box`); mod localisation; controller navigation in the game mode menu; live mod reload; and downloading a server's required mods from the verified list (tested in the lobby, not yet as part of a real server join).
 
-What does not yet: mod downloads, mod rpaks (the shipped ones are PC builds), live mod reload, and loading maps whose files the PS4 game lacks (for example `mp_box`). Crowded, heavily modded servers can exhaust a 6 GB GPU under shadPS4. See the [release notes](https://github.com/taskinoz/PS4-Northstar/releases) for the current list.
+What does not yet: mod rpaks (the shipped ones are PC builds, so custom maps have no loading screen), and mods whose files are PC-only in other ways. Crowded, heavily modded servers can exhaust a 6 GB GPU under shadPS4. See the [release notes](https://github.com/taskinoz/PS4-Northstar/releases) for the current list.
 
 A PRX being present, or mod folders being discovered, does not prove scripts executed. The bootstrap-only build in the rollback section deliberately loads no mods.
 
@@ -122,7 +122,9 @@ Launch the game's `eboot.bin` through shadPS4. In this workspace the log is `C:\
 
 Settings use the PC `Name -> Version -> bool` format. On PS4, saved changes live in guest `/data/northstar_ps4/enabledmods.json` because `/app0` is read-only. That saved file overrides `R2Northstar/enabledmods.json` on subsequent boots. Its host location depends on the emulator's data mount; do not confuse it with the installation profile.
 
-The current reload API saves changes then reports that a restart is required. True live reload remains unfinished. Downloads remain a compatibility gap rather than an intended exclusion.
+Reloading mods works live, as on PC: the server browser switches client-required mods on and off before a join, and the menus and the next map use the new set. One difference: text from a mod that a reload switches off stays loaded until the game restarts.
+
+Mods that servers require are downloaded, as on PC, when they are on Northstar's [verified list](https://github.com/R2Northstar/VerifiedMods) and `allow_mod_auto_download` is on. They go to guest `/data/northstar_ps4/runtime/remote/mods` (PC: `R2Northstar/runtime/remote/mods`), are checked against the list's SHA-256, and are only switched on for servers that need them.
 
 ### Signing in to Atlas
 

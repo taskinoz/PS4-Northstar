@@ -156,9 +156,9 @@ inline RpakRule ResolveRpakRule(const std::string& pak, const char* config, bool
 // applied on the path a load request actually takes: a relative name went to
 // the filesystem verbatim and the open failed on the literal
 // `../../../R2Northstar/...`. An absolute path is opened as given, so mod paks
-// are requested by their full path.
-inline std::string ModRpakRequestPath(const std::string& modName, const std::string& pak) {
-    return "/app0/R2Northstar/mods/" + modName + "/paks/" + pak;
+// are requested by their full path, under the mod's directory.
+inline std::string ModRpakRequestPath(const std::string& modDirectory, const std::string& pak) {
+    return modDirectory + "/paks/" + pak;
 }
 
 // The engine asks for paks by bare name, but compare on the basename so a

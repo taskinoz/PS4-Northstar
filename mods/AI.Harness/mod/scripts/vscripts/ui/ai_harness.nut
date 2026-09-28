@@ -1,6 +1,98 @@
 global function AIHarness_Init
 struct { bool started = false } file
 
+// menu_ns_serverbrowser.nut's CORE_MODS, which is file-local there.
+const array<string> AI_HARNESS_CORE_MODS = [ "Northstar.Client", "Northstar.Coop", "Northstar.CustomServers", "Northstar.Custom" ]
+
+bool function AIHarness_HasModVersion( string name, string version )
+{
+    foreach ( ModInfo mod in NSGetModInformation( name ) )
+        if ( mod.version == version )
+            return true
+    return false
+}
+
+// The server browser's join, minus the list UI: authenticate, fetch the
+// verified list if a required mod is missing, download through DownloadMod
+// (the browser's own dialog), switch client-required mods to match the server,
+// ReloadMods, connect. Returns a summary of what changed.
+string function AIHarness_Join( string text )
+{
+    NSRequestServerList()
+    while ( NSIsRequestingServerList() )
+        WaitFrame()
+    ServerInfo server
+    bool found = false
+    foreach ( ServerInfo candidate in NSGetGameServers() )
+    {
+        if ( candidate.name.find( text ) != null )
+        {
+            server = candidate
+            found = true
+            break
+        }
+    }
+    if ( !found )
+        throw "No listed server name contains: " + text
+    if ( server.requiresPassword )
+        throw "Server needs a password"
+
+    NSTryAuthWithServer( server.index, "" )
+    while ( NSIsAuthenticatingWithServer() )
+        WaitFrame()
+    if ( !NSWasAuthSuccessful() )
+        throw NSGetAuthFailReason()
+
+    array<RequiredModInfo> missing
+    foreach ( RequiredModInfo mod in server.requiredMods )
+        if ( !AI_HARNESS_CORE_MODS.contains( mod.name ) && !AIHarness_HasModVersion( mod.name, mod.version ) )
+            missing.append( mod )
+    string summary = "server=" + server.name + " missing=" + missing.len()
+    if ( missing.len() > 0 )
+    {
+        if ( !GetConVarBool( "allow_mod_auto_download" ) )
+            throw "Required mods missing and allow_mod_auto_download is 0"
+        FetchVerifiedModsManifesto()
+        foreach ( RequiredModInfo mod in missing )
+        {
+            if ( !NSIsModDownloadable( mod.name, mod.version ) )
+                throw mod.name + " " + mod.version + " is not verified"
+            if ( !DownloadMod( mod ) )
+            {
+                DisplayModDownloadErrorDialog( mod.name )
+                throw "Download failed: " + mod.name + " state " + NSGetModInstallState().status
+            }
+            summary += " downloaded=" + mod.name
+        }
+    }
+
+    // ConnectToServer's reconciliation.
+    foreach ( ModInfo mod in NSGetModsInformation() )
+    {
+        if ( !mod.requiredOnClient || !mod.enabled || AI_HARNESS_CORE_MODS.contains( mod.name ) )
+            continue
+        bool required = false
+        foreach ( RequiredModInfo need in server.requiredMods )
+            if ( need.name == mod.name && need.version == mod.version )
+                required = true
+        if ( !required )
+        {
+            NSSetModEnabled( mod.name, mod.version, false )
+            summary += " disabled=" + mod.name
+        }
+    }
+    foreach ( RequiredModInfo need in server.requiredMods )
+    {
+        if ( AI_HARNESS_CORE_MODS.contains( need.name ) )
+            continue
+        NSSetModEnabled( need.name, need.version, true )
+        summary += " enabled=" + need.name
+    }
+    ReloadMods()
+    NSConnectToAuthedServer()
+    return summary
+}
+
 void function AIHarness_Init()
 {
     if ( file.started )
@@ -62,6 +154,39 @@ void function AIHarness_Poll()
                 // Resolves a localisation token; the text comes back in the json field.
                 else if ( action == "localize" )
                     json = Localize( NSAIHarnessField( raw, "command" ) )
+                // Joins the first listed server whose name contains the command
+                // text, downloading and enabling its required mods the way the
+                // server browser does (OnServerSelected_Threaded, ConnectToServer).
+                else if ( action == "join" )
+                {
+                    json = AIHarness_Join( NSAIHarnessField( raw, "command" ) )
+                    result = "queued"
+                }
+                // "<name>|<version>": the join's download and enable steps for
+                // one verified mod, then ReloadMods, without a server.
+                else if ( action == "download" )
+                {
+                    array<string> parts = split( NSAIHarnessField( raw, "command" ), "|" )
+                    if ( parts.len() != 2 )
+                        throw "Expected <name>|<version>"
+                    RequiredModInfo mod
+                    mod.name = parts[0]
+                    mod.version = parts[1]
+                    json = "had=" + AIHarness_HasModVersion( mod.name, mod.version )
+                    if ( !AIHarness_HasModVersion( mod.name, mod.version ) )
+                    {
+                        FetchVerifiedModsManifesto()
+                        if ( !NSIsModDownloadable( mod.name, mod.version ) )
+                            throw mod.name + " " + mod.version + " is not verified"
+                        if ( !DownloadMod( mod ) )
+                            throw "Download failed: state " + NSGetModInstallState().status
+                    }
+                    NSSetModEnabled( mod.name, mod.version, true )
+                    ReloadMods()
+                    foreach ( ModInfo info in NSGetModInformation( mod.name ) )
+                        json += " " + info.version + " enabled=" + info.enabled + " remote=" + info.isRemote
+                    result = "queued"
+                }
                 else if ( action != "status" )
                     throw "Unknown harness action"
                 NSAIHarnessReply( EncodeJSON( { id = id, status = result, action = action, connected = IsConnected(), lobby = IsLobby(), level = GetActiveLevel(), playlist = IsConnected() ? GetCurrentPlaylistName() : "", privateMatch = IsConnected() && IsPrivateMatch(), json = json } ) )

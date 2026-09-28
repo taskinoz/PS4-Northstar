@@ -186,8 +186,18 @@ struct ModInfo {
     char localisationFiles[kMaxModLocalisationFiles][160];
 };
 
+constexpr std::size_t kModDirCapacity = 192;
+
+// ~33 KiB: allocate it statically or on the heap, never on an engine thread's
+// stack.
 struct ModDiscovery {
+    // Folder name, for logs and the load-order tie-break.
     char names[kMaxModNames][64];
+    // Absolute directory holding the mod's mod.json. Local mods live under
+    // /app0/R2Northstar/mods, downloaded ("remote") ones under the writable
+    // runtime/remote/mods folder, possibly as <package>/mods/<Name>.
+    char dirs[kMaxModNames][kModDirCapacity];
+    bool remote[kMaxModNames]{};
     std::int32_t priorities[kMaxModNames]{};
     std::int32_t count = 0;
 };
@@ -331,18 +341,31 @@ inline bool IsModFolderName(const char* name) noexcept {
 
 // Ascending LoadPriority; stable folder-name tie-break for reproducible boots.
 // Filesystem lookup walks this list backwards so higher priority wins.
-inline bool InsertMod(ModDiscovery& list, const char* folder, std::int32_t priority) noexcept {
-    if (!IsModFolderName(folder) || list.count >= static_cast<std::int32_t>(kMaxModNames)) return false;
+// `dir` defaults to the folder name (host tests); a mod already listed from
+// the same directory is not added twice.
+inline bool InsertMod(ModDiscovery& list, const char* folder, std::int32_t priority,
+    const char* dir = nullptr, bool remote = false) noexcept {
+    if (!dir) dir = folder;
+    if (!IsModFolderName(folder) || list.count >= static_cast<std::int32_t>(kMaxModNames) ||
+        std::strlen(dir) >= kModDirCapacity) return false;
     for (std::int32_t i = 0; i < list.count; ++i)
-        if (std::strcmp(list.names[i], folder) == 0) return true;
+        if (std::strcmp(list.dirs[i], dir) == 0) return true;
+    auto after = [&](std::int32_t i) {
+        if (list.priorities[i] != priority) return list.priorities[i] > priority;
+        const int byName = std::strcmp(list.names[i], folder);
+        return byName != 0 ? byName > 0 : std::strcmp(list.dirs[i], dir) > 0;
+    };
     std::int32_t i = list.count++;
-    while (i > 0 && (list.priorities[i - 1] > priority ||
-        (list.priorities[i - 1] == priority && std::strcmp(list.names[i - 1], folder) > 0))) {
+    while (i > 0 && after(i - 1)) {
         std::strcpy(list.names[i], list.names[i - 1]);
+        std::strcpy(list.dirs[i], list.dirs[i - 1]);
+        list.remote[i] = list.remote[i - 1];
         list.priorities[i] = list.priorities[i - 1];
         --i;
     }
     std::strcpy(list.names[i], folder);
+    std::strcpy(list.dirs[i], dir);
+    list.remote[i] = remote;
     list.priorities[i] = priority;
     return true;
 }

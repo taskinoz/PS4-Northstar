@@ -12,7 +12,7 @@ design notes.
   console commands, including `connect`. The server browser joins public servers
   through Atlas.
 - **Idea 2 (agent harness):** largely built. There's `AI.Harness` (launch, status,
-  console, menu, back, json, cvar, localize), `scripts/Send-PadInput.ps1` for pad
+  console, menu, back, json, cvar, localize, download, join), `scripts/Send-PadInput.ps1` for pad
   input and `scripts/Capture-GameWindow.ps1` for screenshots. Still missing:
   structured events, assertion manifests and a machine-readable verdict.
 - **Idea 3 (console pipe):** built as the AI.Harness mailbox under

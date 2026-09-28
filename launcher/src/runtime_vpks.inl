@@ -6,9 +6,10 @@ std::atomic_flag g_mountingModVpks = ATOMIC_FLAG_INIT;
 bool g_modVpkHookReady = false;
 void DiscoverModVpks() {
     g_modVpks.clear();
-    ModDiscovery mods{}; CollectModNames(mods);
+    static ModDiscovery mods;
+    CollectModNames(mods);
     for (int i = 0; i < mods.count; ++i) {
-        const std::string directory = std::string(kModsRoot) + "/" + mods.names[i] + "/vpk";
+        const std::string directory = std::string(mods.dirs[i]) + "/vpk";
         DIR* dir = opendir(directory.c_str());
         if (!dir) continue;
         char config[kModJsonBufferSize]{}; std::size_t size = 0;

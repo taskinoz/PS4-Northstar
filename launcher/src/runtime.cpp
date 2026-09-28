@@ -9,6 +9,8 @@
 #include "northstar_ps4/json_text.h"
 #include "northstar_ps4/keyvalues.h"
 #include "northstar_ps4/server_list.h"
+#include "northstar_ps4/mod_archive.h"
+#include "northstar_ps4/mod_download.h"
 
 #include <orbis/libkernel.h>
 #include <orbis/Net.h>
@@ -726,31 +728,92 @@ bool ReadEnabledSettings(char* buffer, std::size_t capacity) noexcept {
     return true;
 }
 
+// Downloaded mods, PC's R2Northstar/runtime/remote/mods. /app0 is read-only on
+// hardware, so they live in the app's writable storage beside the other
+// runtime files.
+constexpr const char* kRemoteModsRoot = "/data/northstar_ps4/runtime/remote/mods";
+
+// PC's "Do not load remote mods on first load" (ModManager::SearchFilesystemForMods):
+// downloaded mods start disabled at every boot and are only switched on by the
+// server browser, for the server that needs them, through NSReloadMods. After
+// a reload their enabledmods.json entries apply like any other mod's.
+bool g_modsReloaded = false;
+
+bool ModEnabledNow(const char* settings, const ModInfo& mod, bool remote) noexcept {
+    if (remote && !g_modsReloaded) return false;
+    return IsModEnabled(settings, mod);
+}
+
+bool IsDirectory(const char* path) noexcept {
+    struct stat info{};
+    return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+}
+
 void CollectModNames(ModDiscovery& discovery, bool includeDisabled = false) noexcept {
-    discovery = ModDiscovery{};
+    discovery.count = 0;
     static char enabled[kModJsonBufferSize];
     std::size_t size = 0;
-    char path[256]{};
+    char path[kModDirCapacity + 16]{};
     if (!ReadEnabledSettings(enabled, sizeof(enabled))) {
         LogFormat("[NorthstarPS4] refusing mods: enabled settings are invalid or unreadable\n");
         return;
     }
-    auto collect = [&](const char* folder) {
+    auto collectDir = [&](const char* folder, const char* dir, bool remote) {
         if (!IsModFolderName(folder)) return;
-        std::snprintf(path, sizeof(path), "%s/%s/mod.json", kModsRoot, folder);
+        std::snprintf(path, sizeof(path), "%s/mod.json", dir);
         static char json[kModJsonBufferSize];
         ModInfo mod{};
         if (!ReadFileIntoBuffer(path, json, sizeof(json), size) || !ParseModMetadata(json, mod)) {
             LogFormat("[NorthstarPS4] skipping invalid mod metadata: %s\n", path);
             return;
         }
-        if (!includeDisabled && !IsModEnabled(enabled, mod)) {
-            LogFormat("[NorthstarPS4] mod disabled: %s %s\n", mod.name, mod.version);
+        if (!includeDisabled && !ModEnabledNow(enabled, mod, remote)) {
+            LogFormat("[NorthstarPS4] mod disabled: %s %s%s\n", mod.name, mod.version,
+                remote && !g_modsReloaded ? " (downloaded; enabled per server)" : "");
             return;
         }
-        if (!InsertMod(discovery, folder, mod.loadPriority))
-            LogFormat("[NorthstarPS4] mod catalog capacity exceeded: %s\n", folder);
+        if (!InsertMod(discovery, folder, mod.loadPriority, dir, remote))
+            LogFormat("[NorthstarPS4] mod catalog capacity exceeded: %s\n", dir);
     };
+    char localDirectory[kModDirCapacity]{};
+    auto collect = [&](const char* folder) {
+        if (!IsModFolderName(folder)) return;
+        std::snprintf(localDirectory, sizeof(localDirectory), "%s/%s", kModsRoot, folder);
+        // Files beside the mods (the profile's profile-files.json) are not mods.
+        if (!IsDirectory(localDirectory)) return;
+        collectDir(folder, localDirectory, false);
+    };
+    // A remote folder is either a mod itself (ModWorkshop, or a copy of PC's
+    // folder) or a Thunderstore package holding mods/<Name>/mod.json.
+    if (DIR* remoteRoot = opendir(kRemoteModsRoot)) {
+        while (struct dirent* entry = readdir(remoteRoot)) {
+            // Package names ("<Team>-<Mod>-<Version>") may be longer than a
+            // mod folder name; only the mods inside them are listed by name.
+            if (entry->d_name[0] == '.') continue;
+            char package[kModDirCapacity];
+            const int n = std::snprintf(package, sizeof(package), "%s/%s", kRemoteModsRoot, entry->d_name);
+            if (n <= 0 || static_cast<std::size_t>(n) >= sizeof(package) || !IsDirectory(package)) continue;
+            std::snprintf(path, sizeof(path), "%s/mod.json", package);
+            struct stat info{};
+            if (stat(path, &info) == 0) { collectDir(entry->d_name, package, true); continue; }
+            char mods[kModDirCapacity];
+            std::snprintf(mods, sizeof(mods), "%s/mods", package);
+            DIR* inner = opendir(mods);
+            if (!inner) continue;
+            while (struct dirent* modEntry = readdir(inner)) {
+                if (!IsModFolderName(modEntry->d_name)) continue;
+                char modDir[kModDirCapacity];
+                const int m = std::snprintf(modDir, sizeof(modDir), "%s/%s", mods, modEntry->d_name);
+                if (m <= 0 || static_cast<std::size_t>(m) >= sizeof(modDir)) {
+                    LogFormat("[NorthstarPS4] downloaded mod path too long: %s/%s\n", mods, modEntry->d_name);
+                    continue;
+                }
+                if (IsDirectory(modDir)) collectDir(modEntry->d_name, modDir, true);
+            }
+            closedir(inner);
+        }
+        closedir(remoteRoot);
+    }
     DIR* const dir = opendir(kModsRoot);
     if (dir != nullptr) {
         while (struct dirent* entry = readdir(dir)) collect(entry->d_name);
@@ -797,11 +860,12 @@ void RegisterModConVars(const ModInfo& mod, std::int32_t& poolIndex,
         std::snprintf(help[slot], sizeof(help[0]),
             "Northstar PS4 mod convar (%s)", mod.name);
         void* registered = findVar(cvar, names[slot]);
-        if (registered == nullptr) {
-            constructor(objects[slot], names[slot], defaults[slot], 0,
-                help[slot], nullptr);
-            registered = findVar(cvar, names[slot]);
-        }
+        // Already there: a stock convar, or this mod's from before a reload.
+        // PC keeps those too (ModManager::LoadMods), and the slot stays free.
+        if (registered != nullptr) continue;
+        constructor(objects[slot], names[slot], defaults[slot], 0,
+            help[slot], nullptr);
+        registered = findVar(cvar, names[slot]);
         LogFormat(
             "[NorthstarPS4] mod convar name=%s default=%s flags=%s result=%p success=%d\n",
             names[slot], defaults[slot], info.flags, registered,
@@ -810,10 +874,16 @@ void RegisterModConVars(const ModInfo& mod, std::int32_t& poolIndex,
     }
 }
 
+// Kept for NSReloadMods, which registers the ConVars of newly enabled mods.
+void* g_modConVarCvar = nullptr;
+ModFindVarFn g_modConVarFindVar = nullptr;
+ModConVarConstructorFn g_modConVarConstructor = nullptr;
+std::int32_t g_modConVarSlot = 0;
+
 void ProbeModMetadata(void* cvar, ModFindVarFn findVar,
     std::uintptr_t engineBase, std::size_t engineSize) noexcept {
     LogFormat("[NorthstarPS4] mod metadata probe start cvar=%p\n", cvar);
-    ModDiscovery discovery{};
+    static ModDiscovery discovery;
     CollectModNames(discovery);
     LogFormat("[NorthstarPS4] mod metadata discovered %d mod(s)\n",
         discovery.count);
@@ -832,12 +902,14 @@ void ProbeModMetadata(void* cvar, ModFindVarFn findVar,
     }
     auto constructor = reinterpret_cast<ModConVarConstructorFn>(
         engineBase + kConVarConstructorVa);
+    g_modConVarCvar = cvar;
+    g_modConVarFindVar = findVar;
+    g_modConVarConstructor = constructor;
 
-    std::int32_t conVarSlot = 0;
+    std::int32_t& conVarSlot = g_modConVarSlot;
     for (std::int32_t i = 0; i < discovery.count; ++i) {
-        char path[160]{};
-        std::snprintf(path, sizeof(path), "/app0/R2Northstar/mods/%s/mod.json",
-            discovery.names[i]);
+        char path[kModDirCapacity + 16]{};
+        std::snprintf(path, sizeof(path), "%s/mod.json", discovery.dirs[i]);
         static char jsonBuffer[kModJsonBufferSize];
         std::size_t jsonSize = 0;
         if (!ReadFileIntoBuffer(path, jsonBuffer,
@@ -1562,14 +1634,10 @@ using FsCloseFn = void (*)(void*, void*);
 // the old "dump mod content into r2" staging: mods now live and load from
 // their own folder exactly like PC R2Northstar/mods/<Name>/mod.
 constexpr std::size_t kFsVtableCopySlots = 256;
-constexpr std::size_t kMaxModRoots = kMaxModNames;
-constexpr std::size_t kModRootCapacity = 128;
 
 std::uintptr_t g_fsVtableCopy[kFsVtableCopySlots]{};
-char g_modRoots[kMaxModRoots][kModRootCapacity]{};
-std::int32_t g_modRootCount = 0;
 
-// Every file under every mod root, indexed once per boot.
+// Every file under every mod root, indexed when the overlay is built.
 //
 // The overlay used to find mod files by trying `open()` on each mod root, for
 // every file the engine asked for. Nearly every request is for a stock file
@@ -1580,11 +1648,8 @@ std::int32_t g_modRootCount = 0;
 // window where the client has to keep up with the server. PC Northstar
 // indexes mod files up front for the same reason (ModManager's file map).
 //
-// Mods cannot change mid-session (enabling one already requires a restart), so
-// one walk at overlay install is enough. Keys are lowercased because the host
-// filesystem is case-insensitive and the probe it replaces matched that way.
-// A sorted vector rather than a map: this module's static constructors never
-// run, and a zeroed vector is a valid empty one.
+// Keys are lowercased because the host filesystem is case-insensitive and the
+// probe it replaces matched that way. A sorted vector rather than a map.
 //
 // 800 files across 6 roots: failed opens per session 55,590 -> 103, boot to the
 // Northstar lobby 70-74 s -> 52-57 s.
@@ -1596,8 +1661,26 @@ std::int32_t g_modRootCount = 0;
 // #5047), so the index is on; older emulator builds should keep it off.
 constexpr bool kModFileIndexEnabled = true;
 struct ModFileEntry { std::string key; std::int32_t root; };
-std::vector<ModFileEntry> g_modFileIndex;
-std::atomic<bool> g_modFileIndexReady{false};
+
+// The enabled mods' roots and file index, as one immutable snapshot. File
+// opens arrive on several engine threads, and NSReloadMods replaces the set
+// of mods while they run, so readers take the pointer once and use only that
+// snapshot; a reload publishes a new one. Replaced snapshots are leaked on
+// purpose: an open already in flight may still be reading one, and a reload
+// happens a handful of times per session at most.
+struct ModOverlay {
+    std::vector<std::string> dirs;   // mod directory (holds mod.json), ascending priority
+    std::vector<std::string> roots;  // dirs[i] + "/mod", the search path
+    std::vector<ModFileEntry> index;
+    bool indexed = false;
+};
+std::atomic<const ModOverlay*> g_modOverlay{nullptr};
+
+const ModOverlay* CurrentModOverlay() noexcept { return g_modOverlay.load(std::memory_order_acquire); }
+std::int32_t ModRootCount() noexcept {
+    const ModOverlay* overlay = CurrentModOverlay();
+    return overlay ? static_cast<std::int32_t>(overlay->roots.size()) : 0;
+}
 
 std::string ModFileKey(const char* normalized) {
     std::string key(normalized);
@@ -1606,8 +1689,8 @@ std::string ModFileKey(const char* normalized) {
     return key;
 }
 
-void IndexModDirectory(std::int32_t root, const std::string& absolute, const std::string& relative,
-    int depth) noexcept {
+void IndexModDirectory(std::vector<ModFileEntry>& index, std::int32_t root, const std::string& absolute,
+    const std::string& relative, int depth) noexcept {
     if (depth > 16) return;
     DIR* dir = opendir(absolute.c_str());
     if (!dir) return;
@@ -1618,37 +1701,48 @@ void IndexModDirectory(std::int32_t root, const std::string& absolute, const std
                                                            : relative + "/" + entry->d_name;
         struct stat info{};
         if (stat(childAbsolute.c_str(), &info) != 0) continue;
-        if (S_ISDIR(info.st_mode)) IndexModDirectory(root, childAbsolute, childRelative, depth + 1);
-        else g_modFileIndex.push_back({ModFileKey(childRelative.c_str()), root});
+        if (S_ISDIR(info.st_mode)) IndexModDirectory(index, root, childAbsolute, childRelative, depth + 1);
+        else index.push_back({ModFileKey(childRelative.c_str()), root});
     }
     closedir(dir);
 }
 
-void BuildModFileIndex() noexcept {
-    g_modFileIndex.clear();
-    for (std::int32_t root = 0; root < g_modRootCount; ++root)
-        IndexModDirectory(root, g_modRoots[root], std::string(), 0);
+// A snapshot of the currently enabled mods. The caller publishes it.
+ModOverlay* BuildModOverlay() noexcept {
+    static ModDiscovery discovery;
+    CollectModNames(discovery);
+    auto* overlay = new ModOverlay;
+    for (std::int32_t i = 0; i < discovery.count; ++i) {
+        overlay->dirs.emplace_back(discovery.dirs[i]);
+        overlay->roots.push_back(overlay->dirs.back() + "/mod");
+        LogFormat("[NorthstarPS4] fs overlay mod root[%d]=%s\n", i, overlay->roots.back().c_str());
+    }
+    if (!kModFileIndexEnabled) return overlay;
+    auto& index = overlay->index;
+    for (std::size_t root = 0; root < overlay->roots.size(); ++root)
+        IndexModDirectory(index, static_cast<std::int32_t>(root), overlay->roots[root], std::string(), 0);
     // Highest root (priority) first within each key, then keep only that one.
-    std::sort(g_modFileIndex.begin(), g_modFileIndex.end(),
+    std::sort(index.begin(), index.end(),
         [](const ModFileEntry& a, const ModFileEntry& b) {
             return a.key != b.key ? a.key < b.key : a.root > b.root;
         });
-    g_modFileIndex.erase(std::unique(g_modFileIndex.begin(), g_modFileIndex.end(),
+    index.erase(std::unique(index.begin(), index.end(),
         [](const ModFileEntry& a, const ModFileEntry& b) { return a.key == b.key; }),
-        g_modFileIndex.end());
-    g_modFileIndexReady.store(true, std::memory_order_release);
-    LogFormat("[NorthstarPS4] mod file index: %zu files across %d roots\n",
-        g_modFileIndex.size(), g_modRootCount);
+        index.end());
+    overlay->indexed = true;
+    LogFormat("[NorthstarPS4] mod file index: %zu files across %zu roots\n",
+        index.size(), overlay->roots.size());
+    return overlay;
 }
 
-// The highest-priority mod root that ships `normalized`, or -1. Falls back to
-// the old per-root probe if the index was never built, so a failure here can
-// only cost speed, never mods.
-std::int32_t FindModFileRoot(const char* normalized) noexcept {
-    if (!g_modFileIndexReady.load(std::memory_order_acquire)) {
-        for (std::int32_t i = g_modRootCount - 1; i >= 0; --i) {
+// The highest-priority root in `overlay` that ships `normalized`, or -1. Falls
+// back to the old per-root probe if the index was not built, so a failure
+// there can only cost speed, never mods.
+std::int32_t FindModFileRoot(const ModOverlay& overlay, const char* normalized) noexcept {
+    if (!overlay.indexed) {
+        for (std::int32_t i = static_cast<std::int32_t>(overlay.roots.size()) - 1; i >= 0; --i) {
             char candidate[384];
-            const int n = std::snprintf(candidate, sizeof(candidate), "%s/%s", g_modRoots[i], normalized);
+            const int n = std::snprintf(candidate, sizeof(candidate), "%s/%s", overlay.roots[i].c_str(), normalized);
             if (n < 0 || static_cast<std::size_t>(n) >= sizeof(candidate)) continue;
             const int fd = open(candidate, O_RDONLY);
             if (fd < 0) continue;
@@ -1658,13 +1752,19 @@ std::int32_t FindModFileRoot(const char* normalized) noexcept {
         return -1;
     }
     const std::string key = ModFileKey(normalized);
-    auto it = std::lower_bound(g_modFileIndex.begin(), g_modFileIndex.end(), key,
+    auto it = std::lower_bound(overlay.index.begin(), overlay.index.end(), key,
         [](const ModFileEntry& entry, const std::string& k) { return entry.key < k; });
-    return (it != g_modFileIndex.end() && it->key == key) ? it->root : -1;
+    return (it != overlay.index.end() && it->key == key) ? it->root : -1;
 }
 
-bool ModCandidate(std::int32_t root, const char* normalized, char* out, std::size_t capacity) noexcept {
-    const int n = std::snprintf(out, capacity, "%s/%s", g_modRoots[root], normalized);
+// The absolute path of the mod file that wins for `normalized`, if any
+// enabled mod ships it.
+bool ResolveModFile(const char* normalized, char* out, std::size_t capacity) noexcept {
+    const ModOverlay* overlay = CurrentModOverlay();
+    if (!overlay) return false;
+    const std::int32_t root = FindModFileRoot(*overlay, normalized);
+    if (root < 0) return false;
+    const int n = std::snprintf(out, capacity, "%s/%s", overlay->roots[root].c_str(), normalized);
     return n > 0 && static_cast<std::size_t>(n) < capacity;
 }
 FsOpenFn g_originalFsOpen = nullptr;
@@ -1700,13 +1800,25 @@ std::size_t NormalizeRequestedPath(const char* in, char* out, std::size_t capaci
     return n;
 }
 
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+bool IsKeyValuePatched(const char* normalized) noexcept;  // runtime_keyvalues.inl
+#endif
+
 bool ModReadFromCache(void* self, const char* fileName, void* result) noexcept {
     char normalized[256]{};
     if (NormalizeRequestedPath(fileName, normalized, sizeof(normalized))) {
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
         if (!std::strcmp(normalized, "cfg/server/persistent_player_data_version_929.pdef")) return false;
+        // A KeyValues patch lives in the mod's keyvalues/ folder, not its
+        // search path, so the check below misses it and the cache would hand
+        // back the vanilla file without ever reaching the merge in OpenEx.
+        if (IsKeyValuePatched(normalized)) {
+            LogFormat("[NorthstarPS4] bypass cached keyvalues file: %s\n", normalized);
+            return false;
+        }
 #endif
-        if (FindModFileRoot(normalized) >= 0) {
+        const ModOverlay* overlay = CurrentModOverlay();
+        if (overlay && FindModFileRoot(*overlay, normalized) >= 0) {
             LogFormat("[NorthstarPS4] bypass cached mod file: %s\n", normalized);
             return false;
         }
@@ -1730,6 +1842,12 @@ bool g_runtimeManifestGenerated = false;
 bool InitHttpTransport() noexcept;
 bool HttpGet(const char* url, char* out, std::size_t capacity, int& status) noexcept;
 bool HttpPost(const char* url, char* out, std::size_t capacity, int& status) noexcept;
+using HttpChunkFn = bool (*)(const void* data, std::size_t size, void* user);
+bool HttpStream(const char* url, HttpChunkFn onChunk, void* user, std::uint64_t& contentLength,
+    int& status, const std::atomic<bool>* cancel) noexcept;
+// Defined in runtime_mod_reload.inl, which needs the file overlay, VPK and
+// KeyValues code below.
+void ReloadModState() noexcept;
 #include "runtime_ui_api.inl"
 #include "runtime_script_print.inl"
 #include "runtime_ui_callbacks.inl"
@@ -1805,7 +1923,7 @@ bool BuildRuntimeManifest(void* self) noexcept {
     g_originalFsClose(reinterpret_cast<char*>(self) + 8, source);
     if (count < 0 || original.empty() || original.size() >= 1024 * 1024) return false;
     std::string initBlocks, modBlocks;
-    ModDiscovery discovery{};
+    static ModDiscovery discovery;
     CollectModNames(discovery);
     // Collected rather than appended directly, so a script path declared by
     // more than one mod is resolved instead of emitted twice. The engine treats
@@ -1826,8 +1944,8 @@ bool BuildRuntimeManifest(void* self) noexcept {
     // override should not reorder anything around it.
     std::vector<std::pair<std::string, std::string>> scripts;  // normalized path, RunOn
     for (int i = 0; i < discovery.count; ++i) {
-        char metadataPath[256]{};
-        std::snprintf(metadataPath, sizeof(metadataPath), "%s/%s/mod.json", kModsRoot, discovery.names[i]);
+        char metadataPath[kModDirCapacity + 16]{};
+        std::snprintf(metadataPath, sizeof(metadataPath), "%s/mod.json", discovery.dirs[i]);
         static char json[kModJsonBufferSize];
         std::size_t size = 0;
         static ModInfo info;
@@ -1914,6 +2032,7 @@ std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noex
 
 #include "runtime_vpks.inl"
 #include "runtime_rpaks.inl"
+#include "runtime_mod_reload.inl"
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 // After runtime_vpks.inl: the map command guard checks mod map archives.
 #include "runtime_concommands.inl"
@@ -1970,9 +2089,8 @@ bool ModReadFile(void* self, const char* fileName, const char* pathID, void* buf
         if (RewrittenByOpenEx(normalized)) {
             LogFormat("[NorthstarPS4] ReadFile of rewritten file left stock: %s\n", normalized);
         } else {
-            const std::int32_t root = FindModFileRoot(normalized);
             char candidate[384];
-            if (root >= 0 && ModCandidate(root, normalized, candidate, sizeof(candidate))) {
+            if (ResolveModFile(normalized, candidate, sizeof(candidate))) {
                 if (g_originalFsReadFile(self, candidate, pathID, buffer, maxBytes, startingByte, alloc)) {
                     LogFormat("[NorthstarPS4] mod file read: %s\n", candidate);
                     return true;
@@ -2035,9 +2153,8 @@ void* ModOpenEx(void* self, const char* fileName, const char* mode,
 #endif
     if (readOnly && (!pathID || std::strcmp(pathID, "GAME") == 0) &&
         NormalizeRequestedPath(fileName, normalized, sizeof(normalized))) {
-        const std::int32_t root = FindModFileRoot(normalized);
         char candidate[384];
-        if (root >= 0 && ModCandidate(root, normalized, candidate, sizeof(candidate))) {
+        if (ResolveModFile(normalized, candidate, sizeof(candidate))) {
             void* handle = g_originalFsOpenEx(self, candidate, mode, flags, pathID, resolved);
             if (handle) {
                 LogFormat("[NorthstarPS4] mod file served: %s\n", candidate);
@@ -2048,67 +2165,6 @@ void* ModOpenEx(void* self, const char* fileName, const char* mode,
     return g_originalFsOpenEx(self, fileName, mode, flags, pathID, resolved);
 }
 
-void* ModSearchPathOpen(void* self, const char* fileName, const char* mode,
-    const char* pathID, std::int64_t flags) noexcept {
-    // TEMP DIAGNOSTIC (2026-08-17): tracing a case where fixed mod content
-    // (verified correct on disk in both the VPK and the /app0/R2Northstar/mods overlay)
-    // still isn't what CLIENT-context script compilation reads at connect
-    // time. Logs every open attempt whose requested path mentions
-    // "codecallbacks" -- remove once root-caused.
-    const bool traceThis = fileName != nullptr &&
-        (std::strstr(fileName, "codecallbacks") != nullptr ||
-         std::strstr(fileName, "scripts.rson") != nullptr ||
-         std::strstr(fileName, "_menus.nut") != nullptr ||
-         std::strstr(fileName, "panel_mainmenu.nut") != nullptr);
-    if (traceThis) {
-        LogFormat("[NorthstarPS4] modtrace requested fileName=%s mode=%s pathID=%s\n",
-            fileName, mode != nullptr ? mode : "(null)",
-            pathID != nullptr ? pathID : "(null)");
-    }
-    const bool readOnly = mode != nullptr &&
-        std::strchr(mode, 'w') == nullptr && std::strchr(mode, 'a') == nullptr &&
-        std::strchr(mode, '+') == nullptr;
-    if (readOnly && fileName != nullptr &&
-        (pathID == nullptr || std::strcmp(pathID, "GAME") == 0)) {
-        char normalized[256]{};
-        const std::size_t pathLength =
-            NormalizeRequestedPath(fileName, normalized, sizeof(normalized));
-        if (traceThis) {
-            LogFormat("[NorthstarPS4] modtrace normalized=%s length=%zu modRootCount=%d\n",
-                normalized, pathLength, g_modRootCount);
-        }
-        if (pathLength > 0) {
-            for (std::int32_t i = g_modRootCount - 1; i >= 0; --i) {
-                const std::size_t rootLength = std::strlen(g_modRoots[i]);
-                if (rootLength + 1 + pathLength >= 384) continue;
-                char candidate[384]{};
-                std::memcpy(candidate, g_modRoots[i], rootLength);
-                candidate[rootLength] = '/';
-                std::memcpy(candidate + rootLength + 1, normalized, pathLength);
-                candidate[rootLength + 1 + pathLength] = '\0';
-                // NOTE: access() is a shadPS4 stub that always returns 0, so
-                // probe existence with open/close (real kernel FS) instead.
-                const int fd = open(candidate, O_RDONLY);
-                if (traceThis) {
-                    LogFormat("[NorthstarPS4] modtrace candidate[%d]=%s fd=%d\n",
-                        i, candidate, fd);
-                }
-                if (fd < 0) continue;
-                close(fd);
-                if (traceThis) {
-                    LogFormat("[NorthstarPS4] modtrace SERVING candidate=%s\n", candidate);
-                }
-                void* handle = g_originalFsOpen(self, candidate, mode, pathID, flags);
-                if (handle != nullptr) return handle;
-            }
-        }
-    }
-    if (traceThis) {
-        LogFormat("[NorthstarPS4] modtrace FALLTHROUGH to original open fileName=%s\n",
-            fileName);
-    }
-    return g_originalFsOpen(self, fileName, mode, pathID, flags);
-}
 } // namespace
 
 void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
@@ -2160,18 +2216,9 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
     // Discover mods and install the mod search-path overlay (only when at
     // least one mod root exists; otherwise the game's open dispatch is left
     // untouched).
-    ModDiscovery discovery{};
-    CollectModNames(discovery);
-    g_modRootCount = 0;
-    for (std::int32_t i = 0; i < discovery.count && g_modRootCount < kMaxModRoots; ++i) {
-        std::snprintf(g_modRoots[g_modRootCount], sizeof(g_modRoots[0]),
-            "/app0/R2Northstar/mods/%s/mod", discovery.names[i]);
-        LogFormat("[NorthstarPS4] fs overlay mod root[%d]=%s\n",
-            g_modRootCount, g_modRoots[g_modRootCount]);
-        ++g_modRootCount;
-    }
-    if (g_modRootCount == 0) return;
-    if (kModFileIndexEnabled) BuildModFileIndex();
+    ModOverlay* overlay = BuildModOverlay();
+    if (overlay->roots.empty()) { delete overlay; return; }
+    g_modOverlay.store(overlay, std::memory_order_release);
     OrbisKernelModuleInfo fsInfo{};
     fsInfo.size = sizeof(fsInfo);
     if (sceKernelGetModuleInfo(fsHandle, &fsInfo) != 0 || fsInfo.segmentCount == 0) return;
@@ -2242,7 +2289,7 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
         LogFormat("[NorthstarPS4] ReadFile profile mismatch; whole-file reads bypass mods\n");
     }
     g_fsHookInstalled = true;
-    LogFormat("[NorthstarPS4] OpenEx hook installed roots=%d\n", g_modRootCount);
+    LogFormat("[NorthstarPS4] OpenEx hook installed roots=%d\n", ModRootCount());
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     CollectKeyValuePatches();
 #endif
@@ -2337,60 +2384,11 @@ void ProbeLocaliseInterface(OrbisKernelModule localizeHandle,
             vptrInModule ? 1 : 0, slotInModule ? 1 : 0);
         return;
     }
-    const auto addFile = reinterpret_cast<AddFileFn>(addFileSlot);
-
-    // AddFile routes through vtable slot 9 (its own address) when this+0x48 is
-    // zero; force the field to 1 so the direct path is taken, then restore it.
-    std::uint8_t* const fallbackField =
-        reinterpret_cast<std::uint8_t*>(thisAddr + 0x48);
-    const std::uint8_t savedFallback = *fallbackField;
-    *fallbackField = 1;
-
-    ModDiscovery discovery{};
-    CollectModNames(discovery);
+    g_localiseAddFile = reinterpret_cast<AddFileFn>(addFileSlot);
+    g_localiseThis = thisAddr;
     std::int32_t totalFiles = 0;
     std::int32_t loadedFiles = 0;
-    for (std::int32_t i = 0; i < discovery.count; ++i) {
-        char path[160]{};
-        std::snprintf(path, sizeof(path), "/app0/R2Northstar/mods/%s/mod.json",
-            discovery.names[i]);
-        static char jsonBuffer[kModJsonBufferSize];
-        std::size_t jsonSize = 0;
-        if (!ReadFileIntoBuffer(path, jsonBuffer,
-                sizeof(jsonBuffer) - 1, jsonSize)) {
-            LogFormat("[NorthstarPS4] localise mod metadata read failed: %s\n", path);
-            continue;
-        }
-        ModInfo mod{};
-        if (!ParseModMetadata(jsonBuffer, mod)) {
-            LogFormat("[NorthstarPS4] localise mod metadata parse failed: %s\n", path);
-            continue;
-        }
-        for (std::int32_t f = 0; f < mod.localisationCount; ++f) {
-            // The PS4 AddFile does not expand %language%: given the token it only
-            // probes the stock resource folders and returns true without opening
-            // anything, so every mod-only token stayed unresolved. With the name
-            // spelled out (as the self-test below always was) it loads through the
-            // mod overlay. English is what PC falls back to; picking the system
-            // language is not done yet.
-            std::string resolved = mod.localisationFiles[f];
-            const std::size_t token = resolved.find("%language%");
-            if (token != std::string::npos) resolved.replace(token, 10, "english");
-            const bool ok = addFile(reinterpret_cast<void*>(thisAddr),
-                resolved.c_str(), nullptr, false);
-            LogFormat("[NorthstarPS4] localise %s file=%s result=%d\n",
-                mod.name, resolved.c_str(), ok ? 1 : 0);
-            ++totalFiles;
-            if (ok) ++loadedFiles;
-        }
-    }
-    {
-        const bool ok = addFile(reinterpret_cast<void*>(thisAddr),
-            "resource/northstar_client_localisation_english.txt", nullptr, false);
-        LogFormat("[NorthstarPS4] localise self-test vanilla english result=%d\n",
-            ok ? 1 : 0);
-    }
-    *fallbackField = savedFallback;
+    AddModLocalisationFiles(totalFiles, loadedFiles);
     LogFormat("[NorthstarPS4] localise probe complete files=%d loaded=%d\n",
         totalFiles, loadedFiles);
 }

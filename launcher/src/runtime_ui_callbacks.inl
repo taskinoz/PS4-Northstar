@@ -82,7 +82,7 @@ bool RuntimeClientMapSpawn(void* owner, const char* callback) noexcept {
     return DispatchLifecycle(g_runtimeClientLifecycle, owner, callback);
 }
 
-// The discovery list and the metadata buffer are ~25 KiB together and this
+// The discovery list and the metadata buffer are ~50 KiB together and this
 // runs during VM init on an engine thread with a small stack, so they are kept
 // out of the frame; the two calls below are sequential and single-threaded.
 ModDiscovery g_lifecycleDiscovery;
@@ -98,7 +98,7 @@ __attribute__((noinline)) bool LoadLifecycleCallbacks(VmLifecycle& state) noexce
     for (int i = 0; i < mods.count; ++i) {
         char path[256];
         std::size_t size = 0;
-        std::snprintf(path, sizeof(path), "%s/%s/mod.json", kModsRoot, mods.names[i]);
+        std::snprintf(path, sizeof(path), "%s/mod.json", mods.dirs[i]);
         std::vector<ScriptCallback> entries;
         if (!ReadFileIntoBuffer(path, json, kModJsonBufferSize, size) ||
             !ParseScriptCallbacks(json, state.metadataKey, entries)) {

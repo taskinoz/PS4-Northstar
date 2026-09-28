@@ -33,19 +33,19 @@ const char* TextArg(void* vm, int index) {
 }
 #include "runtime_save_files.inl"
 #include "runtime_json.inl"
-struct CatalogEntry { ModInfo info; std::string download; bool required, enabled; };
+struct CatalogEntry { ModInfo info; std::string download; bool required, enabled, remote; };
 std::vector<CatalogEntry> catalog;
 bool catalogReady = false;
 void LoadCatalog() {
     if (catalogReady) return;
-    ModDiscovery all{};
+    static ModDiscovery all;
     CollectModNames(all, true);
     char settings[kModJsonBufferSize] = "{}";
     std::size_t size = 0;
     if (!ReadEnabledSettings(settings, sizeof(settings))) return;
     for (int i = 0; i < all.count; ++i) {
         char path[256], json[kModJsonBufferSize];
-        std::snprintf(path, sizeof(path), "%s/%s/mod.json", kModsRoot, all.names[i]);
+        std::snprintf(path, sizeof(path), "%s/mod.json", all.dirs[i]);
         CatalogEntry entry{};
         if (!ReadFileIntoBuffer(path, json, sizeof(json), size) || !ParseModMetadata(json, entry.info)) continue;
         char download[512]{};
@@ -54,7 +54,8 @@ void LoadCatalog() {
         entry.download = download;
         const char* required = JsonFindMember(json, "RequiredOnClient");
         entry.required = required && std::strncmp(JsonSkipWs(required), "true", 4) == 0;
-        entry.enabled = IsModEnabled(settings, entry.info);
+        entry.remote = all.remote[i];
+        entry.enabled = ModEnabledNow(settings, entry.info, entry.remote);
         catalog.push_back(entry);
     }
     catalogReady = true;
@@ -69,7 +70,7 @@ void PushMod(void* vm, const CatalogEntry& entry) {
     Integer(vm, m.loadPriority); Seal(vm, 4);
     Boolean(vm, entry.enabled); Seal(vm, 5);
     Boolean(vm, entry.required); Seal(vm, 6);
-    Boolean(vm, false); Seal(vm, 7); // app0 mods are local, never remote packages
+    Boolean(vm, entry.remote); Seal(vm, 7);
     Array(vm);
     for (int i = 0; i < m.conVarCount; ++i) { String(vm, m.conVars[i].name); Append(vm); }
     Seal(vm, 8);
@@ -114,10 +115,10 @@ int ReloadMods(void* vm) {
     if (std::fclose(file) != 0) ok = false;
     if (!ok || std::rename(temporary, "/data/northstar_ps4/enabledmods.json") != 0)
         return Error(vm, "Cannot commit enabled settings; previous settings preserved");
-    // Do not change loose-file roots underneath a live VM: existing compiled
-    // globals belong to its current generation. The next boot applies the file.
-    LogFormat("[NorthstarPS4] enabled settings committed; restart required to reload script VMs\n");
-    return Error(vm, "Mod settings saved. Restart the game to apply them; live VM reload is not implemented on PS4");
+    // Rebuilt for the next VM generation: the script's `uiscript_reset` and the
+    // connect's map load that follow compile against the new set, as on PC.
+    ReloadModState();
+    return 0;
 }
 // Most of these stay explicit about being unimplemented: a request that cannot
 // work should finish with a reason rather than hang the UI.
@@ -171,6 +172,7 @@ int CompleteLocalAuth(void* vm) {
 }
 #include "runtime_server_list.inl"
 #include "runtime_server_join.inl"
+#include "runtime_mod_download.inl"
 int AuthResult(void* vm) {
     Struct(vm, 3);
     Boolean(vm, AtlasIdentityReady()); Seal(vm, 0);
@@ -184,21 +186,6 @@ int PromoData(void* vm) { return Error(vm, "Custom promo data is unavailable"); 
 // no cursor to report, and the declared return type is "vector ornull", so
 // null is the honest answer rather than an invented coordinate.
 int CursorPosition(void*) { return 0; }
-// Match PC Northstar's defined behavior when its downloader is absent.
-// This completes the script ABI, not the download transport implementation.
-int DownloadUnavailable(void*) {
-    LogFormat("[NorthstarPS4] mod downloader unavailable; install state NOT_FOUND\n");
-    return 0;
-}
-int CancelDownload(void*) { return 0; }
-int ModInstallState(void* vm) {
-    Struct(vm, 4);
-    Integer(vm, 12); Seal(vm, 0); // PC ModDownloader::NOT_FOUND
-    Integer(vm, 0); Seal(vm, 1);
-    Integer(vm, 0); Seal(vm, 2);
-    PushPrimitive(vm, 0x5000004, 0); Seal(vm, 3); // float 0.0
-    return 1;
-}
 int HttpUnavailable(void* vm) {
     LogFormat("[NorthstarPS4] HTTP handler unavailable; returning request handle -1\n");
     Integer(vm, -1); return 1;
@@ -328,11 +315,11 @@ const Registration registrations[] = {
     {"NS_InternalMakeHttpRequest", "int", "int method, string baseUrl, table<string, array<string> > headers, table<string, array<string> > queryParams, string contentType, string body, int timeout, string userAgent", HttpUnavailable, kCtxAll},
     {"NSIsHttpEnabled", "bool", "", Authenticated, kCtxAll},
     {"NSIsLocalHttpAllowed", "bool", "", Authenticated, kCtxAll},
-    {"NSFetchVerifiedModsManifesto", "void", "", DownloadUnavailable, kCtxAll},
-    {"NSIsModDownloadable", "bool", "string name, string version", Authenticated, kCtxAll},
-    {"NSDownloadMod", "void", "string name, string version", DownloadUnavailable, kCtxAll},
-    {"NSGetModInstallState", "ModInstallState", "", ModInstallState, kCtxAll},
-    {"NSCancelModDownload", "void", "", CancelDownload, kCtxAll},
+    {"NSFetchVerifiedModsManifesto", "void", "", FetchVerifiedMods, kCtxAll},
+    {"NSIsModDownloadable", "bool", "string name, string version", IsModDownloadable, kCtxAll},
+    {"NSDownloadMod", "void", "string name, string version", DownloadMod, kCtxAll},
+    {"NSGetModInstallState", "ModInstallState", "", GetModInstallState, kCtxAll},
+    {"NSCancelModDownload", "void", "", CancelModDownload, kCtxAll},
     {"NSIsMasterServerAuthenticated", "bool", "", MasterServerAuthenticated, kCtxUi},
     {"NSGetMasterServerAuthResult", "MasterServerAuthResult", "", AuthResult, kCtxUi},
     {"NSTryAuthWithLocalServer", "void", "", TryLocalAuth, kCtxUi},

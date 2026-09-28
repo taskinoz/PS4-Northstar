@@ -160,6 +160,38 @@ void InstallMapCommandGuard(std::uintptr_t engineBase, std::size_t engineSize) n
     LogFormat("[NorthstarPS4] map command guard installed\n");
 }
 
+// `reload_localization` (engine+0x812e0, a jump into the localize singleton's
+// reload) rebuilds the token table while other threads read it; on PS4 the
+// first call faulted at localize+0x7aed, a hash-chain walk on another thread.
+// Northstar's ReloadMods() calls it after every mod change, so it is replaced
+// with the part Northstar needs: adding the newly enabled mods' files, which
+// only inserts and never clears the table. Tokens of mods disabled by the
+// reload stay loaded until the next boot.
+constexpr std::uintptr_t kReloadLocalizationObjectVa = 0x1a1d2c0;
+constexpr std::uintptr_t kReloadLocalizationNameVa = 0x33357d;
+constexpr std::uintptr_t kReloadLocalizationCallbackVa = 0x812e0;
+
+void ModReloadLocalization(const CCommandView*) {
+    std::int32_t total = 0, loaded = 0;
+    AddModLocalisationFiles(total, loaded);
+    LogFormat("[NorthstarPS4] reload_localization: %d new mod file(s), %d loaded; full engine reload skipped\n",
+        total, loaded);
+}
+
+void InstallReloadLocalizationGuard(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
+    // mov rax,[rdi]; jmp [rax+0xd8] - after the rip-relative load of the singleton.
+    constexpr std::uint8_t callbackBytes[] = {0x48, 0x8b, 0x07, 0xff, 0xa0, 0xd8, 0x00, 0x00, 0x00};
+    auto object = reinterpret_cast<std::uintptr_t*>(engineBase + kReloadLocalizationObjectVa);
+    if (!ValidateEnginePreimage(engineBase, engineSize, kReloadLocalizationCallbackVa + 7, callbackBytes, sizeof(callbackBytes)) ||
+        object[0x18 / 8] != engineBase + kReloadLocalizationNameVa ||
+        object[0x40 / 8] != engineBase + kReloadLocalizationCallbackVa) {
+        LogFormat("[NorthstarPS4] reload_localization guard refused: engine profile mismatch\n");
+        return;
+    }
+    object[0x40 / 8] = reinterpret_cast<std::uintptr_t>(&ModReloadLocalization);
+    LogFormat("[NorthstarPS4] reload_localization guard installed\n");
+}
+
 bool g_nativeConCommandsRegistered = false;
 
 void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
@@ -205,4 +237,5 @@ void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize
     }
     g_nativeConCommandsRegistered = true;
     InstallMapCommandGuard(engineBase, engineSize);
+    InstallReloadLocalizationGuard(engineBase, engineSize);
 }

@@ -64,10 +64,10 @@ std::atomic_flag g_loadingModRpaks = ATOMIC_FLAG_INIT;
 
 void DiscoverModRpaks() {
     g_modRpaks.clear();
-    ModDiscovery mods{};
+    static ModDiscovery mods;
     CollectModNames(mods);
     for (int i = 0; i < mods.count; ++i) {
-        const std::string directory = std::string(kModsRoot) + "/" + mods.names[i] + "/paks";
+        const std::string directory = std::string(mods.dirs[i]) + "/paks";
         DIR* dir = opendir(directory.c_str());
         if (!dir) continue;
         static char config[kModJsonBufferSize];
@@ -97,7 +97,7 @@ void DiscoverModRpaks() {
                 continue;
             }
             RuntimeModRpak entry;
-            entry.request = ModRpakRequestPath(mods.names[i], name);
+            entry.request = ModRpakRequestPath(mods.dirs[i], name);
             entry.pak = name;
             entry.after = rule.after;
             entry.preload = rule.kind == RpakLoadKind::Preload;

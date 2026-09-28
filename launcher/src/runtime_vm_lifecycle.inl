@@ -18,7 +18,7 @@ bool RuntimeVmInit(void* owner, int context, float time) noexcept {
         return false;
     }
     // Same stack constraint as LoadLifecycleCallbacks: these two buffers are
-    // ~25 KiB and this runs on an engine thread during VM creation.
+    // ~50 KiB and this runs on an engine thread during VM creation.
     static ModDiscovery mods;
     static char json[kModJsonBufferSize];
     std::memset(&mods, 0, sizeof(mods));
@@ -28,7 +28,7 @@ bool RuntimeVmInit(void* owner, int context, float time) noexcept {
     auto callback = reinterpret_cast<bool (*)(void*, const char*)>(g_runtimeClientBase + 0x679d40);
     for (int i = 0; i < mods.count; ++i) {
         char metadata[256]; std::size_t size = 0;
-        std::snprintf(metadata, sizeof(metadata), "%s/%s/mod.json", kModsRoot, mods.names[i]);
+        std::snprintf(metadata, sizeof(metadata), "%s/mod.json", mods.dirs[i]);
         ModInfo mod{};
         if (!ReadFileIntoBuffer(metadata, json, kModJsonBufferSize, size) || !ParseModMetadata(json, mod)) return false;
         if (!mod.initScript[0]) continue;

@@ -3959,3 +3959,107 @@ with no thumbnail (its loading-screen rpak isn't loaded, since mod rpaks are dis
 it's locked. `IsLocked` requires the map to be in the selected mode's playlist, and no
 playlist lists `mp_box`. That's the same on PC, so Box is reached with `map mp_box` or a
 server's rotation.
+
+## Mod auto-download, live mod reload, weapon KeyValues (2026-09-28)
+
+PRX `ccc0768544ca6dd0936d33c675ce490a56241157f8fc1a5c5c9b7b5df0a08de6`, shadPS4 `2b5666b3` (the download and reload runs used the builds just before it, which lacked only the KeyValues changes at the end of this entry).
+
+**Mod auto-download.** The five `ModDownloader` natives are implemented in
+`runtime_mod_download.inl`, following primedev/mods/autodownload/moddownloader.cpp:
+- `NSFetchVerifiedModsManifesto` fetches `verified-mods.json` from R2Northstar/VerifiedMods
+  on a worker thread and reports DONE whether or not it worked, as PC does.
+- `NSDownloadMod` streams the archive to `runtime/remote/mods/.download.zip`, hashing it
+  as it arrives, checks the SHA-256 against the list, and extracts it.
+- Install folders follow PC: `<archive name minus .zip>` for Thunderstore, with its
+  `mods/<Name>` inside; `<stem>-<version>` for ModWorkshop, rooted at the first `mod.json`'s
+  folder.
+- The state struct, progress, total and ratio match PC's.
+- A failed or cancelled install removes its folder.
+
+The toolchain has no zlib, so `northstar_ps4/mod_archive.h` has a small streaming DEFLATE
+decoder (puff-style, 32 KiB window), CRC-32 and a zip central-directory reader. It
+refuses zip64, encryption and methods other than 0 and 8, and it drops `..`, absolute and
+drive-letter paths. `mod_download.h` has SHA-256, the list parser and PC's naming rules.
+`tests/mod_download.cpp` covers both, with Python-made vectors plus real packages: the 22 MB
+`mp_brick` package inflates with every CRC matching, and both packages' SHA-256 match the
+live list.
+
+Three things specific to the platform:
+- `/app0` is read-only on hardware, so remote mods live under
+  `/data/northstar_ps4/runtime/remote/mods`.
+- `fstat` is an unimplemented stub under shadPS4: it returns 0 and leaves the struct
+  alone, so the first extraction failed with FAILED_READING_ARCHIVE. The archive is now
+  sized with `lseek(SEEK_END)`.
+- shadPS4's `unlink` only reaches the host when the path has no stale handle-table entry,
+  so `.download.zip` can survive a successful install under the emulator. It is
+  overwritten next time and ignored by discovery (leading dot).
+
+**Discovery with two roots.** `ModDiscovery` now carries each mod's absolute directory and a
+remote flag, and every path is built from that directory instead of
+`/app0/R2Northstar/mods/<folder>`. That covers the overlay, manifest, VPKs, rpaks,
+KeyValues, save files, VM callbacks and localisation. Remote mods start disabled at every
+boot and follow `enabledmods.json` only after a reload: PC's "Do not load remote mods on
+first load". NSGetModsInformation reports `isRemote`.
+
+**Live reload.** `NSReloadMods` saves `enabledmods.json` and then calls `ReloadModState`
+(`runtime_mod_reload.inl`), which rebuilds:
+- the file overlay and its index, as a new snapshot behind an atomic pointer (readers on
+  engine threads keep the one they loaded; old snapshots are leaked on purpose);
+- the runtime `scripts.rson`, on its next open;
+- the mod VPK list, under the mount flag;
+- the KeyValues patch list, remerged on next open;
+- the ConVars of newly enabled mods;
+- the catalog.
+
+Northstar's `ReloadMods()` then queues `reload_localization`, `loadPlaylists`,
+`weapon_reparse` and `uiscript_reset`. Each was run in the lobby:
+- `uiscript_reset` rebuilds the UI VM through the existing VM hooks and a map load brings
+  the menus back.
+- `loadPlaylists` and `weapon_reparse` are fine.
+- `reload_localization` faulted at the first try, at localize+0x7aed (a hash-chain walk
+  on another thread while the main thread rebuilt the table). Its ConCommand (engine
+  object `0x1a1d2c0`, callback `0x812e0`, name `0x33357d`) is now repointed like the `map`
+  guard. The replacement adds the Localisation files of newly enabled mods, which only
+  inserts into the table. Tokens of mods a reload disables stay until the next boot.
+
+**In game**, through the harness `download` action (Northstar's own
+`FetchVerifiedModsManifesto` and `DownloadMod` dialogs, then `NSSetModEnabled` and
+`ReloadMods`) with `lexi.lexire125` 1.0.7:
+- The list loaded 21 mods. The download went through with the checksum matching, and the
+  state reached DONE, installing `LexiGlasss_Modding_Cooperation-lexire125-1.0.7/mods/lexi.re125`.
+- The reload came up with 7 enabled mods, and the manifest regenerated at 109 scripts.
+- The UI VM rebuilt with zero script errors.
+- `weapon_reparse` merged the mod's RE-45 patch
+  (`mp_weapon_autopistol.txt` 18134 -> 15473 bytes).
+- `map mp_glitch` then loaded and spawned with a HUD.
+- After a restart the mod was listed as disabled ("downloaded; enabled per server").
+
+The first reload attempt ended in `UI SCRIPT COMPILE ERROR: Undefined variable
+"ProgressionEnabledForPlayer"`. `BuildRuntimeManifest` still built mod.json paths from
+`/app0/R2Northstar/mods`, failed on the remote mod, and the stock manifest was served. It was
+the last unported path site.
+
+Not yet run: the same flow from a real server join (the harness `join` action does the
+browser's sequence against a live server, but the exported Atlas token had expired),
+cancelling, and a corrupt download.
+
+**Weapon KeyValues were never applied.** With the reload in place, the RE-45 patch still did
+not merge on a map load. Nor had Northstar.Custom's six weapon patches or the font table in
+any session: only `playlists_v2.txt` (at boot) and `npc_pilot_elite.txt` (at map load) ever
+logged "keyvalues built".
+
+The engine reads these files through `ReadFromCache` first. `ModReadFromCache` only
+bypassed the cache for files in a mod's search path, and a KeyValues patch lives in the
+mod's `keyvalues/` folder, so the cache served the vanilla file. It now also bypasses the
+cache for patched paths.
+
+That exposed a second fault. `melee_pilot_arena.txt` was refused as "suspiciously small":
+the served merge had to be at least half the original's size, and its comments make the
+compact merge 1951 bytes against 4056. The check is now structural. `KeyValuesKeepsKeys`
+requires every key of the original to survive, matching repeated keys occurrence by
+occurrence under the same conditional, which is how the merge treats them. It is
+host-tested, including against the real playlist and all eight shipped files.
+
+Now eight patches build at boot (font table, playlists and six weapons), and
+`npc_pilot_elite` builds at the first map load. A hosted Kodai match plays with them.
+

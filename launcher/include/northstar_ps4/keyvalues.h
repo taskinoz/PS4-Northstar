@@ -249,6 +249,32 @@ inline const KeyValue* FindKeyValue(const KeyValueList& list, const std::string&
     return nullptr;
 }
 
+// A merge only adds keys or replaces values, so every key of the original is
+// still there afterwards, at every depth where both sides are blocks. False
+// means the merge lost data and the result must not be served.
+// A repeated key (the playlist's `lang` blocks; the font table's `[$PC]` and
+// `[$GAMECONSOLE]` copies) is matched occurrence by occurrence under the same
+// conditional: the merge only ever changes the first occurrence and appends,
+// so the n-th original copy is still the n-th merged one.
+inline bool KeyValuesKeepsKeys(const KeyValueList& original, const KeyValueList& merged) {
+    for (std::size_t i = 0; i < original.size(); ++i) {
+        const KeyValue& entry = original[i];
+        std::size_t occurrence = 0;
+        for (std::size_t j = 0; j < i; ++j)
+            if (original[j].key == entry.key && original[j].condition == entry.condition) ++occurrence;
+        const KeyValue* match = nullptr;
+        for (const KeyValue& candidate : merged) {
+            if (candidate.key != entry.key || candidate.condition != entry.condition) continue;
+            if (occurrence-- == 0) { match = &candidate; break; }
+        }
+        // A patch may replace a conditional entry with an unconditional one.
+        if (!match) match = FindKeyValue(merged, entry.key);
+        if (!match) return false;
+        if (entry.isBlock && match->isBlock && !KeyValuesKeepsKeys(entry.children, match->children)) return false;
+    }
+    return true;
+}
+
 inline std::size_t CountKeyValue(const KeyValueList& list, const std::string& key) {
     std::size_t count = 0;
     for (const KeyValue& entry : list)

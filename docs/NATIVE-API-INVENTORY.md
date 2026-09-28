@@ -7,11 +7,11 @@ This inventories explicit registrations, **not implementation or runtime compati
 | PC native | PC return / arguments | PC context | PS4 handler/context | PC source |
 |---|---|---|---|---|
 | `NSSendMessage` | `void` / `string message, bool isIngame, bool isTeam` | `ScriptContext::CLIENT` | `SendMessage` / `kCtxClient`; `ServerSendMessage` / `kCtxServer` | `client/chatcommand.cpp:19` |
-| `NSFetchVerifiedModsManifesto` | `void` / `` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `DownloadUnavailable` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:763` |
-| `NSIsModDownloadable` | `bool` / `string name, string version` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `Authenticated` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:770` |
-| `NSDownloadMod` | `void` / `string name, string version` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `DownloadUnavailable` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:790` |
-| `NSGetModInstallState` | `ModInstallState` / `` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `ModInstallState` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:802` |
-| `NSCancelModDownload` | `void` / `` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `CancelDownload` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:831` |
+| `NSFetchVerifiedModsManifesto` | `void` / `` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `FetchVerifiedMods` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:763` |
+| `NSIsModDownloadable` | `bool` / `string name, string version` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `IsModDownloadable` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:770` |
+| `NSDownloadMod` | `void` / `string name, string version` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `DownloadMod` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:790` |
+| `NSGetModInstallState` | `ModInstallState` / `` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `GetModInstallState` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:802` |
+| `NSCancelModDownload` | `void` / `` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `CancelModDownload` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:831` |
 | `NSSaveFile` | `void` / `string file, string data` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `SaveFile` / `kCtxAll` | `mods/modsavefiles.cpp:253` |
 | `NSSaveJSONFile` | `void` / `string file, table data` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `SaveJsonFile` / `kCtxAll` | `mods/modsavefiles.cpp:307` |
 | `NS_InternalLoadFile` | `int` / `string file` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `LoadFile` / `kCtxAll` | `mods/modsavefiles.cpp:363` |

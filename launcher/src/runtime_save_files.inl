@@ -35,42 +35,44 @@ const char* CallingSource(void* vm, int depth) noexcept {
 
 // PC looks the compiled source up in the mod file map, which records the
 // winning mod for each path. The equivalent here is the search order the
-// OpenEx hook already uses: highest priority root first.
-bool CallingModFolder(void* vm, int depth, char* out, std::size_t capacity) noexcept {
+// OpenEx hook already uses: highest priority root first. This gives the
+// directory of the mod that provides the calling script.
+bool CallingModDirectory(void* vm, int depth, std::string& out) noexcept {
     const char* source = CallingSource(vm, depth);
     char normalized[256]{};
     if (!source || !NormalizeRequestedPath(source, normalized, sizeof(normalized))) return false;
     char scriptPath[300];
     const int written = std::snprintf(scriptPath, sizeof(scriptPath), "scripts/vscripts/%s", normalized);
     if (written < 0 || static_cast<std::size_t>(written) >= sizeof(scriptPath)) return false;
-    const std::int32_t i = FindModFileRoot(scriptPath);
-    if (i >= 0) {
-        // g_modRoots entries are "<mods>/<folder>/mod"; PC keys storage on the
-        // same mod directory name rather than the display name.
-        const char* root = g_modRoots[i];
-        const char* tail = std::strrchr(root, '/');
-        if (!tail || tail == root) return false;
-        const char* nameStart = tail - 1;
-        while (nameStart > root && nameStart[-1] != '/') --nameStart;
-        const std::size_t length = static_cast<std::size_t>(tail - nameStart);
-        if (length == 0 || length + 1 > capacity) return false;
-        std::memcpy(out, nameStart, length);
-        out[length] = '\0';
-        return SaveFolderNameSafe(out);
-    }
-    return false;
+    const ModOverlay* overlay = CurrentModOverlay();
+    const std::int32_t i = overlay ? FindModFileRoot(*overlay, scriptPath) : -1;
+    if (i < 0) return false;
+    out = overlay->dirs[i];
+    return true;
+}
+
+// PC keys storage on the mod's directory name rather than its display name.
+bool CallingModFolder(void* vm, int depth, char* out, std::size_t capacity) noexcept {
+    std::string directory;
+    if (!CallingModDirectory(vm, depth, directory)) return false;
+    const std::size_t slash = directory.find_last_of('/');
+    const std::string name = slash == std::string::npos ? directory : directory.substr(slash + 1);
+    if (name.empty() || name.size() + 1 > capacity) return false;
+    std::memcpy(out, name.c_str(), name.size() + 1);
+    return SaveFolderNameSafe(out);
 }
 
 // PC's NSGetCurrentModName/NSGetCallingModName report the mod's display Name
 // from mod.json, not its folder, so the folder is resolved first and the
 // metadata read for the name.
 bool CallingModDisplayName(void* vm, int depth, char* out, std::size_t capacity) noexcept {
-    char folder[128]{}, path[256], json[kModJsonBufferSize];
+    std::string directory;
+    static char json[kModJsonBufferSize];
     std::size_t size = 0;
-    if (!CallingModFolder(vm, depth, folder, sizeof(folder))) return false;
-    std::snprintf(path, sizeof(path), "%s/%s/mod.json", kModsRoot, folder);
+    if (!CallingModDirectory(vm, depth, directory)) return false;
+    const std::string path = directory + "/mod.json";
     ModInfo info{};
-    if (!ReadFileIntoBuffer(path, json, sizeof(json), size) || !ParseModMetadata(json, info)) return false;
+    if (!ReadFileIntoBuffer(path.c_str(), json, sizeof(json), size) || !ParseModMetadata(json, info)) return false;
     const std::size_t length = std::strlen(info.name);
     if (length + 1 > capacity) return false;
     std::memcpy(out, info.name, length + 1);
