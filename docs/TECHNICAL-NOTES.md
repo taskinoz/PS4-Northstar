@@ -4181,8 +4181,10 @@ kept running frames, the host's player respawned, and no network or script error
 logged. The shadPS4 log has no timestamps, so the two logs cannot be lined up to the
 second.
 
-Next: capture the host's engine console output for the drop reason, retry to see whether
-it repeats, and check whether it follows the host's kill replay.
+**Explained:** the user ended the test by closing the game on the host, which is what the
+PC's timeout reports. So a PC client played a match on a PS4 host with no failure found.
+The persistence layouts differ (PC 231, PS4 929), but that did not stop the lobby or the
+match. The host does not save remote players' progress anyway (READY_INSECURE).
 
 **#5124.** squidbus pointed to shadPS4#5133 ("shader_compiler: Improve image type
 compatibility": 1D images handled as 2D), merged as `f6cd16e8`. Nightly `4cbd23ef` includes
