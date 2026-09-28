@@ -73,4 +73,4 @@ This inventories explicit registrations, **not implementation or runtime compati
 
 Empty arrays, default arguments, constant false/true and logged no-ops are adapters. In particular, HTTP/downloads/server-list, server chat/disconnect/userinfo and persistence-write registrations do not establish working implementations. `kCtxAll` means UI/CLIENT/SERVER. Duplicate names can have different signatures by context (NSSendMessage).
 
-Coverage: 62 explicit PC ADD_SQFUNC declarations; 67 distinct names in the PS4 registration table. These counts measure different things and are not a completion percentage.
+Coverage: 62 explicit PC ADD_SQFUNC declarations; 68 distinct names in the PS4 registration table. These counts measure different things and are not a completion percentage.
