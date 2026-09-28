@@ -215,15 +215,24 @@ void InstallReloadLocalizationGuard(std::uintptr_t engineBase, std::size_t engin
 // has no command line to add to, so the same file lives in the app's storage.
 constexpr const char* kStartupArgsFile = "/data/northstar_ps4/ns_startup_args.txt";
 
+// PC's own location, the game folder, is read too: it is /app0 here, which a
+// user can write to on the emulator but not on hardware.
+constexpr const char* kGameStartupArgsFile = "/app0/ns_startup_args.txt";
+
 bool StartupArgPresent(const char* arg) noexcept {
-    char text[2048];
-    std::size_t size = 0;
-    if (!ReadFileIntoBuffer(kStartupArgsFile, text, sizeof(text), size)) return false;
-    const std::size_t length = std::strlen(arg);
-    for (const char* at = std::strstr(text, arg); at; at = std::strstr(at + 1, arg)) {
-        const bool startOk = at == text || std::isspace(static_cast<unsigned char>(at[-1]));
-        const bool endOk = at[length] == '\0' || std::isspace(static_cast<unsigned char>(at[length]));
-        if (startOk && endOk) return true;
+    for (const char* file : {kGameStartupArgsFile, kStartupArgsFile}) {
+        char text[2048];
+        std::size_t size = 0;
+        if (!ReadFileIntoBuffer(file, text, sizeof(text), size)) continue;
+        const std::size_t length = std::strlen(arg);
+        for (const char* at = std::strstr(text, arg); at; at = std::strstr(at + 1, arg)) {
+            const bool startOk = at == text || std::isspace(static_cast<unsigned char>(at[-1]));
+            const bool endOk = at[length] == '\0' || std::isspace(static_cast<unsigned char>(at[length]));
+            if (startOk && endOk) {
+                LogFormat("[NorthstarPS4] startup argument %s from %s\n", arg, file);
+                return true;
+            }
+        }
     }
     return false;
 }
