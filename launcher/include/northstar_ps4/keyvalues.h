@@ -172,9 +172,17 @@ inline void MergeKeyValues(KeyValueList& base, const KeyValueList& patch) {
                 }
             }
         }
+        // Otherwise any entry with the key, unless both carry different
+        // conditionals: `IngameTextChat [$GAMECONSOLE]` must become an entry of
+        // its own beside `IngameTextChat [$WINDOWS]`, as it would on PC, where
+        // the engine evaluates the conditionals and keeps both until then.
         if (!existing) {
             for (KeyValue& candidate : base) {
-                if (candidate.key == incoming.key) { existing = &candidate; break; }
+                if (candidate.key != incoming.key) continue;
+                if (!incoming.condition.empty() && !candidate.condition.empty() &&
+                    candidate.condition != incoming.condition) continue;
+                existing = &candidate;
+                break;
             }
         }
         if (!existing) { base.push_back(incoming); continue; }
@@ -281,4 +289,23 @@ inline std::size_t CountKeyValue(const KeyValueList& list, const std::string& ke
         if (entry.key == key) ++count;
     return count;
 }
+// A whole patch file onto a whole file. PC applies patches through `#base`,
+// which merges an included file's root into the including file's root whatever
+// either is called; a mod's patch can name the root differently (Northstar's
+// server_browser.menu calls its own "resource/ui/menus/mods_browse.menu"). So
+// a patch root with no namesake merges into the file's only root block.
+inline void MergeKeyValuesFile(KeyValueList& base, const KeyValueList& patch) {
+    KeyValue* onlyRoot = nullptr;
+    int roots = 0;
+    for (KeyValue& entry : base)
+        if (entry.isBlock && (entry.key.empty() || entry.key[0] != '#')) { onlyRoot = &entry; ++roots; }
+    KeyValueList rest;
+    for (const KeyValue& incoming : patch) {
+        const bool named = FindKeyValue(base, incoming.key) != nullptr;
+        if (!named && incoming.isBlock && roots == 1) MergeKeyValues(onlyRoot->children, incoming.children);
+        else rest.push_back(incoming);
+    }
+    MergeKeyValues(base, rest);
+}
+
 } // namespace northstar::ps4::mods

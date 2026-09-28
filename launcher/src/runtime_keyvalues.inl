@@ -21,6 +21,7 @@
 // shipped patches.
 using northstar::ps4::mods::KeyValueList;
 using northstar::ps4::mods::MergeKeyValues;
+using northstar::ps4::mods::MergeKeyValuesFile;
 using northstar::ps4::mods::ParseKeyValues;
 using northstar::ps4::mods::SerialiseKeyValues;
 
@@ -87,10 +88,23 @@ void CollectKeyValuePatches() noexcept {
     LogFormat("[NorthstarPS4] keyvalues patches discovered=%d\n", g_keyValuePatchCount);
 }
 
+// The declared (on-disk) path of a patched file, matched without regard to
+// case: the engine asks for paths as the PC wrote them, such as
+// resource/UI/HudScripted_mp.res, and PC's filesystem is case-insensitive.
+// Everything after this works from the declared path, so reading the patch
+// does not depend on how the host filesystem treats case.
+const char* CanonicalKeyValuePath(const char* normalized) noexcept {
+    for (std::int32_t i = 0; i < g_keyValuePatchCount; ++i) {
+        const char* a = g_keyValuePatchPaths[i];
+        const char* b = normalized;
+        while (*a && std::tolower(static_cast<unsigned char>(*a)) == std::tolower(static_cast<unsigned char>(*b))) { ++a; ++b; }
+        if (!*a && !*b) return g_keyValuePatchPaths[i];
+    }
+    return nullptr;
+}
+
 bool IsKeyValuePatched(const char* normalized) noexcept {
-    for (std::int32_t i = 0; i < g_keyValuePatchCount; ++i)
-        if (!std::strcmp(g_keyValuePatchPaths[i], normalized)) return true;
-    return false;
+    return CanonicalKeyValuePath(normalized) != nullptr;
 }
 
 bool KeyValuesAlreadyBuilt(const char* normalized) noexcept {
@@ -122,7 +136,15 @@ bool MakeKeyValueDirectories(const char* path) noexcept {
 
 // Reads through the engine filesystem, bypassing this module's own hook so the
 // vanilla content is what gets merged rather than a previously generated file.
+bool ReadModKeyValues(const char* absolute, std::string& out) noexcept;
+
+// The file a patch applies to: the highest-priority mod's copy when a mod
+// ships one (Northstar.Client's server_browser.menu, say), otherwise the
+// game's. On PC the mods are search paths, so the engine's own open already
+// resolves it this way; here the engine's open does not see mod roots.
 bool ReadOriginalKeyValues(void* self, const char* normalized, std::string& out) noexcept {
+    char modFile[384];
+    if (ResolveModFile(normalized, modFile, sizeof(modFile))) return ReadModKeyValues(modFile, out);
     void* handle = g_originalFsOpenEx(self, normalized, "rb", 0, "GAME", nullptr);
     if (!handle) return false;
     char chunk[4096];
@@ -194,7 +216,7 @@ bool BuildKeyValuesPatch(void* self, const char* normalized) noexcept {
             LogFormat("[NorthstarPS4] keyvalues patch parse failed %s: %s\n", absolute, error.c_str());
             return false;
         }
-        MergeKeyValues(merged, patch);
+        MergeKeyValuesFile(merged, patch);
         ++applied;
         LogFormat("[NorthstarPS4] keyvalues merged %s (%zu bytes)\n", absolute, patchText.size());
     }

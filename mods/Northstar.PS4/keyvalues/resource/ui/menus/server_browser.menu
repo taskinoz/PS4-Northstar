@@ -1,0 +1,14 @@
+// Northstar.PS4: the player and server totals sit under the filter panel at
+// xpos -250, where the PS4 footer (with button glyphs) still runs: "Refresh"
+// overlapped "Players:". Moved right, clear of the footer. (The root key is
+// mods_browse.menu in Northstar.Client's file too; the merge matches on it.)
+resource/ui/menus/mods_browse.menu
+{
+	menu
+	{
+		InGamePlayerLabel
+		{
+			xpos -560
+		}
+	}
+}

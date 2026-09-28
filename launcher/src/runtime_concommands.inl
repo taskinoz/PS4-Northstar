@@ -64,6 +64,26 @@ void ResetLobbyGameMode() noexcept {
         LogFormat("[NorthstarPS4] mp_gamemode %s -> tdm for the tdm playlist\n", previous);
 }
 
+// PC: chatcommand.cpp registers `say` and `say_team`, which pass the command's
+// argument text to ClientSayText as in-game chat.
+constexpr std::uintptr_t kClientSayTextVa = 0x473e0;
+
+const char* CommandArgText(const CCommandView* args) noexcept {
+    const char* text = args->argS + args->argv0Size;
+    while (*text == ' ' || *text == '\t') ++text;
+    return text;
+}
+
+void ConCommandSay(const CCommandView* args) {
+    if (args->argc >= 2 && !SendChat(CommandArgText(args), false))
+        LogFormat("[NorthstarPS4] say: not in a match\n");
+}
+
+void ConCommandSayTeam(const CCommandView* args) {
+    if (args->argc >= 2 && !SendChat(CommandArgText(args), true))
+        LogFormat("[NorthstarPS4] say_team: not in a match\n");
+}
+
 bool SetPlaylist(const char* name) noexcept {
     if (!g_setCurrentPlaylist || !name) return false;
     const bool ok = g_setCurrentPlaylist(name);
@@ -367,6 +387,19 @@ void InstallHostOptions(std::uintptr_t engineBase, std::size_t engineSize) noexc
         ConVarIsSet(g_duplicateAccountsConVar) ? 1 : 0);
 }
 
+// The client's SayText handler (client+0x1db690) drops every message while
+// the engine's text-restriction check (engine+0x2bf450) answers true. That
+// check returns `debug_force_textRestriction != 0` when the convar is 0 or
+// more, and the console's restriction flag (engine+0x3e79e5, 1 here) when it
+// is negative, its default of -1. PC Northstar has no such gate - players mute
+// each other instead - so the override is set to 0.
+void AllowTextChat() noexcept {
+    if (!g_modConVarCvar || !g_modConVarFindVar) return;
+    void* restriction = g_modConVarFindVar(g_modConVarCvar, "debug_force_textRestriction");
+    const bool ok = restriction && SetConVarString(restriction, "0");
+    LogFormat("[NorthstarPS4] text chat %s (debug_force_textRestriction 0)\n", ok ? "allowed" : "could not be allowed");
+}
+
 bool g_nativeConCommandsRegistered = false;
 
 void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
@@ -401,7 +434,18 @@ void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize
         {"ns_start_reauth_and_leave_to_lobby", ConCommandLeaveToLobby,
             "called by the server, used to reauth and return the player to lobby when leaving a game",
             kFcvarServerCanExecute},
+        {"say", ConCommandSay, "Enters a message in public chat", kFcvarNone},
+        {"say_team", ConCommandSayTeam, "Enters a message in team chat", kFcvarNone},
     };
+    // ClientSayText: gated on its prologue and the start of the message setup.
+    constexpr std::uint8_t sayTextBytes[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x53,
+        0x48, 0x81, 0xec, 0x30, 0x01, 0x00, 0x00};
+    if (ValidateEnginePreimage(engineBase, engineSize, kClientSayTextVa, sayTextBytes, sizeof(sayTextBytes))) {
+        g_clientSayText = reinterpret_cast<ClientSayTextFn>(engineBase + kClientSayTextVa);
+        g_clientStateSlot = engineBase + 0x9f9618;
+    }
+    else
+        LogFormat("[NorthstarPS4] ClientSayText refused: engine profile mismatch; chat cannot be sent\n");
     // The engine keeps pointers into these for the life of the process. Zeroed
     // static storage is fine: the constructor writes every field it uses.
     alignas(16) static std::uint8_t objects[sizeof(definitions) / sizeof(definitions[0])][0x60]{};
@@ -414,4 +458,5 @@ void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize
     InstallMapCommandGuard(engineBase, engineSize);
     InstallReloadLocalizationGuard(engineBase, engineSize);
     InstallHostOptions(engineBase, engineSize);
+    AllowTextChat();
 }

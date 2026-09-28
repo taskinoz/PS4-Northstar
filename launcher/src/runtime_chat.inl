@@ -1,0 +1,52 @@
+// Text chat. Included inside runtime_server_vm.inl, after the persistence code.
+//
+// PC Northstar (primedev/client/chatcommand.cpp, server/serverchathooks.cpp,
+// scripts/client/clientchathooks.cpp, client/localchatwriter.cpp) routes chat
+// through script at both ends. The console game kept the PC chat code, so the
+// same pieces exist on PS4:
+//   - sending: engine ClientSayText (engine+0x473e0), same arguments as PC's
+//     engine.dll 0x54780; `say`, `say_team` and CLIENT NSSendMessage call it
+//     (runtime_concommands.inl, runtime_ui_api.inl);
+//   - the server side: CServerGameDLL::OnReceivedSayTextMessage
+//     (server+0xaeb50, PC server.dll 0x1595C0), reached through a vtable slot
+//     at server+0x9a7d08; it ignores `this`, sends SayText to every eligible
+//     player and prints "OnReceivedSayTextMessage - ...";
+//   - the client side: the SayText user message handler (client+0x1db690),
+//     into which PC's CHudChat::AddGameLine is inlined on PS4.
+
+constexpr std::uintptr_t kServerSayTextVa = 0xaeb50;
+constexpr std::uintptr_t kServerSayTextSlotVa = 0x9a7d08;
+
+using ServerSayTextFn = void (*)(void* self, unsigned senderPlayerId, const char* text, bool isTeam);
+ServerSayTextFn g_originalServerSayText = nullptr;
+bool g_serverChatHooked = false;
+
+void RuntimeServerSayText(void* self, unsigned senderPlayerId, const char* text, bool isTeam) noexcept {
+    LogFormat("[NorthstarPS4] chat received from player %u%s (%zu chars)\n", senderPlayerId,
+        isTeam ? ", team" : "", text ? std::strlen(text) : 0);
+    g_originalServerSayText(self, senderPlayerId, text, isTeam);
+}
+
+void InstallServerChat() noexcept {
+    if (g_serverChatHooked || !g_runtimeServerBase) return;
+    constexpr std::uint8_t sayTextBytes[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54,
+        0x53, 0x48, 0x83, 0xec, 0x78};
+    auto slot = reinterpret_cast<std::uintptr_t*>(g_runtimeServerBase + kServerSayTextSlotVa);
+    if (!ValidateEnginePreimage(g_runtimeServerBase, g_runtimeServerSpan, kServerSayTextVa, sayTextBytes, sizeof(sayTextBytes)) ||
+        !AuthAddressReadable(slot) || *slot != g_runtimeServerBase + kServerSayTextVa) {
+        LogFormat("[NorthstarPS4] server chat hook refused: server profile mismatch\n");
+        g_serverChatHooked = true;  // do not retry every map
+        return;
+    }
+    // The table sits in relocated read-only data; the page is left writable.
+    void* page = reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(slot) & ~std::uintptr_t(0x3fff));
+    if (sceKernelMprotect(page, 0x4000, 3) != 0) {
+        LogFormat("[NorthstarPS4] server chat hook failed: mprotect\n");
+        g_serverChatHooked = true;
+        return;
+    }
+    g_originalServerSayText = reinterpret_cast<ServerSayTextFn>(*slot);
+    *slot = reinterpret_cast<std::uintptr_t>(&RuntimeServerSayText);
+    g_serverChatHooked = true;
+    LogFormat("[NorthstarPS4] server chat hook installed\n");
+}

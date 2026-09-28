@@ -25,6 +25,13 @@
       "UICallback": {
         "After": "PS4HostOptionsMenu_Init"
       }
+    },
+    {
+      "Path": "client/ps4_chat_hud.nut",
+      "RunOn": "CLIENT && MP",
+      "ClientCallback": {
+        "After": "PS4ChatHud_Init"
+      }
     }
   ],
   "Localisation": [

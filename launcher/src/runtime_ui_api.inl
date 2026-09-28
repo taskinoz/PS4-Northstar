@@ -214,9 +214,19 @@ int ChatWriteRaw(void* vm) {
     LogFormat("[NorthstarPS4] NSChatWriteRaw (not rendered): %s\n", text ? text : "");
     return 0;
 }
+// PC: chatcommand.cpp's NSSendMessage calls the engine's ClientSayText
+// (engine.dll 0x54780) past its own hook. The PS4 function (engine+0x473e0)
+// has the same arguments: in-game chat goes to the server as
+// clc_ClientSayText, anything else to the party-chat path.
 int SendMessage(void* vm) {
     const char* text = TextArg(vm, 1);
-    LogFormat("[NorthstarPS4] NSSendMessage (not sent): %s\n", text ? text : "");
+    if (!text || Arg(vm, 2).tag != 0x1000008 || Arg(vm, 3).tag != 0x1000008)
+        return Error(vm, "NSSendMessage expects string message, bool isIngame, bool isTeam");
+    if (!g_clientSayText) return Error(vm, "NSSendMessage: chat sending is unavailable on this build");
+    // Party chat (isIngame false) has no PS4 path worth taking; in-game chat
+    // is sent only while a local client exists.
+    if (Arg(vm, 2).value == 0 || !SendChat(text, Arg(vm, 3).value != 0))
+        LogFormat("[NorthstarPS4] NSSendMessage not sent: %s\n", Arg(vm, 2).value == 0 ? "party chat" : "not in a match");
     return 0;
 }
 

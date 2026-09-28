@@ -1855,6 +1855,18 @@ void ReloadModState() noexcept;
 using ClientDisconnectFn = void (*)(void* client, int unknownButAlways1, const char* format, ...);
 ClientDisconnectFn g_clientDisconnect = nullptr;
 bool (*g_disconnectClient)(int client, const char* reason) noexcept = nullptr;
+// The engine's ClientSayText (engine+0x473e0), set by runtime_concommands.inl.
+using ClientSayTextFn = void (*)(void* self, const char* message, std::uint64_t isIngameChat, bool isTeamChat);
+ClientSayTextFn g_clientSayText = nullptr;
+// ClientSayText's in-game branch reads the local client state through the
+// pointer at engine+0x9f9618 without checking it; it is null outside a match
+// (a `say` from the main menu faulted at engine+0x47495). Callers check it.
+std::uintptr_t g_clientStateSlot = 0;
+bool SendChat(const char* text, bool isTeam) noexcept {
+    if (!g_clientSayText || !g_clientStateSlot || !*reinterpret_cast<void**>(g_clientStateSlot)) return false;
+    g_clientSayText(nullptr, text, 1, isTeam);
+    return true;
+}
 #include "runtime_ui_api.inl"
 #include "runtime_script_print.inl"
 #include "runtime_ui_callbacks.inl"
@@ -2024,10 +2036,11 @@ bool BuildRuntimeManifest(void* self) noexcept {
 // the engine allocates for the original and truncates the rest.
 std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noexcept {
     char normalized[256]{};
+    const char* patched = nullptr;
     if (kKeyValuesMergeEnabled && NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
-        IsKeyValuePatched(normalized)) {
+        (patched = CanonicalKeyValuePath(normalized)) != nullptr) {
         std::uint64_t size = 0;
-        if (KeyValuesServedSize(self, normalized, size)) {
+        if (KeyValuesServedSize(self, patched, size)) {
             LogFormat("[NorthstarPS4] keyvalues size %s = %llu\n",
                 normalized, static_cast<unsigned long long>(size));
             return size;
@@ -2143,12 +2156,13 @@ void* ModOpenEx(void* self, const char* fileName, const char* mode,
     // single complete result is served in its place; later requests reuse it.
     // If the merge fails for any reason this falls through to the stock file,
     // so a bad patch degrades to vanilla rather than failing to boot.
+    const char* patched = nullptr;
     if (kKeyValuesMergeEnabled && readOnly &&
         NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
-        IsKeyValuePatched(normalized) &&
-        (KeyValuesAlreadyBuilt(normalized) || BuildKeyValuesPatch(self, normalized))) {
+        (patched = CanonicalKeyValuePath(normalized)) != nullptr &&
+        (KeyValuesAlreadyBuilt(patched) || BuildKeyValuesPatch(self, patched))) {
         char candidate[512];
-        if (KeyValuesOutputPath(normalized, candidate, sizeof(candidate))) {
+        if (KeyValuesOutputPath(patched, candidate, sizeof(candidate))) {
             void* handle = g_originalFsOpenEx(self, candidate, mode, flags, pathID, resolved);
             if (handle) {
                 LogFormat("[NorthstarPS4] keyvalues served: %s\n", normalized);

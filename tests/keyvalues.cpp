@@ -180,6 +180,26 @@ int main(int argc, char** argv) {
     assert(KeyValuesKeepsKeys(Parse("root { f x [$PC] f y [$GAMECONSOLE] }"),
         Parse("root { f x [$PC] f z [$GAMECONSOLE] g 1 }")));
 
+    // A patch under another platform's conditional is added beside the
+    // original instead of merging into it.
+    KeyValueList platforms = Parse("root { chat [$WINDOWS] { a 1 } }");
+    MergeKeyValues(platforms, Parse("root { chat [$GAMECONSOLE] { a 2 } }"));
+    assert(CountKeyValue(FindKeyValue(platforms, "root")->children, "chat") == 2);
+    assert(FindKeyValue(platforms, "root")->children[0].condition == "$WINDOWS");
+    assert(FindKeyValue(FindKeyValue(platforms, "root")->children[0].children, "a")->value == "1");
+    assert(FindKeyValue(platforms, "root")->children[1].condition == "$GAMECONSOLE");
+    // An unconditional patch still lands on a conditional entry.
+    KeyValueList plain = Parse("root { chat [$WINDOWS] { a 1 } }");
+    MergeKeyValues(plain, Parse("root { chat { a 2 } }"));
+    assert(CountKeyValue(FindKeyValue(plain, "root")->children, "chat") == 1);
+
+    // A patch whose root is named differently merges into the only root, as
+    // PC's #base does.
+    KeyValueList file = Parse("#base \"x.res\"\nreal/root { menu { a 1 b 2 } }");
+    MergeKeyValuesFile(file, Parse("other/name { menu { b 3 } }"));
+    assert(file.size() == 2 && FindKeyValue(FindKeyValue(file, "real/root")->children, "menu")->children.size() == 2);
+    assert(FindKeyValue(FindKeyValue(FindKeyValue(file, "real/root")->children, "menu")->children, "b")->value == "3");
+
     // A block replacing a scalar takes the patch wholesale.
     KeyValueList shape = Parse("root { thing scalar }");
     MergeKeyValues(shape, Parse("root { thing { nested 1 } }"));

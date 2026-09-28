@@ -44,6 +44,7 @@ bool g_runtimeServerVmHooked = false;
 
 // Needs the two globals above, and is called from RuntimeServerVmInit below.
 #include "runtime_persistence.inl"
+#include "runtime_chat.inl"
 
 // Mirrors RegisterRuntimeConstants, against server.prx rather than client.prx.
 // Kept separate rather than parameterised: the two share no addresses and the
@@ -222,6 +223,7 @@ bool RuntimeServerVmInit(void* owner, int context, float time) noexcept {
     // Retried on every SERVER VM creation until it succeeds: the persistence
     // interface may not be constructed yet the first time through.
     InstallRuntimePersistence();
+    InstallServerChat();
     return result;
 }
 
