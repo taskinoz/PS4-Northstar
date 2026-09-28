@@ -4250,11 +4250,68 @@ KeyValues changes this needed:
 - The server script logs `Received message from ...` and the messages show in the chat
   panel, team messages with `[TEAM]`.
 
+**Receiving.** PC hooks CHudChat::AddGameLine and hands each message to CLIENT
+`CHudChat_ProcessMessageStartThread`, which runs mods' OnReceivedSayTextMessage callbacks
+and draws the line with `NSChatWrite`/`NSChatWriteRaw`. On PS4, AddGameLine is the loop
+over chat panels inside the SayText handler. By then the handler has read:
+- the sender index (r14);
+- the text (rbp-0x5d0);
+- isTeam (byte at rbp-0x5d9);
+- isDead (dword at rbp-0x5e0).
+
+The loop starts at client+0x1db91b with the load of the panel list. Those 16 bytes are
+now a jump to a naked stub (`runtime_chat_client.inl`). It calls the script (after
+`RemoveAsciiControlSequences`, as PC does) and returns from the handler. When the script
+function is missing, the vanilla loop runs instead. This matters because custom messages
+set the sender's high bit (or use sender 0), and the vanilla loop drops those.
+
+`NSChatWrite`, `NSChatWriteRaw` and `NSChatWriteLine` are PC's LocalChatWriter. The PS4
+panel layout is PC's shifted, read from the inlined code:
+
+| Field | PS4 offset |
+|---|---|
+| Colours: same team, enemy, main text, network name | +0x2bc, +0x2c0, +0x2c4, +0x2c8 |
+| Context | +0x2d8 |
+| Rich-text panel | +0x2e8 |
+| Next panel | +0x2f0 |
+
+The rich-text methods are at PC's vtable slots: InsertChar 0x758, InsertString 0x768,
+InsertColorChange 0x7e8, InsertFade 0x810. On PS4, InsertString takes UTF-16. Fade times
+come from the settings at client+0x10b1cc0, 0x10b1d50 and 0x10b1de0, read as the handler
+reads them. The ANSI colour parser, the control-character filter and UTF-8 to UTF-16 are
+in `northstar_ps4/chat_text.h`, host-tested by `tests/chat_text.cpp`. PC's quirks are
+kept: text before an escape is cut at 255 bytes, and a malformed escape leaves the byte
+after `\x1b[` blanked.
+
+**Broadcasts.** SERVER `NSBroadcastMessage` is PC's ChatBroadcastMessage:
+- The sender is 0 (anonymous) or `(index+1) | 0x80`.
+- The message type is the text's first byte.
+
+The vanilla sender only sends from a connected player, so the runtime builds SayText
+the way it does (server+0xaec8e onward):
+1. A CRecipientFilter on the stack (vtable server+0xa30dc0), with AddRecipient at
+   0x14a430 and MakeReliable at vtable slot 3.
+2. The SayText index from the user-message table (lookup 0x7ef2f0, table 0x149a7f8).
+3. g_pEngineServer UserMessageBegin (slot 0xc8), with its buffer stored in the message
+   buffer global (0xac2830).
+4. WriteByte 0x591bf0, WriteString 0x591cf0, then the inlined one-bit writes.
+5. MessageEnd (slot 0xd0), then the filter destructor at 0x6cada0.
+
+Players come from the table the vanilla loop walks:
+- gpGlobals is the pointer at server+0xabd3f8, and maxClients is at +0x34.
+- Player i is at `[[gpGlobals+0x80] + i*8 + 0xe040]`.
+
+Preimages gate every address.
+
+**Tested** with a throwaway mod that registered a client command calling Northstar's
+`Chat_ServerBroadcast` (with and without the tag), `Chat_ServerPrivateMessage`,
+`Chat_PrivateMessage` and `Chat_Impersonate`. Each drew the same prefixes and colours as
+PC: `[SERVER]` in magenta, `[WHISPER]`, team-coloured names, and untagged text plain.
+(`script` is not a console command on PS4; an unknown command goes to the server as a
+client command.)
+
 **Still to do:**
-- The client hook to CLIENT `CHudChat_ProcessMessageStartThread`. Custom messages from PC
-  servers' `NSBroadcastMessage` (server announcements, whispers) set the high bit of the
-  sender index, which the vanilla handler rejects.
-- `NSChatWrite*` and SERVER `NSBroadcastMessage`.
+- PC's chat rate limits (`CheckChatLimits`, part of its server limits) are not ported.
 - `player.GetUID()` is empty for players on a PS4 host: the server script's log prints
   `()` where PC prints the UID.
 

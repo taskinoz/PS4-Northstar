@@ -8,6 +8,7 @@
 #include "northstar_ps4/mod_savefiles.h"
 #include "northstar_ps4/json_text.h"
 #include "northstar_ps4/keyvalues.h"
+#include "northstar_ps4/chat_text.h"
 #include "northstar_ps4/server_list.h"
 #include "northstar_ps4/mod_archive.h"
 #include "northstar_ps4/mod_download.h"
@@ -1864,6 +1865,8 @@ ClientSayTextFn g_clientSayText = nullptr;
 std::uintptr_t g_clientStateSlot = 0;
 // runtime_chat.inl (included with the SERVER VM code): the vanilla send.
 bool ServerChatSend(int playerIndex, const char* text, bool isTeam) noexcept;
+bool ServerChatBroadcast(int fromPlayerIndex, int toPlayerIndex, const char* text, bool isTeam, bool isDead,
+    int messageType) noexcept;
 bool SendChat(const char* text, bool isTeam) noexcept {
     if (!g_clientSayText || !g_clientStateSlot || !*reinterpret_cast<void**>(g_clientStateSlot)) return false;
     g_clientSayText(nullptr, text, 1, isTeam);
@@ -2059,6 +2062,7 @@ std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noex
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 // After runtime_vpks.inl: the map command guard checks mod map archives.
 #include "runtime_concommands.inl"
+#include "runtime_chat_client.inl"
 #endif
 #include "runtime_server_vm.inl"
 #include "runtime_console.inl"
@@ -2538,6 +2542,7 @@ void* ModuleTracker(void*) noexcept {
     g_runtimeClientBase = clientBase;
     g_runtimeClientSpan = clientSpan;
     InstallRuntimeVmInit();
+    InstallClientChat(clientBase, clientSpan);
 #endif
 #if defined(NORTHSTAR_PS4_ENABLE_M6_FS_OVERLAY)
     if (fsHandle != static_cast<OrbisKernelModule>(-1)) {

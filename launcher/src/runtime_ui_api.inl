@@ -195,28 +195,11 @@ int HttpUnavailable(void* vm) {
 }
 // CLIENT-context natives.
 //
-// PC routes the chat family through LocalChatWriter and engine.dll's
-// ClientSayText, neither of which is ported: the PS4 chat HUD and the
-// engine-side say path are not profiled yet. These adapters therefore accept
-// the call and record it instead of rendering or transmitting anything, which
-// keeps CLIENT compilation working without pretending chat functions. This
-// replaces the retired Northstar.PS4 script stubs with a native adapter, so
-// no mod source is modified. Chat display and sending remain unimplemented.
-int ChatWrite(void* vm) {
-    const char* text = TextArg(vm, 2);
-    LogFormat("[NorthstarPS4] NSChatWrite (not rendered): %s\n", text ? text : "");
-    return 0;
-}
-int ChatWriteLine(void* vm) {
-    const char* text = TextArg(vm, 2);
-    LogFormat("[NorthstarPS4] NSChatWriteLine (not rendered): %s\n", text ? text : "");
-    return 0;
-}
-int ChatWriteRaw(void* vm) {
-    const char* text = TextArg(vm, 2);
-    LogFormat("[NorthstarPS4] NSChatWriteRaw (not rendered): %s\n", text ? text : "");
-    return 0;
-}
+// NSChatWrite, NSChatWriteLine and NSChatWriteRaw: PC's LocalChatWriter,
+// defined in runtime_chat_client.inl with the chat HUD layout.
+int ChatWrite(void* vm);
+int ChatWriteLine(void* vm);
+int ChatWriteRaw(void* vm);
 // PC: chatcommand.cpp's NSSendMessage calls the engine's ClientSayText
 // (engine.dll 0x54780) past its own hook. The PS4 function (engine+0x473e0)
 // has the same arguments: in-game chat goes to the server as
@@ -309,7 +292,26 @@ int ServerDisconnectClient(void* vm) {
     return 1;
 }
 int ServerSendClientPrint(void*) { WarnServerStub(kStubClientPrint, "NSSendClientPrint"); return 0; }
-int ServerBroadcastMessage(void*) { WarnServerStub(kStubBroadcast, "NSBroadcastMessage"); return 0; }
+// NSBroadcastMessage( int fromPlayerIndex, int toPlayerIndex, string text,
+// bool isTeam, bool isDead, int messageType ): PC's ChatBroadcastMessage, a
+// SayText the vanilla code cannot send (runtime_chat.inl).
+int ServerBroadcastMessage(void* vm) {
+    const char* text = TextArg(vm, 3);
+    if (Arg(vm, 1).tag != 0x5000002 || Arg(vm, 2).tag != 0x5000002 || !text || Arg(vm, 4).tag != 0x1000008 ||
+        Arg(vm, 5).tag != 0x1000008 || Arg(vm, 6).tag != 0x5000002)
+        return Error(vm, "NSBroadcastMessage expects int fromPlayerIndex, int toPlayerIndex, string text, bool isTeam, "
+                         "bool isDead, int messageType");
+    const int type = static_cast<std::int32_t>(Arg(vm, 6).value);
+    if (type < 1) {
+        char message[64];
+        std::snprintf(message, sizeof(message), "Invalid message type %d", type);
+        return Error(vm, message);
+    }
+    if (!ServerChatBroadcast(static_cast<std::int32_t>(Arg(vm, 1).value), static_cast<std::int32_t>(Arg(vm, 2).value),
+            text, Arg(vm, 4).value != 0, Arg(vm, 5).value != 0, type))
+        WarnServerStub(kStubBroadcast, "NSBroadcastMessage");
+    return 0;
+}
 // PC's ChatSendMessage: the vanilla SayText send past the chat hook
 // (runtime_chat.inl).
 int ServerSendMessage(void* vm) {

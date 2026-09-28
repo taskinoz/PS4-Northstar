@@ -49,8 +49,14 @@ bool CallServerChatScript(int playerIndex, const char* text, bool isTeam) noexce
     return result >= 0;
 }
 
+// PC: h_CServerGameDLL__OnReceivedSayTextMessage, which cleans the text in
+// place first.
 void RuntimeServerSayText(void* self, unsigned senderPlayerId, const char* text, bool isTeam) noexcept {
-    if (!text || !*text) return;
+    if (!text) return;
+    chat::RemoveAsciiControlSequences(const_cast<char*>(text), true);
+    const char* p = text;
+    while (std::isspace(static_cast<unsigned char>(*p))) p++;
+    if (!*p) return;
     LogFormat("[NorthstarPS4] chat received from player %u%s (%zu chars)\n", senderPlayerId,
         isTeam ? ", team" : "", std::strlen(text));
     if (!CallServerChatScript(static_cast<int>(senderPlayerId) - 1, text, isTeam))
@@ -62,6 +68,162 @@ void RuntimeServerSayText(void* self, unsigned senderPlayerId, const char* text,
 bool ServerChatSend(int playerIndex, const char* text, bool isTeam) noexcept {
     if (!g_originalServerSayText || !text) return false;
     g_originalServerSayText(nullptr, static_cast<unsigned>(playerIndex + 1) & kCustomMessageIndexMask, text, isTeam);
+    return true;
+}
+
+// SayText with a custom sender: PC's ChatBroadcastMessage, behind SERVER
+// NSBroadcastMessage. The sender index is 0 for an anonymous message, or the
+// player's index with the high bit set; the first byte of the text is the
+// message type. Vanilla code sends SayText only from a connected player, one
+// message per recipient, so this builds the message the way that code does
+// (server+0xaeb50, from 0xaec8e):
+//   - a CRecipientFilter on the stack (vtable server+0xa30dc0), filled by
+//     AddRecipient (0x14a430) and made reliable through vtable slot 3;
+//   - the "SayText" user message index (lookup 0x7ef2f0 in the table at
+//     0x149a7f8), then g_pEngineServer's UserMessageBegin (slot 0xc8), whose
+//     bf_write goes in the message buffer global (0xac2830);
+//   - WriteByte (0x591bf0), WriteString (0x591cf0) and two inlined one-bit
+//     writes, then MessageEnd (slot 0xd0);
+//   - the filter's destructor (0x6cada0, vtable slot 0).
+// Players come from the table the vanilla loop reads: gpGlobals (the pointer
+// at server+0xabd3f8) +0x34 is maxClients, and the player for index i is at
+// [[gpGlobals+0x80] + i*8 + 0xe040].
+constexpr std::uintptr_t kServerGlobalsSlotVa = 0xabd3f8;
+constexpr std::uintptr_t kServerEngineSlotVa = 0xabd288;
+constexpr std::uintptr_t kServerMessageBufferVa = 0xac2830;
+constexpr std::uintptr_t kServerUserMessagesVa = 0x149a7f8;
+constexpr std::uintptr_t kServerLookupUserMessageVa = 0x7ef2f0;
+constexpr std::uintptr_t kServerSayTextNameVa = 0x8d8c86;
+constexpr std::uintptr_t kRecipientFilterVtableVa = 0xa30dc0;
+constexpr std::uintptr_t kRecipientFilterAddVa = 0x14a430;
+constexpr std::uintptr_t kRecipientFilterDestructVa = 0x6cada0;
+constexpr std::uintptr_t kMessageWriteByteVa = 0x591bf0;
+constexpr std::uintptr_t kMessageWriteStringVa = 0x591cf0;
+constexpr unsigned kCustomMessageIndexBit = 0x80;
+bool g_serverBroadcastReady = false;
+
+template <typename T>
+T& ServerAt(std::uintptr_t va) { return *reinterpret_cast<T*>(g_runtimeServerBase + va); }
+
+void* ServerPlayerByIndex(int index) noexcept {
+    auto globals = ServerAt<char*>(kServerGlobalsSlotVa);
+    if (!globals || index < 1 || index > *reinterpret_cast<std::int32_t*>(globals + 0x34)) return nullptr;
+    auto table = *reinterpret_cast<char**>(globals + 0x80);
+    return table ? *reinterpret_cast<void**>(table + static_cast<std::size_t>(index) * 8 + 0xe040) : nullptr;
+}
+
+// The vanilla code's inlined bf_write::WriteOneBit: data at +0, bit count at
+// +0xc, current bit at +0x10, overflow flag at +0x14.
+void MessageWriteBit(char* buffer, bool value) noexcept {
+    auto& current = *reinterpret_cast<std::int32_t*>(buffer + 0x10);
+    if (current >= *reinterpret_cast<std::int32_t*>(buffer + 0xc)) {
+        buffer[0x14] = 1;
+        return;
+    }
+    if (buffer[0x14]) return;
+    auto data = *reinterpret_cast<std::uint8_t**>(buffer);
+    const auto mask = static_cast<std::uint8_t>(1u << (current & 7));
+    if (value)
+        data[current >> 3] |= mask;
+    else
+        data[current >> 3] &= static_cast<std::uint8_t>(~mask);
+    ++current;
+}
+
+bool ServerChatBroadcast(int fromPlayerIndex, int toPlayerIndex, const char* text, bool isTeam, bool isDead,
+    int messageType) noexcept {
+    if (!g_serverBroadcastReady || !text) return false;
+    void* toPlayer = nullptr;
+    if (toPlayerIndex >= 0) {
+        toPlayer = ServerPlayerByIndex(toPlayerIndex + 1);
+        if (!toPlayer) return true;  // as PC: no such player, nothing sent
+    }
+    char sendText[256];
+    sendText[0] = static_cast<char>(messageType);
+    std::strncpy(sendText + 1, text, 254);
+    sendText[255] = 0;
+    const unsigned fromPlayerId =
+        fromPlayerIndex < 0 ? 0 : ((static_cast<unsigned>(fromPlayerIndex) + 1) | kCustomMessageIndexBit);
+
+    alignas(16) char filter[0x40] = {};
+    *reinterpret_cast<std::uintptr_t*>(filter) = g_runtimeServerBase + kRecipientFilterVtableVa;
+    auto add = reinterpret_cast<void (*)(void*, void*)>(g_runtimeServerBase + kRecipientFilterAddVa);
+    if (toPlayer) {
+        add(filter, toPlayer);
+    } else {
+        auto globals = ServerAt<char*>(kServerGlobalsSlotVa);
+        const int maxClients = globals ? *reinterpret_cast<std::int32_t*>(globals + 0x34) : 0;
+        for (int i = 1; i <= maxClients; ++i)
+            if (void* player = ServerPlayerByIndex(i)) add(filter, player);
+    }
+    auto filterTable = *reinterpret_cast<void (***)(void*)>(filter);
+    filterTable[3](filter);  // MakeReliable
+
+    const char* name = reinterpret_cast<const char*>(g_runtimeServerBase + kServerSayTextNameVa);
+    const int index = reinterpret_cast<int (*)(void*, const char**)>(g_runtimeServerBase + kServerLookupUserMessageVa)(
+        reinterpret_cast<void*>(g_runtimeServerBase + kServerUserMessagesVa), &name);
+    void* engine = ServerAt<void*>(kServerEngineSlotVa);
+    bool sent = false;
+    if (index != -1 && engine) {
+        auto engineTable = *reinterpret_cast<std::uintptr_t**>(engine);
+        auto begin = reinterpret_cast<char* (*)(void*, void*, int, const char*, int)>(engineTable[0xc8 / 8]);
+        char* buffer = begin(engine, filter, index, name, 2);
+        ServerAt<char*>(kServerMessageBufferVa) = buffer;
+        if (buffer) {
+            reinterpret_cast<void (*)(void*, int)>(g_runtimeServerBase + kMessageWriteByteVa)(
+                buffer, static_cast<int>(fromPlayerId));
+            reinterpret_cast<void (*)(void*, const char*)>(g_runtimeServerBase + kMessageWriteStringVa)(buffer, sendText);
+            MessageWriteBit(buffer, isTeam);
+            MessageWriteBit(buffer, isDead);
+            reinterpret_cast<void (*)(void*)>(engineTable[0xd0 / 8])(engine);  // MessageEnd
+            sent = true;
+        }
+        ServerAt<char*>(kServerMessageBufferVa) = nullptr;
+    }
+    reinterpret_cast<void (*)(void*)>(g_runtimeServerBase + kRecipientFilterDestructVa)(filter);
+    return sent;
+}
+
+struct BroadcastPreimage {
+    std::uintptr_t va;
+    const std::uint8_t* bytes;
+    std::size_t size;
+};
+
+bool CheckServerBroadcastProfile() noexcept {
+    static constexpr std::uint8_t globals[] = {0x48, 0x8b, 0x05, 0x70, 0xe8, 0xa0, 0x00, 0x8b, 0x48, 0x34};
+    static constexpr std::uint8_t players[] = {0x48, 0x8b, 0x90, 0x80, 0x00, 0x00, 0x00, 0x49, 0x0f, 0xbf, 0xf4, 0x48,
+        0x8b, 0x9c, 0xf2, 0x40, 0xe0, 0x00, 0x00};
+    static constexpr std::uint8_t begin[] = {0x48, 0x8d, 0x0d, 0x20, 0x21, 0x98, 0x00, 0x66, 0xc7, 0x45, 0xa0, 0x00,
+        0x00, 0x66, 0xc7, 0x45, 0xc8, 0x00, 0x00, 0x44, 0x89, 0xbd, 0x74, 0xff, 0xff, 0xff, 0x4c, 0x89, 0x55, 0x80, 0xc5,
+        0xf8, 0x11, 0x40, 0x0c, 0xc5, 0xf8, 0x11, 0x00, 0x48, 0x89, 0x4d, 0x98, 0xe8, 0x67, 0xb7, 0x09, 0x00, 0x48, 0x8b,
+        0x45, 0x98, 0x4c, 0x89, 0xef, 0xff, 0x50, 0x18, 0x48, 0x8d, 0x1d, 0xac, 0x9f, 0x82, 0x00, 0x48, 0x8d, 0x3d, 0x17,
+        0xbb, 0x3e, 0x01, 0x48, 0x8d, 0x75, 0x88, 0x48, 0x89, 0x5d, 0x88, 0xe8, 0x02, 0x06, 0x74, 0x00, 0x41, 0x89, 0xc7,
+        0x41, 0x83, 0xff, 0xff, 0x75, 0x11, 0x31, 0xc0, 0x48, 0x8d, 0x3d, 0xc7, 0x69, 0x7c, 0x00, 0x48, 0x89, 0xde, 0xe8,
+        0x50, 0x16, 0xf5, 0xff, 0x48, 0x8b, 0x3d, 0x79, 0xe5, 0xa0, 0x00, 0x41, 0xb8, 0x02, 0x00, 0x00, 0x00, 0x4c, 0x89,
+        0xee, 0x44, 0x89, 0xfa, 0x48, 0x89, 0xd9, 0x48, 0x8b, 0x07, 0xff, 0x90, 0xc8, 0x00, 0x00, 0x00};
+    static constexpr std::uint8_t buffer[] = {0x4c, 0x89, 0x2d, 0xf8, 0x3a, 0xa1, 0x00};
+    static constexpr std::uint8_t writeByte[] = {0x4c, 0x89, 0xef, 0x89, 0xde, 0xe8, 0x9a, 0x2e, 0x4e, 0x00};
+    static constexpr std::uint8_t writeString[] = {0x48, 0x8b, 0x75, 0x80, 0x4c, 0x89, 0xef, 0xe8, 0x68, 0x2f, 0x4e,
+        0x00};
+    static constexpr std::uint8_t end[] = {0x48, 0x8b, 0x3d, 0x0a, 0xe4, 0xa0, 0x00, 0x48, 0x8b, 0x07, 0xff, 0x90, 0xd0,
+        0x00, 0x00, 0x00, 0x48, 0x8d, 0x05, 0x72, 0xd8, 0x90, 0x00, 0x4c, 0x8d, 0x6d, 0x98, 0x48, 0xc7, 0x05, 0x93, 0x39,
+        0xa1, 0x00, 0x00, 0x00, 0x00, 0x00};
+    static constexpr std::uint8_t destructor[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x56, 0x53, 0x48, 0x89, 0xfb, 0x48,
+        0x8d, 0x05, 0x4f, 0x19, 0x2f, 0x00, 0x48, 0x89, 0x03};
+    const BroadcastPreimage checks[] = {
+        {0xaeb81, globals, sizeof(globals)},
+        {0xaeba4, players, sizeof(players)},
+        {0xaec99, begin, sizeof(begin)},
+        {0xaed31, buffer, sizeof(buffer)},
+        {0xaed4c, writeByte, sizeof(writeByte)},
+        {0xaed7c, writeString, sizeof(writeString)},
+        {0xaee77, end, sizeof(end)},
+        {kRecipientFilterDestructVa, destructor, sizeof(destructor)},
+    };
+    for (const auto& check : checks)
+        if (!ValidateEnginePreimage(g_runtimeServerBase, g_runtimeServerSpan, check.va, check.bytes, check.size))
+            return false;
     return true;
 }
 
@@ -86,5 +248,7 @@ void InstallServerChat() noexcept {
     g_originalServerSayText = reinterpret_cast<ServerSayTextFn>(*slot);
     *slot = reinterpret_cast<std::uintptr_t>(&RuntimeServerSayText);
     g_serverChatHooked = true;
-    LogFormat("[NorthstarPS4] server chat hook installed\n");
+    g_serverBroadcastReady = CheckServerBroadcastProfile();
+    LogFormat("[NorthstarPS4] server chat hook installed%s\n",
+        g_serverBroadcastReady ? "" : "; NSBroadcastMessage refused: server profile mismatch");
 }
