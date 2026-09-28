@@ -284,6 +284,17 @@ int ServerWritingPersistence(void* vm) { Boolean(vm, false); return 1; }
 int ServerWritePersistenceForLeave(void*) { WarnServerStub(kStubPersistence, "NSEarlyWritePlayerPersistenceForLeave"); return 0; }
 
 int ServerDisconnectPlayer(void* vm) { WarnServerStub(kStubDisconnect, "NSDisconnectPlayer"); Boolean(vm, false); return 1; }
+// PS4-only, for Northstar.PS4's host options. PC's NSDisconnectPlayer takes a
+// player entity, and resolving an entity to its client is not mapped on this
+// port yet; scripts pass `player.GetEntIndex() - 1`, the same client index the
+// persistence gate uses.
+int ServerDisconnectClient(void* vm) {
+    const auto& index = Arg(vm, 1);
+    const char* reason = TextArg(vm, 2);
+    if (index.tag != 0x5000002 || !reason) return Error(vm, "NSPS4_DisconnectClient expects int client, string reason");
+    Boolean(vm, g_disconnectClient && g_disconnectClient(static_cast<int>(static_cast<std::int32_t>(index.value)), reason));
+    return 1;
+}
 int ServerSendClientPrint(void*) { WarnServerStub(kStubClientPrint, "NSSendClientPrint"); return 0; }
 int ServerBroadcastMessage(void*) { WarnServerStub(kStubBroadcast, "NSBroadcastMessage"); return 0; }
 int ServerSendMessage(void*) { WarnServerStub(kStubSendMessage, "NSSendMessage"); return 0; }
@@ -371,6 +382,7 @@ const Registration registrations[] = {
     // see RegisterServerNatives in runtime_server_vm.inl.
     {"NSGetLocalPlayerUID", "string", "", ServerLocalPlayerUid, kCtxAll},
     {"NSIsPlayerLocalPlayer", "bool", "entity player", ServerIsLocalPlayer, kCtxServer},
+    {"NSPS4_DisconnectClient", "bool", "int client, string reason", ServerDisconnectClient, kCtxServer},
     {"NSIsDedicated", "bool", "", ServerIsDedicated, kCtxServer},
     {"NSIsWritingPlayerPersistence", "bool", "", ServerWritingPersistence, kCtxServer},
     {"NSEarlyWritePlayerPersistenceForLeave", "void", "entity player", ServerWritePersistenceForLeave, kCtxServer},

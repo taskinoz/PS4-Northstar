@@ -75,6 +75,11 @@ constexpr std::size_t kEngineClientStride = 0x2d738;
 constexpr std::size_t kClientSignonStateOffset = 0x4f0;
 constexpr std::size_t kClientPersistenceReadyOffset = 0x6f0;
 constexpr std::int32_t kSignonStateFull = 8;
+// The CBaseClient inside each client-array element: kickid (engine+0x124380)
+// passes element+0x250 to Disconnect, whose signon test at +0x2a0 is this
+// file's +0x4f0, and PC's m_iPersistenceReady (0x4a0) is this file's +0x6f0.
+constexpr std::size_t kClientObjectOffset = 0x250;
+constexpr std::size_t kClientFakePlayerOffset = 0x4d3;  // kickid skips slots where this is set
 constexpr std::int32_t kPersistenceReadyInsecure = 3;
 constexpr std::uintptr_t kServerPersistenceInterfaceVa = 0xabd288;
 constexpr std::uintptr_t kServerPersistenceGateVa = 0x4810a5;
@@ -108,6 +113,21 @@ bool RuntimePersistenceAvailable(void* self, int client) noexcept {
         }
     }
     return g_originalPersistenceAvailable(self, client);
+}
+
+// CBaseClient::Disconnect for a client slot, for NSPS4_DisconnectClient. Like
+// kickid, a slot that is not connected (signon < 2) or a bot is left alone.
+bool DisconnectClient(int client, const char* reason) noexcept {
+    const auto engine = g_engineBaseForPersistence;
+    if (!engine || !g_clientDisconnect || client < 0 ||
+        client >= *reinterpret_cast<const std::int32_t*>(engine + kEngineClientCountVa)) return false;
+    auto slot = reinterpret_cast<char*>(engine + kEngineClientArrayVa) +
+        static_cast<std::size_t>(client) * kEngineClientStride;
+    if (*reinterpret_cast<const std::int32_t*>(slot + kClientSignonStateOffset) < 2 ||
+        *reinterpret_cast<const std::uint8_t*>(slot + kClientFakePlayerOffset) != 0) return false;
+    LogFormat("[NorthstarPS4] disconnecting client #%d: %s\n", client, reason);
+    g_clientDisconnect(slot + kClientObjectOffset, 1, "%s", reason);
+    return true;
 }
 
 bool InstallRuntimePersistence() noexcept {
@@ -168,6 +188,7 @@ bool InstallRuntimePersistence() noexcept {
         return false;
     }
     g_engineBaseForPersistence = engine;
+    g_disconnectClient = DisconnectClient;
 
     for (std::size_t i = 0; i < kPersistenceVtableSlots + 2; ++i)
         g_persistenceVtable[i] = reinterpret_cast<std::uintptr_t>(vtable[i - 2]);

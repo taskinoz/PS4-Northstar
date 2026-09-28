@@ -228,31 +228,134 @@ bool StartupArgPresent(const char* arg) noexcept {
     return false;
 }
 
-// PC's -allowdupeaccounts (serverauthentication.cpp patches engine 0x114510):
-// lets two clients with the same account join one server, which is how one
-// player tests with two machines. Off by default, as on PC: the engine
-// otherwise rejects the second with "Player's account is already on the
-// server". On PS4 the check is the `je` at engine+0xe734c, taken when a
-// connected client's uid (+0x2d3d5) equals the connecting one's; it becomes
-// six NOPs.
-void InstallDuplicateAccountOption(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
-    if (!StartupArgPresent("-allowdupeaccounts")) return;
-    constexpr std::uintptr_t kCheckVa = 0xe7345;
+// Options for a PS4-hosted match, which PC sets on its server.
+//
+// **Client DLL CRC.** A listen server sends the CRC of its own client module
+// in the server info, and a PC client compares it with its client.dll: "Your
+// .dll [..\bin\x64_retail\client.dll] differs from the server's." (PC engine
+// 0x728c0). A PS4 host sends the CRC of bin/ps4_retail/client.prx, which no PC
+// can match. Clients skip the check when the value is -1, which is what a
+// dedicated server sends: the engine's GetServerClientCRC (engine+0x10d180)
+// returns -1 for one, and otherwise returns a cached value at engine+0x3ef01a4
+// before computing the file's CRC. Its only other caller is the crash-report
+// upload. Seeding the cache with -1 makes a PS4 host send what a dedicated
+// server sends, for PC and PS4 clients alike.
+//
+// **Duplicate accounts.** PC's -allowdupeaccounts (serverauthentication.cpp
+// patches engine 0x114510) lets clients with the same account join one server,
+// which is how one player tests with two machines; the engine otherwise
+// rejects the second with "Player's account is already on the server". On PS4
+// the check is `cmp [rsi+0x2d3d5], rcx; je reject` at engine+0xe7345, inside
+// the loop over connected clients. It becomes a jump to DuplicateAccountCheck,
+// which does the comparison and consults `ns_allow_duplicate_accounts` on every
+// connect, so the private lobby can switch it while hosting. -allowdupeaccounts
+// in ns_startup_args.txt starts it at 1.
+//
+// **Insecure.** PC servers with ns_auth_allow_insecure 0 accept only players
+// Atlas has authenticated for them. A PS4 host is not registered with Atlas, so
+// it cannot check that; at 0 it accepts only its own player, and at 1 anyone
+// (see RuntimePersistenceAvailable). PC's autoexec_ns_server.cfg sets 0.
+constexpr std::uintptr_t kServerClientCrcCacheVa = 0x3ef01a4;
+constexpr std::uintptr_t kServerClientCrcFunctionVa = 0x10d1aa;
+constexpr std::uintptr_t kDuplicateCheckVa = 0xe7345;
+constexpr std::uintptr_t kDuplicateNextVa = 0xe7352;
+constexpr std::uintptr_t kDuplicateRejectVa = 0xe73ec;
+constexpr std::uintptr_t kClientDisconnectVa = 0xd75f0;
+constexpr std::int32_t kConVarIntValueOffset = 0x5c;
+
+extern "C" {
+std::uintptr_t g_duplicateNext = 0;
+std::uintptr_t g_duplicateReject = 0;
+void* g_duplicateAccountsConVar = nullptr;
+}
+void* g_allowInsecureConVar = nullptr;
+
+bool ConVarIsSet(void* convar) noexcept {
+    return convar && *reinterpret_cast<const std::int32_t*>(static_cast<char*>(convar) + kConVarIntValueOffset) != 0;
+}
+
+// Replaces the 13 bytes at engine+0xe7345. rax holds the loop bound there, so
+// it is saved around the convar read.
+__attribute__((naked)) void DuplicateAccountCheck() {
+    asm volatile(
+        "cmpq %rcx, 0x2d3d5(%rsi)\n\t"
+        "jne 1f\n\t"
+        "pushq %rax\n\t"
+        "movq g_duplicateAccountsConVar(%rip), %rax\n\t"
+        "testq %rax, %rax\n\t"
+        "jz 2f\n\t"
+        "cmpl $0, 0x5c(%rax)\n\t"
+        "je 2f\n\t"
+        "popq %rax\n\t"
+        "1:\n\t"
+        "jmpq *g_duplicateNext(%rip)\n\t"
+        "2:\n\t"
+        "popq %rax\n\t"
+        "jmpq *g_duplicateReject(%rip)\n\t");
+}
+
+bool WriteEngineCode(std::uintptr_t address, const void* bytes, std::size_t size) noexcept {
+    const auto first = address & ~std::uintptr_t(0x3fff);
+    const auto last = (address + size - 1) & ~std::uintptr_t(0x3fff);
+    const std::size_t span = last - first + 0x4000;
+    if (sceKernelMprotect(reinterpret_cast<void*>(first), span, 7) != 0) return false;
+    std::memcpy(reinterpret_cast<void*>(address), bytes, size);
+    return sceKernelMprotect(reinterpret_cast<void*>(first), span, 5) == 0;
+}
+
+void InstallHostOptions(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
+    // Client CRC: gated on the function's dedicated/cache branches, whose
+    // rip-relative operands pin the cache address.
+    constexpr std::uint8_t crcBytes[] = {
+        0x83, 0x78, 0x5c, 0x00, 0x74, 0x14, 0xc7, 0x05, 0xea, 0x2f, 0xde, 0x03, 0xff, 0xff, 0xff, 0xff,
+        0xb8, 0xff, 0xff, 0xff, 0xff, 0xe9, 0xf9, 0x01, 0x00, 0x00, 0x8b, 0x05, 0xda, 0x2f, 0xde, 0x03};
+    if (ValidateEnginePreimage(engineBase, engineSize, kServerClientCrcFunctionVa, crcBytes, sizeof(crcBytes))) {
+        *reinterpret_cast<std::int32_t*>(engineBase + kServerClientCrcCacheVa) = -1;
+        LogFormat("[NorthstarPS4] hosted servers send client CRC -1 (as a dedicated server does)\n");
+    } else {
+        LogFormat("[NorthstarPS4] client CRC override refused: engine profile mismatch\n");
+    }
+
+    constexpr std::uint8_t disconnectBytes[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54,
+        0x53, 0x48, 0x81, 0xec, 0xe8, 0x04, 0x00, 0x00, 0x48, 0x89, 0xfb, 0x89};
+    if (ValidateEnginePreimage(engineBase, engineSize, kClientDisconnectVa, disconnectBytes, sizeof(disconnectBytes)))
+        g_clientDisconnect = reinterpret_cast<ClientDisconnectFn>(engineBase + kClientDisconnectVa);
+
+    if (g_modConVarCvar && g_modConVarFindVar) {
+        g_allowInsecureConVar = g_modConVarFindVar(g_modConVarCvar, "ns_auth_allow_insecure");
+        const bool startAllowed = StartupArgPresent("-allowdupeaccounts");
+        alignas(16) static std::uint8_t duplicateConVar[0x90]{};
+        g_duplicateAccountsConVar = g_modConVarFindVar(g_modConVarCvar, "ns_allow_duplicate_accounts");
+        if (!g_duplicateAccountsConVar && g_modConVarConstructor) {
+            g_modConVarConstructor(duplicateConVar, "ns_allow_duplicate_accounts", startAllowed ? "1" : "0", 0,
+                "Let clients with the same account join this server (PC: -allowdupeaccounts)", nullptr);
+            g_duplicateAccountsConVar = g_modConVarFindVar(g_modConVarCvar, "ns_allow_duplicate_accounts");
+        }
+    }
+
     constexpr std::uint8_t checkBytes[] = {0x48, 0x39, 0x8e, 0xd5, 0xd3, 0x02, 0x00, 0x0f, 0x84, 0x9a, 0x00, 0x00, 0x00};
-    if (!ValidateEnginePreimage(engineBase, engineSize, kCheckVa, checkBytes, sizeof(checkBytes))) {
-        LogFormat("[NorthstarPS4] -allowdupeaccounts refused: engine profile mismatch\n");
+    const auto check = engineBase + kDuplicateCheckVa;
+    const auto distance = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&DuplicateAccountCheck)) -
+        static_cast<std::int64_t>(check + 5);
+    if (!g_duplicateAccountsConVar ||
+        !ValidateEnginePreimage(engineBase, engineSize, kDuplicateCheckVa, checkBytes, sizeof(checkBytes)) ||
+        distance < -2147483648LL || distance > 2147483647LL) {
+        LogFormat("[NorthstarPS4] duplicate account option refused: engine profile mismatch\n");
         return;
     }
-    const auto jump = engineBase + kCheckVa + 7;
-    void* page = reinterpret_cast<void*>(jump & ~std::uintptr_t(0x3fff));
-    const std::size_t span = ((jump + 6 - 1) & ~std::uintptr_t(0x3fff)) != (jump & ~std::uintptr_t(0x3fff)) ? 0x8000 : 0x4000;
-    if (sceKernelMprotect(page, span, 7) != 0) {
-        LogFormat("[NorthstarPS4] -allowdupeaccounts failed: mprotect\n");
+    g_duplicateNext = engineBase + kDuplicateNextVa;
+    g_duplicateReject = engineBase + kDuplicateRejectVa;
+    std::uint8_t jump[sizeof(checkBytes)];
+    std::memset(jump, 0x90, sizeof(jump));
+    jump[0] = 0xe9;
+    const auto rel = static_cast<std::int32_t>(distance);
+    std::memcpy(jump + 1, &rel, sizeof(rel));
+    if (!WriteEngineCode(check, jump, sizeof(jump))) {
+        LogFormat("[NorthstarPS4] duplicate account option failed: mprotect\n");
         return;
     }
-    std::memset(reinterpret_cast<void*>(jump), 0x90, 6);
-    sceKernelMprotect(page, span, 5);
-    LogFormat("[NorthstarPS4] -allowdupeaccounts: duplicate accounts may join this server\n");
+    LogFormat("[NorthstarPS4] duplicate account check hooked; ns_allow_duplicate_accounts=%d\n",
+        ConVarIsSet(g_duplicateAccountsConVar) ? 1 : 0);
 }
 
 bool g_nativeConCommandsRegistered = false;
@@ -301,5 +404,5 @@ void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize
     g_nativeConCommandsRegistered = true;
     InstallMapCommandGuard(engineBase, engineSize);
     InstallReloadLocalizationGuard(engineBase, engineSize);
-    InstallDuplicateAccountOption(engineBase, engineSize);
+    InstallHostOptions(engineBase, engineSize);
 }

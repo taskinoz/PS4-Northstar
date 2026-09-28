@@ -4104,8 +4104,9 @@ connecting one's. With `-allowdupeaccounts` in `/data/northstar_ps4/ns_startup_a
 NOPs, gated on the 13 bytes from 0xe7345. Checked that the patch applies at boot; a second
 machine joining has not been tested.
 
-**Not resolved.** A PC connecting to a PS4-hosted private match was refused with a message
-reported as "binary is different". The PS4 host logs nothing for it. The PS4 engine has the
+**Resolved later the same day** (next entry): the message was "Your .dll [..\bin\x64_retail\client.dll] differs from the server\'s."
+A PC connecting to a PS4-hosted private match was refused with it; it was first reported
+as "binary is different". The PS4 host logs nothing for it. The PS4 engine has the
 Source protocol checks ("Client has network protocol %i, server has network protocol %i")
 and the PC has "Client persistent data definition cache version mismatch with server"; the
 PS4 persistence layout is 929, not PC's 231. The exact message is needed to tell which.
@@ -4113,4 +4114,54 @@ PS4 persistence layout is 929, not PC's 231. The exact message is needed to tell
 Separately, the newer shadPS4 build `4cbd23ef` stopped at boot on "Invalid or corrupted
 deserialization container/shader cache": a pipeline cache written by `2b5666b3`. Moving
 `cache/CUSA04013` aside gets past it, as with every build change.
+
+## PC clients on a PS4 host; host options in the private lobby (2026-09-28)
+
+PRX `fb5015365887486a8da7a57149f29e537b970cb30ff77a012efa48b64bf68e40`, shadPS4 `2b5666b3`.
+
+**"Your .dll [..\bin\x64_retail\client.dll] differs from the server\'s."** The connecting PC's nslog had the exact message. It comes from the
+PC engine's client CRC check (engine.dll 0x728c0). The client compares the CRC the server
+sent (client state +0x101a0) with its own client.dll's, and skips the comparison when the
+server sent -1.
+
+The PS4 engine's GetServerClientCRC (engine+0x10d180) returns -1 on a dedicated server.
+Otherwise it returns a cached value (engine+0x3ef01a4), or computes the CRC of
+`bin/ps4_retail/client.prx` (or `ps4_profile` with `-profilePS4ClientCRC`). No PC can match
+that. Its two callers are the server-info fill (0xeb64d) and the crash-report upload
+(0x3ebc7, field `cdll`). `InstallHostOptions` seeds the cache with -1, gated on the
+function's bytes, so a PS4 host sends what a dedicated server sends. PS4 clients joining PC
+servers were never affected. A PC joining a PS4 host has not been tested past this point:
+the persistence layouts differ (929 vs 231), and that is the next thing it may hit.
+
+**Duplicate accounts, now switchable.** The one-time NOP patch is replaced with a jump from
+engine+0xe7345 to `DuplicateAccountCheck`, a naked stub. It repeats the uid comparison and,
+on a match, rejects only if the convar `ns_allow_duplicate_accounts` (registered natively;
+PC has only the command-line flag) reads 0. The stub saves rax, which holds the loop bound
+there. It reads the convar's int at +0x5c, the offset the engine's own convar tests use.
+Checked by booting with `-allowdupeaccounts`: the native read and the script's
+GetConVarBool both give 1.
+
+**ns_auth_allow_insecure on a PS4 host.** Every client on a PS4 host is marked READY_INSECURE
+at signon, so the host has always behaved as insecure. It cannot check Atlas
+authentication, not being registered with Atlas. The convar (registered natively, default
+0, PC's autoexec_ns_server.cfg value) now means what it can:
+- at 1, anyone may join;
+- at 0, Northstar.PS4's SERVER script `ps4_host_options.nut` removes every player except
+  entity 1 (the listen server's own client) and bots, once a second.
+
+It is a timer because in the lobby, where private matches start,
+CodeCallback_OnClientConnectionCompleted returns before the client-connected callbacks. It
+disconnects through the PS4-only SERVER native `NSPS4_DisconnectClient(int client, string
+reason)`, which calls CBaseClient::Disconnect (engine+0xd75f0). That address was found
+through `kickid` (engine+0x124380), which passes client-array element +0x250 and skips slots
+with +0x4d3 set. PC's `NSDisconnectPlayer` still needs an entity-to-client mapping.
+
+Disconnecting from inside the persistence-availability hook was tried first and dropped
+before testing: that hook answers a running SERVER script, and returning false there makes
+the script error, which ends the host's match.
+
+**UI.** L1 in the private lobby opens a Host Options dialog (`ui/ps4_host_options_menu.nut`)
+that toggles both convars and reopens with the new state. Driven with scripted pad input:
+the dialog opened, both toggles switched to On, the convars read 1, and the host stayed in
+the lobby. Removing a remote player needs a second machine and is untested.
 

@@ -11,6 +11,20 @@
     {
       "Path": "ui/ns_ps4_client_command.nut",
       "RunOn": "UI"
+    },
+    {
+      "Path": "ps4_host_options.nut",
+      "RunOn": "SERVER && MP",
+      "ServerCallback": {
+        "After": "PS4HostOptions_Init"
+      }
+    },
+    {
+      "Path": "ui/ps4_host_options_menu.nut",
+      "RunOn": "UI",
+      "UICallback": {
+        "After": "PS4HostOptionsMenu_Init"
+      }
     }
   ],
   "Localisation": [

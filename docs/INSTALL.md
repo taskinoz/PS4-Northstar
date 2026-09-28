@@ -126,7 +126,16 @@ Reloading mods works live, as on PC: the server browser switches client-required
 
 Mods that servers require are downloaded, as on PC, when they are on Northstar's [verified list](https://github.com/R2Northstar/VerifiedMods) and `allow_mod_auto_download` is on. They go to guest `/data/northstar_ps4/runtime/remote/mods` (PC: `R2Northstar/runtime/remote/mods`), are checked against the list's SHA-256, and are only switched on for servers that need them.
 
-Launch flags go in guest `/data/northstar_ps4/ns_startup_args.txt`, as PC Northstar reads them from `ns_startup_args.txt`. The one the PS4 runtime understands is `-allowdupeaccounts`: a host started with it lets several machines signed in with the same Atlas identity join its match (without it the second one is refused with "Player's account is already on the server", as on PC).
+### Hosting a private match for other players
+
+In the private lobby, **L1 opens Host Options**:
+
+- **Other players** (`ns_auth_allow_insecure`, off by default as on PC servers). A PS4 host is not registered with Northstar's master server, so it can't check who joins; while this is off, anyone else who connects is removed. Turn it on to play with others.
+- **Same account on several machines** (`ns_allow_duplicate_accounts`, PC's `-allowdupeaccounts`). Two machines signed in with the same Atlas identity have the same account, and the second is otherwise refused with "Player's account is already on the server", as on PC.
+
+The settings last until the game restarts. To start with duplicate accounts on, put `-allowdupeaccounts` in guest `/data/northstar_ps4/ns_startup_args.txt` (PC Northstar reads `ns_startup_args.txt` the same way).
+
+PC players can connect to a PS4 host: it no longer sends the PS4 client module's checksum, which a PC always rejected with "Your .dll [..\bin\x64_retail\client.dll] differs from the server\'s."
 
 ### Signing in to Atlas
 

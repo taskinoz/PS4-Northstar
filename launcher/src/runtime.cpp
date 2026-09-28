@@ -1849,6 +1849,12 @@ bool HttpStream(const char* url, HttpChunkFn onChunk, void* user, std::uint64_t&
 // Defined in runtime_mod_reload.inl, which needs the file overlay, VPK and
 // KeyValues code below.
 void ReloadModState() noexcept;
+// CBaseClient::Disconnect (engine+0xd75f0), found by runtime_concommands.inl;
+// g_disconnectClient is set by runtime_persistence.inl once the client array
+// is located. Both are needed by SERVER natives in the UI API.
+using ClientDisconnectFn = void (*)(void* client, int unknownButAlways1, const char* format, ...);
+ClientDisconnectFn g_clientDisconnect = nullptr;
+bool (*g_disconnectClient)(int client, const char* reason) noexcept = nullptr;
 #include "runtime_ui_api.inl"
 #include "runtime_script_print.inl"
 #include "runtime_ui_callbacks.inl"
