@@ -266,24 +266,69 @@ void WarnServerStub(int stub, const char* name) {
 // has been imported - which is the same thing PC reports when not logged in.
 int ServerLocalPlayerUid(void* vm) { String(vm, g_atlasUid); return 1; }
 
-// Hosting a listen server on the console the identity belongs to means the
-// player this VM is asked about is the local one. Telling remote players apart
-// needs the client-array walk PC does, which is not mapped yet, so this is
-// correct for the lobby and private matches and optimistic beyond them.
-int ServerIsLocalPlayer(void* vm) { Boolean(vm, true); return 1; }
+// A player entity argument, as server.prx's own methods read `this`
+// (GetUID, server+0x7a66b0, through 0x62e9a0): the object is a class instance
+// (tag bit 0x408000) whose entity is at instance+0x40. Its word at +0x68 is the
+// entity index, and client = index - 1. The entity must be the one the player
+// table holds for that index, so anything that is not a player is refused.
+int PlayerClientArg(void* vm, int index) {
+    const auto& arg = Arg(vm, index);
+    if (!(arg.tag & 0x408000) || !arg.value) return -1;
+    void* entity = *reinterpret_cast<void**>(arg.value + 0x40);
+    if (!entity) return -1;
+    const int entityIndex = *reinterpret_cast<const std::int16_t*>(static_cast<char*>(entity) + 0x68);
+    if (entityIndex < 1 || ServerPlayerByIndex(entityIndex) != entity) return -1;
+    return entityIndex - 1;
+}
+
+// PC: `!strcmp(g_pLocalPlayerUserID, client.m_UID)`. The local user id here is
+// the imported Atlas uid, which the connect packet carries. Without an
+// imported identity there is no uid to compare, and the listen server's own
+// client (#0) is the local player.
+int ServerIsLocalPlayer(void* vm) {
+    const int client = PlayerClientArg(vm, 1);
+    if (client < 0) {
+        LogFormat("[NorthstarPS4] NSIsPlayerLocalPlayer got null player\n");
+        Boolean(vm, false);
+        return 1;
+    }
+    const char* uid = g_clientUid ? g_clientUid(client) : nullptr;
+    Boolean(vm, g_atlasUid[0] && uid ? std::strcmp(g_atlasUid, uid) == 0 : client == 0);
+    return 1;
+}
 
 // There is no dedicated-server build for this platform.
 int ServerIsDedicated(void* vm) { Boolean(vm, false); return 1; }
 
 // Persistence is never written by this module, so a write is never in flight.
 int ServerWritingPersistence(void* vm) { Boolean(vm, false); return 1; }
-int ServerWritePersistenceForLeave(void*) { WarnServerStub(kStubPersistence, "NSEarlyWritePlayerPersistenceForLeave"); return 0; }
+// PC writes a leaving player's persistence to Atlas early, and only for a
+// player whose data Atlas supplied (READY_REMOTE). A PS4 host is not
+// registered with Atlas, so its players are READY_INSECURE (runtime_persistence.inl)
+// and PC would write nothing for them either.
+int ServerWritePersistenceForLeave(void*) { return 0; }
 
-int ServerDisconnectPlayer(void* vm) { WarnServerStub(kStubDisconnect, "NSDisconnectPlayer"); Boolean(vm, false); return 1; }
-// PS4-only, for Northstar.PS4's host options. PC's NSDisconnectPlayer takes a
-// player entity, and resolving an entity to its client is not mapped on this
-// port yet; scripts pass `player.GetEntIndex() - 1`, the same client index the
-// persistence gate uses.
+// PC: CBaseClient::Disconnect on the player's client, with a default reason.
+int ServerDisconnectPlayer(void* vm) {
+    const int client = PlayerClientArg(vm, 1);
+    const char* reason = TextArg(vm, 2);
+    if (client < 0) {
+        LogFormat("[NorthstarPS4] Attempted to call NSDisconnectPlayer() with null player.\n");
+        Boolean(vm, false);
+        return 1;
+    }
+    if (!g_disconnectClient) {
+        WarnServerStub(kStubDisconnect, "NSDisconnectPlayer");
+        Boolean(vm, false);
+        return 1;
+    }
+    Boolean(vm, g_disconnectClient(client, reason ? reason : "Disconnected by the server."));
+    return 1;
+}
+// PS4-only, for Northstar.PS4's host options, which pass a client index
+// (`player.GetEntIndex() - 1`). Like NSDisconnectPlayer above, it leaves bots
+// and unconnected slots alone (DisconnectClient, as kickid does); PC's
+// NSDisconnectPlayer would disconnect a bot too.
 int ServerDisconnectClient(void* vm) {
     const auto& index = Arg(vm, 1);
     const char* reason = TextArg(vm, 2);
@@ -291,7 +336,18 @@ int ServerDisconnectClient(void* vm) {
     Boolean(vm, g_disconnectClient && g_disconnectClient(static_cast<int>(static_cast<std::int32_t>(index.value)), reason));
     return 1;
 }
-int ServerSendClientPrint(void*) { WarnServerStub(kStubClientPrint, "NSSendClientPrint"); return 0; }
+// PC: CGameClient::ClientPrintf(client, "%s", msg), to the player's console.
+int ServerSendClientPrint(void* vm) {
+    const int client = PlayerClientArg(vm, 1);
+    const char* message = TextArg(vm, 2);
+    if (client < 0) {
+        LogFormat("[NorthstarPS4] NSSendClientPrint(): got null player\n");
+        return 0;
+    }
+    if (!g_clientPrint || !g_clientPrint(client, message ? message : ""))
+        WarnServerStub(kStubClientPrint, "NSSendClientPrint");
+    return 0;
+}
 // NSBroadcastMessage( int fromPlayerIndex, int toPlayerIndex, string text,
 // bool isTeam, bool isDead, int messageType ): PC's ChatBroadcastMessage, a
 // SayText the vanilla code cannot send (runtime_chat.inl).
@@ -322,18 +378,122 @@ int ServerSendMessage(void* vm) {
     return 0;
 }
 
-// PC returns the maps the server has loaded from disk. Enumerating those needs
-// the engine's map list, so the array is empty rather than invented.
-int ServerLoadedMapNames(void* vm) { WarnServerStub(kStubMapNames, "NSGetLoadedMapNames"); Array(vm); return 1; }
+// NSGetLoadedMapNames(): PC's RefreshMapList (util/printmaps.cpp), in its
+// order: enabled mods' loose maps/<map>.bsp, then the retail map archives
+// (englishclient_<map>.bsp.pak000_dir.vpk, except frontend; mp_common holds
+// mp_lobby), then loose maps in the game's r2/maps. The PS4 archives live in
+// vpk_ps4 rather than vpk.
+void AppendMapName(void* vm, const std::string& name) {
+    String(vm, name.c_str());
+    Append(vm);
+}
+int ServerLoadedMapNames(void* vm) {
+    Array(vm);
+    if (const ModOverlay* overlay = CurrentModOverlay()) {
+        for (const auto& entry : overlay->index) {
+            const std::string& key = entry.key;
+            if (key.size() > 9 && key.compare(0, 5, "maps/") == 0 && key.find('/', 5) == std::string::npos &&
+                key.compare(key.size() - 4, 4, ".bsp") == 0)
+                AppendMapName(vm, key.substr(5, key.size() - 9));
+        }
+    }
+    constexpr char kPrefix[] = "englishclient_";
+    constexpr char kSuffix[] = ".bsp.pak000_dir.vpk";
+    if (DIR* dir = opendir("/app0/vpk_ps4")) {
+        while (dirent* entry = readdir(dir)) {
+            const std::string file = entry->d_name;
+            const std::size_t prefix = sizeof(kPrefix) - 1, suffix = sizeof(kSuffix) - 1;
+            if (file.size() <= prefix + suffix || file.compare(0, prefix, kPrefix) != 0 ||
+                file.compare(file.size() - suffix, suffix, kSuffix) != 0)
+                continue;
+            std::string map = file.substr(prefix, file.size() - prefix - suffix);
+            if (map == "frontend") continue;
+            if (map == "mp_common") map = "mp_lobby";
+            AppendMapName(vm, map);
+        }
+        closedir(dir);
+    }
+    if (DIR* dir = opendir("/app0/r2/maps")) {
+        while (dirent* entry = readdir(dir)) {
+            const std::string file = entry->d_name;
+            if (file.size() > 4 && file.compare(file.size() - 4, 4, ".bsp") == 0)
+                AppendMapName(vm, file.substr(0, file.size() - 4));
+        }
+        closedir(dir);
+    }
+    return 1;
+}
 
-// Userinfo convars are per-connected-client state this module does not read
-// yet, so each of these hands back the default the caller supplied. Echoing
-// the argument's own tag keeps the declared return type exact for the numeric
-// and boolean variants; strings and assets are pushed afresh so the new
-// reference is counted rather than aliasing the argument's.
-int UserInfoKvPrimitive(void* vm) { const auto& fallback = Arg(vm, 3); PushPrimitive(vm, fallback.tag, fallback.value); return 1; }
-int UserInfoKvString(void* vm) { const auto& fallback = Arg(vm, 3); String(vm, (fallback.tag & 0x08000000) ? reinterpret_cast<const char*>(fallback.value + 0x30) : ""); return 1; }
-int UserInfoKvAsset(void* vm) { const auto& fallback = Arg(vm, 3); Asset(vm, (fallback.tag & 0x08000000) ? reinterpret_cast<const char*>(fallback.value + 0x30) : ""); return 1; }
+// GetUserInfoKV*_Internal( entity player, string key, <type> defaultValue ):
+// PC's scriptuserinfo.cpp, a player's userinfo convar through
+// m_ConVars->Get*(key, default). KeyValues parses a string value with atoi
+// for GetInt and atof for GetFloat, as here; the bool variant is GetInt != 0.
+// A null player is a script error, as on PC.
+const char* UserInfoArgs(void* vm, const char* fallback, bool* found, const char* name) {
+    const int client = PlayerClientArg(vm, 1);
+    const char* key = TextArg(vm, 2);
+    *found = false;
+    if (client < 0) {
+        Error(vm, "player is null");
+        return nullptr;
+    }
+    if (!key) {
+        Error(vm, name);
+        return nullptr;
+    }
+    return g_clientUserInfo ? g_clientUserInfo(client, key, fallback, found) : fallback;
+}
+constexpr std::uint64_t kSqFloatTag = 0x5000004;
+float NumberArg(void* vm, int index) {
+    const auto& arg = Arg(vm, index);
+    if (arg.tag == kSqFloatTag) {
+        float value;
+        const auto bits = static_cast<std::uint32_t>(arg.value);
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
+    }
+    return static_cast<float>(static_cast<std::int32_t>(arg.value));
+}
+int UserInfoKvString(void* vm) {
+    const char* fallback = TextArg(vm, 3);
+    bool found = false;
+    const char* value = UserInfoArgs(vm, fallback ? fallback : "", &found, "GetUserInfoKVString expects entity player, string key");
+    if (!value) return -1;
+    String(vm, value);
+    return 1;
+}
+int UserInfoKvAsset(void* vm) {
+    const char* fallback = TextArg(vm, 3);
+    bool found = false;
+    const char* value = UserInfoArgs(vm, fallback ? fallback : "", &found, "GetUserInfoKVAsset expects entity player, string key");
+    if (!value) return -1;
+    Asset(vm, value);
+    return 1;
+}
+int UserInfoKvInt(void* vm) {
+    bool found = false;
+    const char* value = UserInfoArgs(vm, "", &found, "GetUserInfoKVInt expects entity player, string key");
+    if (!value) return -1;
+    Integer(vm, found ? std::atoi(value) : static_cast<int>(NumberArg(vm, 3)));
+    return 1;
+}
+int UserInfoKvFloat(void* vm) {
+    bool found = false;
+    const char* value = UserInfoArgs(vm, "", &found, "GetUserInfoKVFloat expects entity player, string key");
+    if (!value) return -1;
+    const float result = found ? static_cast<float>(std::atof(value)) : NumberArg(vm, 3);
+    std::uint32_t bits;
+    std::memcpy(&bits, &result, sizeof(bits));
+    PushPrimitive(vm, kSqFloatTag, bits);
+    return 1;
+}
+int UserInfoKvBool(void* vm) {
+    bool found = false;
+    const char* value = UserInfoArgs(vm, "", &found, "GetUserInfoKVBool expects entity player, string key");
+    if (!value) return -1;
+    Boolean(vm, found ? std::atoi(value) != 0 : Arg(vm, 3).value != 0);
+    return 1;
+}
 
 // Script contexts a native is registered into, matching PC's ADD_SQFUNC
 // masks. SERVER entries are live now that server.prx is hooked: they are
@@ -417,9 +577,9 @@ const Registration registrations[] = {
     {"NSGetLoadedMapNames", "array<string>", "", ServerLoadedMapNames, kCtxAll},
     {"GetUserInfoKVString_Internal", "string", "entity player, string key, string defaultValue = \"\"", UserInfoKvString, kCtxServer},
     {"GetUserInfoKVAsset_Internal", "asset", "entity player, string key, asset defaultValue = $\"\"", UserInfoKvAsset, kCtxServer},
-    {"GetUserInfoKVInt_Internal", "int", "entity player, string key, int defaultValue = 0", UserInfoKvPrimitive, kCtxServer},
-    {"GetUserInfoKVFloat_Internal", "float", "entity player, string key, float defaultValue = 0", UserInfoKvPrimitive, kCtxServer},
-    {"GetUserInfoKVBool_Internal", "bool", "entity player, string key, bool defaultValue = false", UserInfoKvPrimitive, kCtxServer},
+    {"GetUserInfoKVInt_Internal", "int", "entity player, string key, int defaultValue = 0", UserInfoKvInt, kCtxServer},
+    {"GetUserInfoKVFloat_Internal", "float", "entity player, string key, float defaultValue = 0", UserInfoKvFloat, kCtxServer},
+    {"GetUserInfoKVBool_Internal", "bool", "entity player, string key, bool defaultValue = false", UserInfoKvBool, kCtxServer},
 };
 } // namespace uiapi
 bool RegisterRuntimeUiNatives(void* owner, int context, bool deferred = false) noexcept {

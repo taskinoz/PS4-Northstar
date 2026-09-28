@@ -1856,6 +1856,17 @@ void ReloadModState() noexcept;
 using ClientDisconnectFn = void (*)(void* client, int unknownButAlways1, const char* format, ...);
 ClientDisconnectFn g_clientDisconnect = nullptr;
 bool (*g_disconnectClient)(int client, const char* reason) noexcept = nullptr;
+// The client's UID string (PC's m_UID), or null for an empty slot; set with
+// g_disconnectClient.
+const char* (*g_clientUid)(int client) noexcept = nullptr;
+// A client's userinfo convar (PC: m_ConVars->GetString), or the fallback with
+// *found false when it is not set; set with g_disconnectClient.
+const char* (*g_clientUserInfo)(int client, const char* key, const char* fallback, bool* found) noexcept = nullptr;
+// Prints to a client's console (PC: CGameClient::ClientPrintf); set with
+// g_disconnectClient.
+bool (*g_clientPrint)(int client, const char* message) noexcept = nullptr;
+// Defined in runtime_chat.inl: the player entity for an entity index.
+void* ServerPlayerByIndex(int index) noexcept;
 // The engine's ClientSayText (engine+0x473e0), set by runtime_concommands.inl.
 using ClientSayTextFn = void (*)(void* self, const char* message, std::uint64_t isIngameChat, bool isTeamChat);
 ClientSayTextFn g_clientSayText = nullptr;

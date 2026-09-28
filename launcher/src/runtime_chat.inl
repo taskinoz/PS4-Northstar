@@ -49,6 +49,29 @@ bool CallServerChatScript(int playerIndex, const char* text, bool isTeam) noexce
     return result >= 0;
 }
 
+// PC: ServerLimitsManager::CheckChatLimits. Each player may send
+// sv_max_chat_messages_per_sec messages (5) in a one-second window; the rest
+// are dropped. PC keys the window by client and this by client slot.
+struct ChatLimitWindow {
+    std::uint64_t start;
+    int count;
+};
+ChatLimitWindow g_chatLimitWindows[128]{};
+
+bool CheckChatLimits(unsigned senderPlayerId) noexcept {
+    if (!g_chatLimitConVar || senderPlayerId == 0 || senderPlayerId > 128) return true;
+    auto& window = g_chatLimitWindows[senderPlayerId - 1];
+    const std::uint64_t now = sceKernelGetProcessTime();  // microseconds
+    if (now - window.start >= 1000000) {
+        window.start = now;
+        window.count = 0;
+    }
+    if (window.count >= *reinterpret_cast<const std::int32_t*>(static_cast<char*>(g_chatLimitConVar) + kConVarIntValueOffset))
+        return false;
+    ++window.count;
+    return true;
+}
+
 // PC: h_CServerGameDLL__OnReceivedSayTextMessage, which cleans the text in
 // place first.
 void RuntimeServerSayText(void* self, unsigned senderPlayerId, const char* text, bool isTeam) noexcept {
@@ -57,6 +80,7 @@ void RuntimeServerSayText(void* self, unsigned senderPlayerId, const char* text,
     const char* p = text;
     while (std::isspace(static_cast<unsigned char>(*p))) p++;
     if (!*p) return;
+    if (!CheckChatLimits(senderPlayerId)) return;
     LogFormat("[NorthstarPS4] chat received from player %u%s (%zu chars)\n", senderPlayerId,
         isTeam ? ", team" : "", std::strlen(text));
     if (!CallServerChatScript(static_cast<int>(senderPlayerId) - 1, text, isTeam))

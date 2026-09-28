@@ -88,10 +88,40 @@ constexpr std::uintptr_t kServerPersistenceGate2Va = 0x481319;
 // RTTI pointers that sit in front of every Itanium-ABI vtable and have to be
 // carried across with it.
 constexpr std::size_t kPersistenceAvailableSlot = 0x5c8 / sizeof(void*);
+// GetPlayerUID(client), the slot before it: engine+0x2dba60 returns the
+// string at element+0xf750 (PC's CBaseClient::m_UID, 0xf500, from the
+// CBaseClient at +0x250) for a fully connected client, and "" otherwise.
+constexpr std::size_t kPlayerUidSlot = 0x5c0 / sizeof(void*);
+constexpr std::uintptr_t kEngineGetPlayerUidVa = 0x2dba60;
+constexpr std::size_t kClientUidStringOffset = 0xf750;
+constexpr std::size_t kClientUidStringSize = 32;  // PC: char m_UID[32]
+// The account id from the connect packet, as a number: ConnectClient stores it
+// (engine+0xe767d, `mov [object+0x2d658], rax`), and the duplicate account
+// check compares it (engine+0xe7345, `cmp [element+0x4d3+0x2d3d5], rcx`).
+constexpr std::size_t kClientConnectUidOffset = 0x2d8a8;
+// GetClientConVarValue(client + 1, name), slot 0x158 (engine+0x2d8d20): the
+// client's userinfo KeyValues at element+0x4a8 (PC: CBaseClient::m_ConVars,
+// 0x258), read with KeyValues::GetString (engine+0x20a5c0) and FindKey
+// (engine+0x20a2f0).
+constexpr std::size_t kClientConVarValueSlot = 0x158 / sizeof(void*);
+constexpr std::uintptr_t kEngineClientConVarValueVa = 0x2d8d20;
+constexpr std::uintptr_t kKeyValuesGetStringVa = 0x20a5c0;
+constexpr std::uintptr_t kKeyValuesFindKeyVa = 0x20a2f0;
+constexpr std::size_t kClientConVarsOffset = 0x4a8;
+// ClientPrintf(entity index, message), slot 0xd8 (engine+0x2d8240): calls
+// CBaseClient::ClientPrintf (engine+0xd5b60) with "%s", as PC's
+// NSSendClientPrint does, for entity indices 1-32.
+constexpr std::size_t kClientPrintSlot = 0xd8 / sizeof(void*);
+constexpr std::uintptr_t kEngineClientPrintVa = 0x2d8240;
+using EngineClientPrintFn = void (*)(void*, int, const char*);
+EngineClientPrintFn g_engineClientPrint = nullptr;
+void* g_engineServerObject = nullptr;
 constexpr std::size_t kPersistenceVtableSlots = 288;
 
 using PersistenceAvailableFn = bool (*)(void*, int);
 PersistenceAvailableFn g_originalPersistenceAvailable = nullptr;
+using PlayerUidFn = const char* (*)(void*, int);
+PlayerUidFn g_originalPlayerUid = nullptr;
 std::uintptr_t g_persistenceVtable[kPersistenceVtableSlots + 2]{};
 bool g_persistenceHookInstalled = false;
 std::uintptr_t g_engineBaseForPersistence = 0;
@@ -113,6 +143,59 @@ bool RuntimePersistenceAvailable(void* self, int client) noexcept {
         }
     }
     return g_originalPersistenceAvailable(self, client);
+}
+
+// PC: ServerAuthenticationManager::AuthenticatePlayer copies the connecting
+// player's uid into m_UID (`std::to_string(uid)`, 0 for bots), and scripts read
+// it back with player.GetUID(). The PS4 engine keeps the uid only as the number
+// from the connect packet and leaves the string empty, so GetUID() returned ""
+// on a PS4 host. The string is filled from that number the first time it is
+// asked for once the client is fully connected; the engine clears it when the
+// slot is reused (engine+0xd5709).
+char* ClientSlot(int client) noexcept {
+    const auto engine = g_engineBaseForPersistence;
+    if (!engine || client < 0 || client >= *reinterpret_cast<const std::int32_t*>(engine + kEngineClientCountVa))
+        return nullptr;
+    return reinterpret_cast<char*>(engine + kEngineClientArrayVa) + static_cast<std::size_t>(client) * kEngineClientStride;
+}
+
+const char* ClientUid(int client) noexcept {
+    char* slot = ClientSlot(client);
+    if (!slot || *reinterpret_cast<const std::int32_t*>(slot + kClientSignonStateOffset) != kSignonStateFull)
+        return nullptr;
+    char* uid = slot + kClientUidStringOffset;
+    if (!uid[0]) {
+        const bool fake = *reinterpret_cast<const std::uint8_t*>(slot + kClientFakePlayerOffset) != 0;
+        const auto number = fake ? 0 : *reinterpret_cast<const std::uint64_t*>(slot + kClientConnectUidOffset);
+        std::snprintf(uid, kClientUidStringSize, "%llu", static_cast<unsigned long long>(number));
+    }
+    return uid;
+}
+
+// PC: GetUserInfoKV*_Internal read `m_ConVars->Get*(key, default)`: the
+// default only when the key is missing.
+const char* ClientUserInfo(int client, const char* key, const char* fallback, bool* found) noexcept {
+    *found = false;
+    char* slot = ClientSlot(client);
+    void* convars = slot ? *reinterpret_cast<void**>(slot + kClientConVarsOffset) : nullptr;
+    if (!convars || !key) return fallback;
+    const auto engine = g_engineBaseForPersistence;
+    if (!reinterpret_cast<void* (*)(void*, const char*, bool)>(engine + kKeyValuesFindKeyVa)(convars, key, false))
+        return fallback;
+    *found = true;
+    return reinterpret_cast<const char* (*)(void*, const char*, const char*)>(engine + kKeyValuesGetStringVa)(
+        convars, key, fallback ? fallback : "");
+}
+
+bool ClientPrint(int client, const char* message) noexcept {
+    if (!g_engineClientPrint || !message || !ClientSlot(client)) return false;
+    g_engineClientPrint(g_engineServerObject, client + 1, message);
+    return true;
+}
+
+const char* RuntimePlayerUid(void* self, int client) noexcept {
+    ClientUid(client);
+    return g_originalPlayerUid(self, client);
 }
 
 // CBaseClient::Disconnect for a client slot, for NSPS4_DisconnectClient. Like
@@ -190,11 +273,53 @@ bool InstallRuntimePersistence() noexcept {
     g_engineBaseForPersistence = engine;
     g_disconnectClient = DisconnectClient;
 
+    // GetPlayerUID, gated on its bytes and on the connect uid's offset in the
+    // duplicate account check (the check itself may already be patched by the
+    // host options, so only the loop in front of it is compared).
+    constexpr std::uint8_t uidGetter[] = {0x48, 0x63, 0xc6, 0x48, 0x8d, 0x0d, 0x16, 0xcc, 0x53, 0x03, 0x48, 0x69, 0xc0,
+        0x38, 0xd7, 0x02, 0x00, 0x83, 0xbc, 0x08, 0xf0, 0x04, 0x00, 0x00, 0x08, 0x75, 0x09, 0x48, 0x8d, 0x84, 0x08, 0x50,
+        0xf7, 0x00, 0x00, 0xc3, 0x48, 0x8d, 0x05, 0x30, 0x17, 0x07, 0x00, 0xc3};
+    constexpr std::uint8_t uidLoop[] = {0x48, 0x8d, 0x35, 0x1b, 0x18, 0x73, 0x03, 0x31, 0xff, 0x83, 0x7e, 0x1d, 0x02,
+        0x7c, 0x12, 0x80, 0x3e, 0x00, 0x75, 0x0d};
+    const bool uidMatches =
+        reinterpret_cast<std::uintptr_t>(vtable[kPlayerUidSlot]) == engine + kEngineGetPlayerUidVa &&
+        ValidateEnginePreimage(engine, kEngineTextSpan, kEngineGetPlayerUidVa, uidGetter, sizeof(uidGetter)) &&
+        ValidateEnginePreimage(engine, kEngineTextSpan, 0xe7331, uidLoop, sizeof(uidLoop));
+
     for (std::size_t i = 0; i < kPersistenceVtableSlots + 2; ++i)
         g_persistenceVtable[i] = reinterpret_cast<std::uintptr_t>(vtable[i - 2]);
     g_originalPersistenceAvailable = original;
     g_persistenceVtable[kPersistenceAvailableSlot + 2] =
         reinterpret_cast<std::uintptr_t>(&RuntimePersistenceAvailable);
+    constexpr std::uint8_t userInfoBytes[] = {0xff, 0xce, 0x4c, 0x8d, 0x25, 0x2c, 0xf9, 0x53, 0x03, 0x48, 0x63,
+        0xc6, 0x4c, 0x69, 0xf8, 0x38, 0xd7, 0x02, 0x00, 0x4b, 0x8b, 0xbc, 0x27, 0xa8, 0x04, 0x00, 0x00, 0x48, 0x85, 0xff,
+        0x74, 0x32, 0x41, 0x80, 0x3e, 0x00, 0x74, 0x2c, 0x48, 0x8d, 0x15, 0x43, 0x44, 0x07, 0x00, 0x4c, 0x89, 0xf6, 0xe8,
+        0x40, 0x18, 0xf3, 0xff, 0x48, 0x89, 0xc3, 0x80, 0x3b, 0x00, 0x75, 0x15, 0x4b, 0x8d, 0x84, 0x27, 0xa8, 0x04, 0x00,
+        0x00, 0x31, 0xd2, 0x4c, 0x89, 0xf6, 0x48, 0x8b, 0x38, 0xe8, 0x53, 0x15, 0xf3, 0xff};
+    if (reinterpret_cast<std::uintptr_t>(vtable[kClientConVarValueSlot]) == engine + kEngineClientConVarValueVa &&
+        ValidateEnginePreimage(engine, kEngineTextSpan, kEngineClientConVarValueVa + 0x2b, userInfoBytes,
+            sizeof(userInfoBytes)))
+        g_clientUserInfo = ClientUserInfo;
+    else
+        LogFormat("[NorthstarPS4] userinfo natives refused: engine profile mismatch\n");
+    constexpr std::uint8_t clientPrintBytes[] = {0x8d, 0x46, 0xff, 0x0f, 0xb7, 0xc0, 0x83, 0xf8, 0x1f, 0x76, 0x01,
+        0xc3, 0x48, 0x0f, 0xbf, 0xc6, 0x48, 0x8d, 0x0d, 0x29, 0x04, 0x54, 0x03, 0x48, 0x8d, 0x35, 0xa1, 0x3d, 0x07, 0x00,
+        0x48, 0x69, 0xc0, 0x38, 0xd7, 0x02, 0x00, 0x48, 0x8d, 0xbc, 0x08};
+    if (reinterpret_cast<std::uintptr_t>(vtable[kClientPrintSlot]) == engine + kEngineClientPrintVa &&
+        ValidateEnginePreimage(engine, kEngineTextSpan, kEngineClientPrintVa, clientPrintBytes, sizeof(clientPrintBytes))) {
+        g_engineClientPrint = reinterpret_cast<EngineClientPrintFn>(vtable[kClientPrintSlot]);
+        g_engineServerObject = object;
+        g_clientPrint = ClientPrint;
+    } else {
+        LogFormat("[NorthstarPS4] NSSendClientPrint refused: engine profile mismatch\n");
+    }
+    if (uidMatches) {
+        g_originalPlayerUid = reinterpret_cast<PlayerUidFn>(vtable[kPlayerUidSlot]);
+        g_persistenceVtable[kPlayerUidSlot + 2] = reinterpret_cast<std::uintptr_t>(&RuntimePlayerUid);
+        g_clientUid = ClientUid;
+    } else {
+        LogFormat("[NorthstarPS4] player UID hook refused: engine profile mismatch\n");
+    }
     *reinterpret_cast<void**>(object) = g_persistenceVtable + 2;
 
     g_persistenceHookInstalled = true;

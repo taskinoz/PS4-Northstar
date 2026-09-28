@@ -4310,11 +4310,64 @@ PC: `[SERVER]` in magenta, `[WHISPER]`, team-coloured names, and untagged text p
 (`script` is not a console command on PS4; an unknown command goes to the server as a
 client command.)
 
-**Still to do:**
-- PC's chat rate limits (`CheckChatLimits`, part of its server limits) are not ported.
-- `player.GetUID()` is empty for players on a PS4 host: the server script's log prints
-  `()` where PC prints the UID.
+**Rate limit.** PC's `CheckChatLimits` is ported. `sv_max_chat_messages_per_sec`
+(default 5) caps each client slot's messages per one-second window, and the rest are
+dropped. Tested with eight `say` commands in one console line: five arrived, then the next
+second's message went through.
+
+**Private lobby** tested: the lobby's chat box shows history from the match, and L2, typing,
+then Send posted "hi" through the server script.
 
 **Also:** the server browser's player and server totals moved right, clear of the PS4
 footer (patch on Northstar.Client's server_browser.menu).
+
+## Player identity and the SERVER player natives (2026-09-29)
+
+**UID.** `player.GetUID()` calls VEngineServer slot 0x5c0, `GetPlayerUID` (engine+0x2dba60).
+It returns the string at client element+0xf750 for a fully connected client: PC's
+`CBaseClient::m_UID`, 0xf500 from the CBaseClient at element+0x250. Neither engine fills it:
+- PC Northstar writes it in `AuthenticatePlayer` (`std::to_string(uid)`, "0" for bots).
+- The PS4 engine keeps only the number from the connect packet. ConnectClient stores it at
+  element+0x2d8a8 (engine+0xe767d); the duplicate-account check compares the same field.
+
+The runtime hooks slot 0x5c0 in the VEngineServer vtable copy the persistence hook already
+uses. On first use it fills the string from that number, and the engine clears it when the
+slot is reused (engine+0xd5709).
+
+**The number itself.** The listen server's own player connected as uid 1. The engine keeps
+rewriting `platform_user_id` from the PSN account id, which is zero under shadPS4, and zero
+becomes the literal "1". It does this in at least two places (engine+0xb87da and
+engine+0x1191b7). `EnsureConnectUid` only covered joins. Now the connect packet builder
+takes the imported Atlas uid instead, at the point it picks the convar's string before
+strtoull (engine+0x155516..0x155542, a naked stub). That covers hosting and joins alike,
+and without an imported identity it behaves as before.
+
+Tested:
+- The host's player reports its Atlas uid.
+- A join to a public vanilla server (mp_rise) still authenticated and connected.
+
+**Entity to client.** Natives now resolve a player argument the way server.prx's own
+methods read `this` (GetUID, server+0x7a66b0, via 0x62e9a0):
+1. A class instance (tag bit 0x408000) has its entity at instance+0x40.
+2. The entity's word at +0x68 is the entity index, and client = index - 1.
+3. The entity must be the one the player table holds for that index; anything else is
+   refused as a null player, as on PC.
+
+With that, these natives are now implemented:
+
+| Native | PS4 implementation |
+|---|---|
+| `NSIsPlayerLocalPlayer` | PC's `strcmp(localUid, m_UID)`, against the imported uid; client #0 when no identity is imported. Was always true. |
+| `NSDisconnectPlayer` | CBaseClient::Disconnect with PC's default reason. Was a stub. Tested by disconnecting the host's own player. |
+| `NSSendClientPrint` | VEngineServer slot 0xd8 (engine+0x2d8240), which calls CBaseClient::ClientPrintf (0xd5b60) with "%s", as PC does. Runs without error; client console output isn't in the log, so its arrival wasn't seen. |
+| `GetUserInfoKV*_Internal` | The client's userinfo KeyValues at element+0x4a8 (PC's m_ConVars, 0x258), through KeyValues::FindKey (0x20a2f0) and GetString (0x20a5c0), both pinned by `GetClientConVarValue` (slot 0x158, engine+0x2d8d20). Missing keys give the default; int, float and bool parse the string as KeyValues does. |
+| `NSGetLoadedMapNames` | PC's RefreshMapList order: mods' loose `maps/*.bsp`, then `vpk_ps4/englishclient_*.bsp.pak000_dir.vpk` (not frontend; mp_common is mp_lobby), then `r2/maps/*.bsp`. 37 maps here. |
+| `NSEarlyWritePlayerPersistenceForLeave` | A documented no-op. PC writes only for players Atlas supplied data for (READY_REMOTE), and a PS4 host has none. |
+
+The PS4 userinfo keys are the console set: `match_*`, `sp_*`, `cl_*`, `platform_description`
+and so on. There is no `name` key.
+
+**Testing note:** shadPS4 appends every session to one `shad_log.txt` and stops writing it at
+about 1 GB. After that, a boot looks hung to the harness, which waits for a log line. Move the
+file aside before launching when it gets large.
 

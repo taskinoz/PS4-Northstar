@@ -298,6 +298,9 @@ std::uintptr_t g_duplicateReject = 0;
 void* g_duplicateAccountsConVar = nullptr;
 }
 void* g_allowInsecureConVar = nullptr;
+// PC: sv_max_chat_messages_per_sec (ns_limits.cpp), read by the chat hook in
+// runtime_chat.inl.
+void* g_chatLimitConVar = nullptr;
 
 bool ConVarIsSet(void* convar) noexcept {
     return convar && *reinterpret_cast<const std::int32_t*>(static_cast<char*>(convar) + kConVarIntValueOffset) != 0;
@@ -360,6 +363,12 @@ void InstallHostOptions(std::uintptr_t engineBase, std::size_t engineSize) noexc
                 "Let clients with the same account join this server (PC: -allowdupeaccounts)", nullptr);
             g_duplicateAccountsConVar = g_modConVarFindVar(g_modConVarCvar, "ns_allow_duplicate_accounts");
         }
+        alignas(16) static std::uint8_t chatLimitConVar[0x90]{};
+        g_chatLimitConVar = g_modConVarFindVar(g_modConVarCvar, "sv_max_chat_messages_per_sec");
+        if (!g_chatLimitConVar && g_modConVarConstructor) {
+            g_modConVarConstructor(chatLimitConVar, "sv_max_chat_messages_per_sec", "5", 0, "", nullptr);
+            g_chatLimitConVar = g_modConVarFindVar(g_modConVarCvar, "sv_max_chat_messages_per_sec");
+        }
     }
 
     constexpr std::uint8_t checkBytes[] = {0x48, 0x39, 0x8e, 0xd5, 0xd3, 0x02, 0x00, 0x0f, 0x84, 0x9a, 0x00, 0x00, 0x00};
@@ -385,6 +394,90 @@ void InstallHostOptions(std::uintptr_t engineBase, std::size_t engineSize) noexc
     }
     LogFormat("[NorthstarPS4] duplicate account check hooked; ns_allow_duplicate_accounts=%d\n",
         ConVarIsSet(g_duplicateAccountsConVar) ? 1 : 0);
+}
+
+// The connect uid for every connect, including the listen server's own client.
+//
+// PC sends the Origin uid in every connect packet, from platform_user_id, and
+// its listen server copies it into the local player's m_UID. The PS4 engine
+// keeps rewriting platform_user_id from the PSN account id, as `%llu`, or as
+// the literal "1" when there is none, which is always the case under shadPS4.
+// At least two places do it (engine+0xb87da and engine+0x1191b7). EnsureConnectUid
+// puts the Atlas uid back before a join, but hosting has no such step, so the
+// host's own player connected as uid 1 and player.GetUID() said "1" where PC
+// says the host's uid.
+//
+// So the imported uid goes in where the packet is built instead:
+// engine+0x155516 picks platform_user_id's string (or "" / the
+// FCVAR_NEVER_AS_STRING name), then strtoull's it at 0x155549 and writes the
+// number. The pick now returns the Atlas uid when one is imported, and runs as
+// before otherwise.
+constexpr std::uintptr_t kConnectUidPickVa = 0x155516;
+constexpr std::uintptr_t kConnectUidPickEndVa = 0x155542;
+constexpr std::uintptr_t kPlatformUserIdFlagsVa = 0x1a15609;
+constexpr std::uintptr_t kPlatformUserIdConVarVa = 0x1a15618;
+constexpr std::uintptr_t kNeverAsStringNameVa = 0x34ca61;
+constexpr std::uintptr_t kEmptyStringVa = 0x34d1bb;
+
+extern "C" {
+__attribute__((used)) const char* g_connectUidText = nullptr;
+__attribute__((used)) std::uintptr_t g_connectUidFlags = 0;
+__attribute__((used)) std::uintptr_t g_connectUidConVarSlot = 0;
+__attribute__((used)) std::uintptr_t g_connectUidNeverAsString = 0;
+__attribute__((used)) std::uintptr_t g_connectUidEmpty = 0;
+__attribute__((used)) std::uintptr_t g_connectUidResume = 0;
+}
+
+// Replaces the 44 bytes at engine+0x155516. Like the original it leaves the
+// string in rdi and the FCVAR_NEVER_AS_STRING name in rbx, and clobbers rax.
+__attribute__((naked)) void ConnectUidPick() {
+    asm volatile(
+        "movq g_connectUidNeverAsString(%rip), %rbx\n\t"
+        "movq g_connectUidText(%rip), %rdi\n\t"
+        "cmpb $0, (%rdi)\n\t"
+        "jne 1f\n\t"
+        "movq %rbx, %rdi\n\t"
+        "movq g_connectUidFlags(%rip), %rax\n\t"
+        "testb $0x10, (%rax)\n\t"
+        "jnz 1f\n\t"
+        "movq g_connectUidConVarSlot(%rip), %rax\n\t"
+        "movq (%rax), %rax\n\t"
+        "movq 0x48(%rax), %rax\n\t"
+        "movq g_connectUidEmpty(%rip), %rdi\n\t"
+        "testq %rax, %rax\n\t"
+        "cmovneq %rax, %rdi\n\t"
+        "1:\n\t"
+        "jmpq *g_connectUidResume(%rip)\n\t");
+}
+
+void InstallConnectUid(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
+    constexpr std::uint8_t pickBytes[] = {0xf6, 0x05, 0xec, 0x00, 0x8c, 0x01, 0x10, 0x48, 0x8d, 0x1d, 0x3d, 0x75, 0x1f,
+        0x00, 0x48, 0x89, 0xdf, 0x75, 0x19, 0x48, 0x8b, 0x05, 0xe8, 0x00, 0x8c, 0x01, 0x48, 0x8d, 0x3d, 0x84, 0x7c, 0x1f,
+        0x00, 0x48, 0x8b, 0x40, 0x48, 0x48, 0x85, 0xc0, 0x48, 0x0f, 0x45, 0xf8};
+    const auto site = engineBase + kConnectUidPickVa;
+    const auto distance = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&ConnectUidPick)) -
+        static_cast<std::int64_t>(site + 5);
+    if (!ValidateEnginePreimage(engineBase, engineSize, kConnectUidPickVa, pickBytes, sizeof(pickBytes)) ||
+        distance < -2147483648LL || distance > 2147483647LL) {
+        LogFormat("[NorthstarPS4] connect uid hook refused: engine profile mismatch\n");
+        return;
+    }
+    g_connectUidText = g_atlasUid;
+    g_connectUidFlags = engineBase + kPlatformUserIdFlagsVa;
+    g_connectUidConVarSlot = engineBase + kPlatformUserIdConVarVa;
+    g_connectUidNeverAsString = engineBase + kNeverAsStringNameVa;
+    g_connectUidEmpty = engineBase + kEmptyStringVa;
+    g_connectUidResume = engineBase + kConnectUidPickEndVa;
+    std::uint8_t jump[sizeof(pickBytes)];
+    std::memset(jump, 0x90, sizeof(jump));
+    jump[0] = 0xe9;
+    const auto rel = static_cast<std::int32_t>(distance);
+    std::memcpy(jump + 1, &rel, sizeof(rel));
+    if (!WriteEngineCode(site, jump, sizeof(jump))) {
+        LogFormat("[NorthstarPS4] connect uid hook failed: mprotect\n");
+        return;
+    }
+    LogFormat("[NorthstarPS4] connect uid hook installed\n");
 }
 
 // The client's SayText handler (client+0x1db690) drops every message while
@@ -458,5 +551,6 @@ void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize
     InstallMapCommandGuard(engineBase, engineSize);
     InstallReloadLocalizationGuard(engineBase, engineSize);
     InstallHostOptions(engineBase, engineSize);
+    InstallConnectUid(engineBase, engineSize);
     AllowTextChat();
 }
