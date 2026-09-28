@@ -137,6 +137,10 @@ The settings last until the game restarts. To start with duplicate accounts on, 
 
 PC players can connect to a PS4 host: it no longer sends the PS4 client module's checksum, which a PC always rejected with "Your .dll [..\bin\x64_retail\client.dll] differs from the server\'s."
 
+### Text chat
+
+In a match, open the in-game menu and press **L2** to chat with everyone or **R2** to chat with your team; the private lobby has the same buttons. The system keyboard opens, and its Send button posts the message. Messages show at the bottom left of the screen, as on PC. The `say` and `say_team` console commands work too.
+
 ### Signing in to Atlas
 
 The PS4 build has no Origin session of its own, so it cannot perform the Origin exchange Northstar uses on PC. Instead it reads an identity exported from a PC that is already signed in. No EA credential ever reaches the console: only the account uid and the Northstar player token are copied.

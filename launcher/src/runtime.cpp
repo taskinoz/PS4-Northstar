@@ -1862,6 +1862,8 @@ ClientSayTextFn g_clientSayText = nullptr;
 // pointer at engine+0x9f9618 without checking it; it is null outside a match
 // (a `say` from the main menu faulted at engine+0x47495). Callers check it.
 std::uintptr_t g_clientStateSlot = 0;
+// runtime_chat.inl (included with the SERVER VM code): the vanilla send.
+bool ServerChatSend(int playerIndex, const char* text, bool isTeam) noexcept;
 bool SendChat(const char* text, bool isTeam) noexcept {
     if (!g_clientSayText || !g_clientStateSlot || !*reinterpret_cast<void**>(g_clientStateSlot)) return false;
     g_clientSayText(nullptr, text, 1, isTeam);
@@ -1870,6 +1872,7 @@ bool SendChat(const char* text, bool isTeam) noexcept {
 #include "runtime_ui_api.inl"
 #include "runtime_script_print.inl"
 #include "runtime_ui_callbacks.inl"
+#include "runtime_chat_ui.inl"
 
 bool RegisterRuntimeConstants(void* owner, int context) noexcept {
     const auto base = g_runtimeClientBase;

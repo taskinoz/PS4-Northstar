@@ -21,10 +21,48 @@ using ServerSayTextFn = void (*)(void* self, unsigned senderPlayerId, const char
 ServerSayTextFn g_originalServerSayText = nullptr;
 bool g_serverChatHooked = false;
 
+// PC: serverchathooks.cpp. Player chat goes to Northstar's SERVER script,
+// CServerGameDLL_ProcessMessageStartThread( int playerIndex, string message,
+// bool isTeam ), which runs mods' OnReceivedSayTextMessage callbacks and then
+// calls NSSendMessage to pass the message on; without the script the vanilla
+// handler sends it as before.
+constexpr unsigned kCustomMessageIndexMask = 0x7f;
+
+bool CallServerChatScript(int playerIndex, const char* text, bool isTeam) noexcept {
+    void* owner = g_runtimeServerLifecycle.owner;
+    void* vm = owner ? *reinterpret_cast<void**>(static_cast<char*>(owner) + 8) : nullptr;
+    if (!vm) return false;
+    using namespace uiapi;
+    Object function{};
+    if (At<int (*)(void*, const char*, void*, const char*)>(0x685cf0)(vm, "CServerGameDLL_ProcessMessageStartThread",
+            &function, nullptr) < 0)
+        return false;
+    auto push = At<void (*)(void*, std::uint64_t, void*)>(0x6875f0);
+    auto root = reinterpret_cast<const Object*>(static_cast<char*>(vm) + 0xb8);
+    push(vm, function.tag, reinterpret_cast<void*>(function.value));
+    push(vm, root->tag, reinterpret_cast<void*>(root->value));
+    Integer(vm, playerIndex);
+    String(vm, text);
+    Boolean(vm, isTeam);
+    const int result = At<int (*)(void*, int, int, int)>(0x6876c0)(vm, 4, 0, 1);
+    Pop(vm, 1);
+    return result >= 0;
+}
+
 void RuntimeServerSayText(void* self, unsigned senderPlayerId, const char* text, bool isTeam) noexcept {
+    if (!text || !*text) return;
     LogFormat("[NorthstarPS4] chat received from player %u%s (%zu chars)\n", senderPlayerId,
-        isTeam ? ", team" : "", text ? std::strlen(text) : 0);
-    g_originalServerSayText(self, senderPlayerId, text, isTeam);
+        isTeam ? ", team" : "", std::strlen(text));
+    if (!CallServerChatScript(static_cast<int>(senderPlayerId) - 1, text, isTeam))
+        g_originalServerSayText(self, senderPlayerId, text, isTeam);
+}
+
+// SERVER NSSendMessage( int playerIndex, string text, bool isTeam ): PC's
+// ChatSendMessage, the vanilla send past the hook.
+bool ServerChatSend(int playerIndex, const char* text, bool isTeam) noexcept {
+    if (!g_originalServerSayText || !text) return false;
+    g_originalServerSayText(nullptr, static_cast<unsigned>(playerIndex + 1) & kCustomMessageIndexMask, text, isTeam);
+    return true;
 }
 
 void InstallServerChat() noexcept {

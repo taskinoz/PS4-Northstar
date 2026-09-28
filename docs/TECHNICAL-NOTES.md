@@ -4195,3 +4195,69 @@ corrupted deserialization container/shader cache"). With that cache moved aside 
 - renders Kodai fully (not black);
 - returns to a `tdm` lobby and loads Glitch, with no crash and no script errors.
 
+## Text chat (2026-09-28)
+
+Console Titanfall 2 had no text chat, but the PS4 build kept PC's chat code. Chat now
+works the way it does on PC.
+
+**Sending.** Engine `ClientSayText` is at engine+0x473e0, with the same arguments as PC's
+engine.dll 0x54780 (found through its `resetidletimer` branch). It builds
+`clc_ClientSayText`, whose GetName is engine+0x2effd0 and vtable slot 0x3b0dd0.
+- The native `say` and `say_team` commands and CLIENT `NSSendMessage` call it.
+- Its in-game branch reads the client state through the pointer at engine+0x9f9618
+  without checking it. A `say` from the main menu faulted at engine+0x47495, so callers
+  now check that pointer.
+
+**Typing.** The system keyboard (`sceImeDialog`, linked with `SceImeDialog` and
+`SceUserService`; shadPS4 implements it with its own UI) opens from L2 (Chat) and R2 (Team
+Chat) in the in-game menu and the private lobby (`ui/ps4_chat_menu.nut`). The text goes to
+CLIENT `NS_PreSendMessage`, as PC's chat box hook does, so mods' OnPreSendMessage callbacks
+run. It never passes through a console command, where a `;` would run commands. Parameter
+layouts follow shadPS4's ime_common.h: text is UTF-16, and this toolchain's `wchar_t` is 4
+bytes.
+
+**Server.** `CServerGameDLL::OnReceivedSayTextMessage` is server+0xaeb50 (PC server.dll
+0x1595C0; the slot at server+0x9a7d08 was found with the new `scripts/sce_relocs.py`). The
+hook calls Northstar's `CServerGameDLL_ProcessMessageStartThread`, which runs mods'
+callbacks and then SERVER `NSSendMessage`. That is now PC's ChatSendMessage: the vanilla
+function called past the hook.
+
+**Client display.** The SayText user-message handler (client+0x1db690) has PC's
+CHudChat::AddGameLine inlined, and dropped every message for two reasons:
+1. The engine's text-restriction check (engine+0x2bf450) returns the convar
+   `debug_force_textRestriction` when it is 0 or more, and the console's restriction flag
+   (engine+0x3e79e5, which is 1) when it is negative, its default of -1. The runtime sets
+   the convar to 0.
+2. It writes only to chat panels of type 1 (panel +0x2d8, in the list at client+0x10b1be0,
+   next at +0x2f0). The in-match panel `IngameTextChat` and the lobby's `LobbyChatBox` are
+   `[$WINDOWS]` only in `hudscripted_mp.res` and `private_lobby.menu`, so only the menus'
+   type-0 chat-room panels existed. Northstar.PS4 adds both as `[$GAMECONSOLE]` KeyValues
+   patches. A CLIENT script shows the panel as PC's `#if PC_PROG` InitChatHUD and
+   UpdateChatHUDVisibility do. It waits for the panel, because the HUD layout is applied
+   after the CLIENT init callbacks.
+
+KeyValues changes this needed:
+- Patches are matched case-insensitively; the engine asks for
+  `resource/UI/HudScripted_mp.res`.
+- An entry under a different platform condition is added beside the original, not merged
+  into it.
+- A mod's copy of a file is the base a patch applies to.
+- A patch root merges into the only root whatever its name, as `#base` does. Northstar's
+  server_browser.menu calls its root `mods_browse.menu`.
+
+**Tested**, hosting on mp_glitch:
+- `say`, `say_team`, and pad typing (L2, "hi", R2 Send) reach the server.
+- The server script logs `Received message from ...` and the messages show in the chat
+  panel, team messages with `[TEAM]`.
+
+**Still to do:**
+- The client hook to CLIENT `CHudChat_ProcessMessageStartThread`. Custom messages from PC
+  servers' `NSBroadcastMessage` (server announcements, whispers) set the high bit of the
+  sender index, which the vanilla handler rejects.
+- `NSChatWrite*` and SERVER `NSBroadcastMessage`.
+- `player.GetUID()` is empty for players on a PS4 host: the server script's log prints
+  `()` where PC prints the UID.
+
+**Also:** the server browser's player and server totals moved right, clear of the PS4
+footer (patch on Northstar.Client's server_browser.menu).
+

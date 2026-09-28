@@ -173,6 +173,9 @@ int CompleteLocalAuth(void* vm) {
 #include "runtime_server_list.inl"
 #include "runtime_server_join.inl"
 #include "runtime_mod_download.inl"
+// Defined in runtime_chat_ui.inl, which needs the CLIENT VM's lifecycle state.
+int OpenChatKeyboard(void* vm);
+int UpdateChatKeyboard(void* vm);
 int AuthResult(void* vm) {
     Struct(vm, 3);
     Boolean(vm, AtlasIdentityReady()); Seal(vm, 0);
@@ -307,7 +310,15 @@ int ServerDisconnectClient(void* vm) {
 }
 int ServerSendClientPrint(void*) { WarnServerStub(kStubClientPrint, "NSSendClientPrint"); return 0; }
 int ServerBroadcastMessage(void*) { WarnServerStub(kStubBroadcast, "NSBroadcastMessage"); return 0; }
-int ServerSendMessage(void*) { WarnServerStub(kStubSendMessage, "NSSendMessage"); return 0; }
+// PC's ChatSendMessage: the vanilla SayText send past the chat hook
+// (runtime_chat.inl).
+int ServerSendMessage(void* vm) {
+    const char* text = TextArg(vm, 2);
+    if (Arg(vm, 1).tag != 0x5000002 || !text || Arg(vm, 3).tag != 0x1000008)
+        return Error(vm, "NSSendMessage expects int playerIndex, string text, bool isTeam");
+    ServerChatSend(static_cast<int>(static_cast<std::int32_t>(Arg(vm, 1).value)), text, Arg(vm, 3).value != 0);
+    return 0;
+}
 
 // PC returns the maps the server has loaded from disk. Enumerating those needs
 // the engine's map list, so the array is empty rather than invented.
@@ -393,6 +404,8 @@ const Registration registrations[] = {
     {"NSGetLocalPlayerUID", "string", "", ServerLocalPlayerUid, kCtxAll},
     {"NSIsPlayerLocalPlayer", "bool", "entity player", ServerIsLocalPlayer, kCtxServer},
     {"NSPS4_DisconnectClient", "bool", "int client, string reason", ServerDisconnectClient, kCtxServer},
+    {"NSPS4_OpenChatKeyboard", "bool", "bool isTeam", OpenChatKeyboard, kCtxUi},
+    {"NSPS4_UpdateChatKeyboard", "int", "", UpdateChatKeyboard, kCtxUi},
     {"NSIsDedicated", "bool", "", ServerIsDedicated, kCtxServer},
     {"NSIsWritingPlayerPersistence", "bool", "", ServerWritingPersistence, kCtxServer},
     {"NSEarlyWritePlayerPersistenceForLeave", "void", "entity player", ServerWritePersistenceForLeave, kCtxServer},

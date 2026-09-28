@@ -48,7 +48,7 @@ Two helpers work alongside the harness while the game runs:
 ```powershell
 # Presses pad buttons through shadPS4's keyboard mapping (input_config/default.ini),
 # by posting key messages to the game window, so it works without taking focus.
-./scripts/Send-PadInput.ps1 -Key down -Times 3   # up/down/left/right/l1/r1/cross/circle
+./scripts/Send-PadInput.ps1 -Key down -Times 3   # up/down/left/right/l1/r1/l2/r2/options/cross/circle
 # Saves a PNG of just the game window (PrintWindow, works while covered).
 ./scripts/Capture-GameWindow.ps1 -Out shot.png
 ```

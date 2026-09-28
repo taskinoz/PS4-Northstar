@@ -32,6 +32,13 @@
       "ClientCallback": {
         "After": "PS4ChatHud_Init"
       }
+    },
+    {
+      "Path": "ui/ps4_chat_menu.nut",
+      "RunOn": "UI",
+      "UICallback": {
+        "After": "PS4ChatMenu_Init"
+      }
     }
   ],
   "Localisation": [
