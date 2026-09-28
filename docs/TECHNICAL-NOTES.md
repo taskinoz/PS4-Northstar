@@ -4165,3 +4165,31 @@ that toggles both convars and reopens with the new state. Driven with scripted p
 the dialog opened, both toggles switched to On, the convars read 1, and the host stayed in
 the lobby. Removing a remote player needs a second machine and is untested.
 
+## First PC client on a PS4 host; shadPS4 #5133 fixes the black matches (2026-09-28)
+
+**PC on a PS4 host.** With v0.2.4-alpha the PC got past the client CRC check:
+- The PC's nslog (18:12 session) shows it entering the PS4 host's private lobby.
+- The host's log (session at shad_log line 4176527) has `client #1 persistence marked
+  READY_INSECURE` for the PC player, `The_taskinoz`.
+- On `mp_forwardbase_kodai` the host's SERVER finished client script initialization for
+  both players.
+- The intro ended, and the PC player killed the host's player ("Doing a replay because
+  the attacker is a player").
+
+About 80 seconds after loading, the PC reported "Connection to server timed out". The host
+kept running frames, the host's player respawned, and no network or script errors were
+logged. The shadPS4 log has no timestamps, so the two logs cannot be lined up to the
+second.
+
+Next: capture the host's engine console output for the drop reason, retry to see whether
+it repeats, and check whether it follows the host's kill replay.
+
+**#5124.** squidbus pointed to shadPS4#5133 ("shader_compiler: Improve image type
+compatibility": 1D images handled as 2D), merged as `f6cd16e8`. Nightly `4cbd23ef` includes
+it. The user's first runs of it stopped on the `2b5666b3` pipeline cache ("Invalid or
+corrupted deserialization container/shader cache"). With that cache moved aside (kept as
+`cache/CUSA04013.2b5666b3`), 4cbd23ef:
+- boots to the Northstar lobby;
+- renders Kodai fully (not black);
+- returns to a `tdm` lobby and loads Glitch, with no crash and no script errors.
+

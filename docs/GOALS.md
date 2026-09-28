@@ -82,13 +82,13 @@ Work order: G04/G05 (real persistence) and G06 (per-VM helpers, frame queue) are
 | Goal | State | Next concrete test |
 |---|---|---|
 | G20/G08 | Download, install, enable and live reload verified with the harness `download` action; the user downloaded and joined Parkour through the real browser. Fixed after that: CLIENT/UI callbacks now reload, and the lobby resets `mp_gamemode` to `tdm` | Re-export the Atlas identity (starting PC Northstar replaces it), rejoin a Parkour server and confirm HUD, jumping and the return to a `tdm` lobby; then join a vanilla server so the reload disables it. Test cancel and a corrupt archive. |
-| G15/G23 | PC -> PS4 host was refused by the client CRC check ("Your .dll ... differs from the server's"); the host now sends -1 like a dedicated server. L1 Host Options in the private lobby toggles `ns_auth_allow_insecure` (at 0 only the host stays) and `ns_allow_duplicate_accounts` | With "Other players" on, connect a PC and a second PS4 machine (same account, duplicates on); watch for the pdef 929/231 difference on the PC. |
+| G15/G23 | A PC joined a PS4 host's lobby and match (v0.2.4), then timed out after about 80 s in the match. Before v0.2.4 it was refused by the client CRC check ("Your .dll ... differs from the server's"); the host now sends -1 like a dedicated server. L1 Host Options in the private lobby toggles `ns_auth_allow_insecure` (at 0 only the host stays) and `ns_allow_duplicate_accounts` | With "Other players" on, connect a PC and a second PS4 machine (same account, duplicates on); watch for the pdef 929/231 difference on the PC. |
 | G22 | Mode menu pad navigation done in script and tested with scripted input | User confirms with a real pad; then audit the other Northstar menus (mod settings, custom match settings, server browser filters) with `Send-PadInput.ps1`. |
 | G15/G03 | Leave-to-lobby verified locally, including the server-sent command path | Leave a populated remote match and confirm return to a `tdm` lobby. |
 | G04/G05 | Local READY_INSECURE only | Implement `NSEarlyWritePlayerPersistenceForLeave`/`NSIsWritingPlayerPersistence` against the real client; then remote pdata. |
 | G06 | UI JSON verified | Exercise JSON and native marshalling in CLIENT and SERVER VMs; choose helpers per owning module. |
 | G13 | Mod localisation loads in English | Pick the system language instead of always `english`; test a mod with several languages. |
-| G25 | Emulator issues tracked upstream | Follow shadPS4#5124; re-test the newest shadPS4 before moving the recommended build. |
+| G25 | #5124 fixed upstream by shadPS4#5133; nightly `4cbd23ef` renders matches and survives map changes (one session) | Play longer on 4cbd23ef or newer (including remote servers and the flare streak) before moving the recommended build from 2b5666b3. |
 
 ## Definition of feature complete
 
