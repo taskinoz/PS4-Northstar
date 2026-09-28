@@ -9,6 +9,7 @@
 #include "northstar_ps4/json_text.h"
 #include "northstar_ps4/keyvalues.h"
 #include "northstar_ps4/chat_text.h"
+#include "northstar_ps4/http_request.h"
 #include "northstar_ps4/server_list.h"
 #include "northstar_ps4/mod_archive.h"
 #include "northstar_ps4/mod_download.h"
@@ -2078,6 +2079,7 @@ std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noex
 #include "runtime_server_vm.inl"
 #include "runtime_console.inl"
 #include "runtime_http.inl"
+#include "runtime_http_script.inl"
 
 // IBaseFileSystem::ReadFile - secondary slot 14, filesystem_stdio+0xc3d0.
 //

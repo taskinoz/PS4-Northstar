@@ -141,6 +141,13 @@ PC players can connect to a PS4 host: it no longer sends the PS4 client module's
 
 In a match, open the in-game menu and press **L2** to chat with everyone or **R2** to chat with your team; the private lobby has the same buttons. The system keyboard opens, and its Send button posts the message. Messages show at the bottom left of the screen, as on PC. The `say` and `say_team` console commands work too.
 
+### Mods that make web requests
+
+Mods can make web requests through Northstar's HTTP functions, as on PC. The same launch options apply, in `ns_startup_args.txt`:
+- `-disablehttprequests` turns requests off;
+- `-allowlocalhttp` lets mods reach addresses on your own network, which are refused by default;
+- `-disablehttpssl` skips the certificate host name check.
+
 ### Signing in to Atlas
 
 The PS4 build has no Origin session of its own, so it cannot perform the Origin exchange Northstar uses on PC. Instead it reads an identity exported from a PC that is already signed in. No EA credential ever reaches the console: only the account uid and the Northstar player token are copied.

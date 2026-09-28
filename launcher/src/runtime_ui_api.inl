@@ -173,6 +173,16 @@ int CompleteLocalAuth(void* vm) {
 #include "runtime_server_list.inl"
 #include "runtime_server_join.inl"
 #include "runtime_mod_download.inl"
+// Defined in runtime_http_script.inl, after the HTTP transport: script HTTP
+// requests and the per-context queue of calls into script.
+int MakeScriptHttpRequestUi(void* vm);
+int MakeScriptHttpRequestClient(void* vm);
+int MakeScriptHttpRequestServer(void* vm);
+int ScriptHttpEnabled(void* vm);
+int ScriptLocalHttpAllowed(void* vm);
+int RunAsyncCallsUi(void* vm);
+int RunAsyncCallsClient(void* vm);
+int RunAsyncCallsServer(void* vm);
 // Defined in runtime_chat_ui.inl, which needs the CLIENT VM's lifecycle state.
 int OpenChatKeyboard(void* vm);
 int UpdateChatKeyboard(void* vm);
@@ -189,10 +199,6 @@ int PromoData(void* vm) { return Error(vm, "Custom promo data is unavailable"); 
 // no cursor to report, and the declared return type is "vector ornull", so
 // null is the honest answer rather than an invented coordinate.
 int CursorPosition(void*) { return 0; }
-int HttpUnavailable(void* vm) {
-    LogFormat("[NorthstarPS4] HTTP handler unavailable; returning request handle -1\n");
-    Integer(vm, -1); return 1;
-}
 // CLIENT-context natives.
 //
 // NSChatWrite, NSChatWriteLine and NSChatWriteRaw: PC's LocalChatWriter,
@@ -506,9 +512,18 @@ const Registration registrations[] = {
     {"NSAIHarnessField", "string", "string json, string key", HarnessField, kCtxUi},
     {"NSAIHarnessRead", "string", "", HarnessRead, kCtxUi},
     {"NSAIHarnessReply", "void", "string response", HarnessReply, kCtxUi},
-    {"NS_InternalMakeHttpRequest", "int", "int method, string baseUrl, table<string, array<string> > headers, table<string, array<string> > queryParams, string contentType, string body, int timeout, string userAgent", HttpUnavailable, kCtxAll},
-    {"NSIsHttpEnabled", "bool", "", Authenticated, kCtxAll},
-    {"NSIsLocalHttpAllowed", "bool", "", Authenticated, kCtxAll},
+    // One entry per context, so each request's result is queued for the VM
+    // that made it (runtime_http_script.inl).
+    {"NS_InternalMakeHttpRequest", "int", "int method, string baseUrl, table<string, array<string> > headers, table<string, array<string> > queryParams, string contentType, string body, int timeout, string userAgent", MakeScriptHttpRequestUi, kCtxUi},
+    {"NS_InternalMakeHttpRequest", "int", "int method, string baseUrl, table<string, array<string> > headers, table<string, array<string> > queryParams, string contentType, string body, int timeout, string userAgent", MakeScriptHttpRequestClient, kCtxClient},
+    {"NS_InternalMakeHttpRequest", "int", "int method, string baseUrl, table<string, array<string> > headers, table<string, array<string> > queryParams, string contentType, string body, int timeout, string userAgent", MakeScriptHttpRequestServer, kCtxServer},
+    {"NSIsHttpEnabled", "bool", "", ScriptHttpEnabled, kCtxAll},
+    {"NSIsLocalHttpAllowed", "bool", "", ScriptLocalHttpAllowed, kCtxAll},
+    // PS4-only: runs the context's queued script calls; Northstar.PS4 calls it
+    // once a frame in each VM (ps4_async_calls.nut).
+    {"NSPS4_RunAsyncCalls", "void", "", RunAsyncCallsUi, kCtxUi},
+    {"NSPS4_RunAsyncCalls", "void", "", RunAsyncCallsClient, kCtxClient},
+    {"NSPS4_RunAsyncCalls", "void", "", RunAsyncCallsServer, kCtxServer},
     {"NSFetchVerifiedModsManifesto", "void", "", FetchVerifiedMods, kCtxAll},
     {"NSIsModDownloadable", "bool", "string name, string version", IsModDownloadable, kCtxAll},
     {"NSDownloadMod", "void", "string name, string version", DownloadMod, kCtxAll},

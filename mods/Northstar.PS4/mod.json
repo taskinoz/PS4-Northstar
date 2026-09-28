@@ -39,6 +39,19 @@
       "UICallback": {
         "After": "PS4ChatMenu_Init"
       }
+    },
+    {
+      "Path": "ps4_async_calls.nut",
+      "RunOn": "UI || CLIENT || SERVER",
+      "UICallback": {
+        "After": "PS4AsyncCalls_Init"
+      },
+      "ClientCallback": {
+        "After": "PS4AsyncCalls_Init"
+      },
+      "ServerCallback": {
+        "After": "PS4AsyncCalls_Init"
+      }
     }
   ],
   "Localisation": [

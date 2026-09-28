@@ -4371,3 +4371,66 @@ and so on. There is no `name` key.
 about 1 GB. After that, a boot looks hung to the harness, which waits for a log line. Move the
 file aside before launching when it gets large.
 
+## Script HTTP requests and the async call queue (2026-09-29)
+
+PC's `scripthttprequesthandler.cpp` is ported in `runtime_http_script.inl`.
+`NS_InternalMakeHttpRequest` sits behind Northstar.CustomServers' `NSHttpRequest`,
+`NSHttpGet`, `NSHttpPostQuery` and `NSHttpPostBody`. It reads the method, URL, header and
+query tables, content type, body, timeout and user agent (tables through the SQTable and
+SQArray layouts the JSON natives use). It returns a handle and runs the request on its own
+thread.
+
+**Transport.** The request goes through sceHttp, which the port already uses for Atlas:
+- a separate template with the Northstar user agent;
+- `sceHttpCreateRequestWithURL2` with the method name;
+- `sceHttpAddRequestHeader` for Content-Type (POST-like with a body), the script's headers
+  and a user-agent override;
+- resolve, connect, send and receive timeouts set to the clamped 1-60 s;
+- the response headers from `sceHttpGetAllResponseHeaders`.
+
+shadPS4 2b5666b3 implements all of these (its `http.cpp` was read at that commit).
+`SetRecvTimeOut` is declared without parameters in the OpenOrbis header, so it is called
+through a typed pointer.
+
+**Where PC's rules land:**
+- **Query string:** PC's `(query-capable && !POST-like) || body empty` rule, curl's escaping,
+  and `?`/`&` depending on an existing query.
+- **URL:** a URL without a scheme is https; only http and https are accepted.
+- **Launch options:** `-disablehttprequests`, `-allowlocalhttp` and `-disablehttpssl` come
+  from `ns_startup_args.txt`, read once.
+- **Private destinations:** without `-allowlocalhttp`, the host is resolved
+  (`sceNetResolverStartNtoa`). IPv6, a failed resolve and private or reserved IPv4 are
+  refused with PC's message and code 0.
+- **Pure parts:** these are in `northstar_ps4/http_request.h`, tested by
+  `tests/http_request.cpp`.
+
+Differences are in failure details only:
+- sceHttp errors are reported as the matching curl code and text: resolve 6, connect 7,
+  reply 8, timeout 28, TLS 60, otherwise 56.
+- The checked address is not pinned; sceHttp resolves again.
+- PC's two range typos (192.18/15 and 192.51.100/24 for 198.x) use the real ranges.
+- The timeout applies per phase.
+
+**Queue (G06).** PC delivers results with `SquirrelManager::AsyncCall`, which the host frame
+drains per context. Here:
+1. Results go to a per-context queue.
+2. `NSPS4_RunAsyncCalls()` runs that context's queue on the calling VM:
+   `NSHandleSuccessfulHttpRequest( handle, status, body, headers )` or
+   `NSHandleFailedHttpRequest( handle, code, message )`.
+3. Northstar.PS4's `ps4_async_calls.nut` calls it from a `WaitFrame` loop in the UI, CLIENT
+   and SERVER VMs, so the calls run once a frame on each VM's own thread.
+
+The natives are registered once per context, so each knows its queue without having to
+identify the VM (a script thread has its own VM object). A native per-frame hook can
+replace the script loop later.
+
+**Tested** with a throwaway mod making four requests in each VM, at UI init and again for
+CLIENT and SERVER after a map load:
+
+| Request | Result |
+|---|---|
+| GET httpbin.org/get with query | 200, query echoed, 7 headers parsed |
+| POST httpbin.org/post with a JSON body and `X-Test` header | 200, both echoed |
+| httpbin.org/status/404 | success callback with 404, as PC |
+| http://127.0.0.1:8080/ | refused, code 0, PC's message |
+
