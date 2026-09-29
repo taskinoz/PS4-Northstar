@@ -506,6 +506,15 @@ void KeepPendingPdata(std::uint64_t uid, std::string pdata) {
     if (g_pendingPdata.size() > kMaxPdataRecords) g_pendingPdata.erase(g_pendingPdata.begin());
 }
 
+// The host's own session (auth_with_self, runtime_server_join.inl): recorded
+// like an accepted connect, so the host's connect with that token installs its
+// save.
+void AddSelfAuthRecord(std::uint64_t uid, const std::string& token, const std::string& pdata) noexcept {
+    Lock lock;
+    g_records.push_back({token, uid, "self", pdata});
+    if (g_records.size() > kMaxRecords) g_records.erase(g_records.begin());
+}
+
 bool TakeRemotePdata(std::uint64_t uid, std::string& pdata) noexcept {
     Lock lock;
     for (auto it = g_pendingPdata.begin(); it != g_pendingPdata.end(); ++it) {
@@ -777,9 +786,23 @@ void InstallAtlasServer(std::uintptr_t engineBase, std::size_t engineSize) noexc
     g_writeRemotePersistence = RegisterConVar(writeStorage, "ns_ps4_write_remote_persistence", "1",
         "Whether this PS4 host writes Atlas-authenticated players' pdata back to Atlas");
     g_takeRemotePdata = TakeRemotePdata;
+    g_addSelfAuthRecord = AddSelfAuthRecord;
     g_writeRemotePdata = WriteRemotePdata;
     g_remotePdataWriting = RemotePdataWriting;
     InstallDisconnectWrite(engineBase, engineSize);
+    // PC runs Northstar.CustomServers' cfg/autoexec_ns_server.cfg whenever a
+    // server starts a game (hoststate.cpp, listen servers included), and it sets
+    // `everything_unlocked 1`. This port does not run that file, so a PS4 host
+    // validated loadouts against real unlocks: a player's redline_sight failed
+    // FailsItemLockedValidationCheck, sh_loadouts.nut reset it and kicked them
+    // with "Resetting invalid loadout", and the reset was written to their
+    // account. The file's other engine values already match on PS4 (tick
+    // interval, update rate, snapshots), so this one is set the same way, before
+    // the startup arguments, which can still override it.
+    if (void* unlocked = g_modConVarFindVar ? g_modConVarFindVar(g_modConVarCvar, "everything_unlocked") : nullptr) {
+        if (SetConVarString(unlocked, "1"))
+            LogFormat("[NorthstarPS4] everything_unlocked 1 (Northstar's autoexec_ns_server.cfg)\n");
+    }
     ApplyStartupConVars();
 
     // PC: "patch to disable kicking based on incorrect serverfilter in

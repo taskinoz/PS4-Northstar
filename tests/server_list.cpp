@@ -141,6 +141,23 @@ int main(int argc, char** argv) {
             list.empty() ? "-" : list[0].name.c_str(), list.empty() ? 0 : list[0].playerCount,
             list.empty() ? 0 : list[0].maxPlayers, list.empty() ? "" : list[0].map.c_str());
     }
+    // auth_with_self.
+    {
+        SelfAuthResponse self;
+        assert(ParseSelfAuthResponse(
+            "{\"success\":true,\"id\":\"1000108120826\",\"authToken\":\"0a1b2c3d4e5f\",\"persistentData\":[231,0, 0 ,255]}", self));
+        assert(self.success && self.id == "1000108120826" && self.authToken == "0a1b2c3d4e5f");
+        assert(self.pdata == std::string("\xe7\x00\x00\xff", 4));
+        assert(!ParseSelfAuthResponse("{\"success\":true,\"id\":\"1\",\"authToken\":\"abc\",\"persistentData\":[256]}", self));
+        assert(!ParseSelfAuthResponse("{\"success\":true,\"id\":\"1\",\"authToken\":\"abc\",\"persistentData\":[1,-2]}", self));
+        assert(!ParseSelfAuthResponse("{\"success\":true,\"id\":\"1\",\"authToken\":\"abc\",\"persistentData\":\"x\"}", self));
+        assert(!ParseSelfAuthResponse("{\"success\":true,\"id\":\"1\",\"authToken\":\"a b\",\"persistentData\":[]}", self));
+        assert(!ParseSelfAuthResponse("{\"success\":false,\"error\":{\"enum\":\"INVALID_MASTERSERVER_TOKEN\","
+            "\"msg\":\"Invalid or expired masterserver token\"}}", self) &&
+            self.errorEnum == "INVALID_MASTERSERVER_TOKEN" && self.failureReason == "Invalid or expired masterserver token");
+        assert(ParseSelfAuthResponse("{\"success\":true,\"id\":\"1\",\"authToken\":\"abc\",\"persistentData\":[]}", self) &&
+            self.pdata.empty());
+    }
     std::puts("server_list tests passed");
     return 0;
 }

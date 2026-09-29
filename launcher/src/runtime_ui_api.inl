@@ -136,39 +136,13 @@ int Authenticated(void* vm) { Boolean(vm, false); return 1; }
 int MasterServerAuthenticated(void* vm) { Boolean(vm, AtlasIdentityReady()); return 1; }
 int AuthSuccessful(void* vm) { Boolean(vm, authSucceeded); return 1; }
 
-// "Launch Northstar" calls this, waits for NSIsAuthenticatingWithServer to go
-// false, then branches on NSWasAuthSuccessful: success runs
-// NSCompleteAuthWithLocalServer followed by `setplaylist tdm` and
-// `map mp_lobby`, which is what actually starts the local lobby and puts the
-// Northstar menus up. Failure shows NSGetAuthFailReason in a dialog.
-//
-// There is nothing to negotiate here. PC authenticates with its own server
-// through Atlas because its server half enforces auth; this port's SERVER hooks
-// (runtime_server_vm.inl) do not enforce Northstar auth, so the local lobby has
-// none to satisfy. An imported identity is therefore sufficient, and the
-// attempt completes immediately - NSIsAuthenticatingWithServer already reports
-// false.
-int TryLocalAuth(void*) {
-    authSucceeded = AtlasIdentityReady();
-    authFailure = authSucceeded ? std::string() : std::string(AtlasIdentityMessage());
-    LogFormat("[NorthstarPS4] local server auth %s%s%s\n",
-        authSucceeded ? "succeeded" : "refused",
-        authSucceeded ? "" : ": ", authSucceeded ? "" : authFailure.c_str());
-    return 0;
-}
+// NSTryAuthWithLocalServer and NSCompleteAuthWithLocalServer are in
+// runtime_server_join.inl, with the other Atlas session requests.
 // Falls back to the identity message: nothing may have set a reason yet, and an
 // empty string in the menu tells the player nothing.
 int AuthFailReason(void* vm) {
     String(vm, authFailure.empty() ? AtlasIdentityMessage() : authFailure.c_str());
     return 1;
-}
-// Distinct from CompleteAuth: raising here would abort the script between the
-// success branch and the `map mp_lobby` that follows it, so the lobby would
-// never start even though authentication had succeeded.
-int CompleteLocalAuth(void* vm) {
-    if (!authSucceeded) return Error(vm, AtlasIdentityMessage());
-    LogFormat("[NorthstarPS4] local server auth completed; lobby launch follows\n");
-    return 0;
 }
 #include "runtime_server_list.inl"
 #include "runtime_server_join.inl"

@@ -4618,3 +4618,52 @@ is 1 (on, as PC) from 2026-09-29. `+ns_ps4_write_remote_persistence 0` in
 - **The default is now 1**, as PC writes always. `+ns_ps4_write_remote_persistence 0`
   turns writes off.
 
+## The host's own save, and PC servers' unlock rule (2026-09-29)
+
+**Own save** (PC MasterServerManager::AuthenticateWithOwnServer). "Launch Northstar" calls
+`NSTryAuthWithLocalServer`, which now POSTs `/client/auth_with_self?id&playerToken` on a
+worker thread; `NSIsAuthenticatingWithServer` is true meanwhile. Atlas answers with the
+account id, an auth token and the save as a JSON array of bytes (`ParseSelfAuthResponse`
+in server_list.h, host-tested).
+- The save becomes an Atlas record like an accepted `connect`.
+- `NSCompleteAuthWithLocalServer` puts the token in `serverfilter`, as PC does.
+- The host's own connect request then matches, and the save is installed at connect as
+  `READY_REMOTE`.
+- Writes go through the same path. For a player on their own server, Atlas only checks
+  that the write comes from the IP address that authenticated
+  (`acct.IsOnOwnServer()`), so no server id is needed.
+
+When the request fails (expired token, no connection), PC does not start the lobby. Here
+the lobby starts with the local placeholder save and the reason is logged, so an expired
+imported token does not lock a PS4 player out. `serverfilter` is cleared in that case, so
+a token left over from a join is not sent.
+
+Verified: the lobby showed the account's real progress (Level 50, "Regen Available", 650
+credits), where earlier sessions showed Level 1 and 20 credits. A match's changes were
+written to the account (status 200).
+
+**`everything_unlocked`.** The first such match kicked the host with "Resetting invalid
+loadout":
+- `FailsItemLockedValidationCheck` failed for pilot loadout 1's `redline_sight`, and
+  `sh_loadouts.nut` reset it to the default.
+- The reset (2 bytes) was then written to the account.
+
+PC never hits this. Its hoststate hook runs `exec autoexec_ns_server` on every NewGame,
+listen servers included, and Northstar.CustomServers' file sets `everything_unlocked 1`.
+The port does not run that file, so a PS4 host checked real unlock progress. That also
+applied to remote players from v0.2.7-alpha on, since writes default on there.
+
+The runtime now sets `everything_unlocked 1` at startup, before startup arguments are
+applied. Checked against the file's other values on PS4:
+
+| Setting | PS4 | PC file |
+|---|---|---|
+| `base_tickinterval_mp` | 0.016666667 | same |
+| `sv_updaterate_mp` | 20 | same |
+| `sv_max_snapshots_multiplayer` | 300 | same |
+| `net_data_block_enabled` | 1 | 0 |
+| `host_skip_client_dll_crc` | 0 | 1 (the port skips that check its own way) |
+| `ns_erase_auth_info`, `net_chan_limit_*`, `sv_querylimit_per_sec` | not registered | set |
+
+Verified: the same match with the fix gave no reset and no kick.
+

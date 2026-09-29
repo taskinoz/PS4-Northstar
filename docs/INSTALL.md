@@ -149,7 +149,7 @@ Name the server the way PC servers are named, with launch options in `ns_startup
 
 `+ns_report_server_to_masterserver 0` keeps the match off the list.
 
-Players who join through the server browser are signed in by Northstar, so they are let in even with **Other players** off, as on PC. They play with their own Northstar progress, and what they earn is saved back to their account when a match ends or they leave, as on a PC server. To host without saving players' progress, add `+ns_ps4_write_remote_persistence 0` to `ns_startup_args.txt`. Your own progress as the host is still kept on this machine.
+Players who join through the server browser are signed in by Northstar, so they are let in even with **Other players** off, as on PC. They play with their own Northstar progress, and what they earn is saved back to their account when a match ends or they leave, as on a PC server. To host without saving players' progress, add `+ns_ps4_write_remote_persistence 0` to `ns_startup_args.txt`. As the host you play with your own Northstar progress too, and it is saved to your account the same way. If Northstar can't be reached or your exported token has expired, the lobby still opens, but with a fresh local profile, and nothing from that session is saved to your account.
 
 PC players can connect to a PS4 host: it no longer sends the PS4 client module's checksum, which a PC always rejected with "Your .dll [..\bin\x64_retail\client.dll] differs from the server\'s."
 

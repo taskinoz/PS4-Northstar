@@ -1877,6 +1877,9 @@ void (*g_writeRemotePdata)(std::uint64_t uid, const std::string& pdata, const ch
 // Set by runtime_atlas_server.inl: whether a pdata write is in flight
 // (NSIsWritingPlayerPersistence).
 bool (*g_remotePdataWriting)() noexcept = nullptr;
+// Set by runtime_atlas_server.inl: records the host's own Atlas session
+// (auth_with_self), so the host's connect to its own server installs its save.
+void (*g_addSelfAuthRecord)(std::uint64_t uid, const std::string& token, const std::string& pdata) noexcept = nullptr;
 // Defined in runtime_persistence.inl: writes a connected player's installed
 // Atlas save (NSEarlyWritePlayerPersistenceForLeave).
 bool WriteRemoteSave(int client, const char* reason, bool keep) noexcept;

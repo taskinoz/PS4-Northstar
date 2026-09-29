@@ -307,4 +307,66 @@ inline bool ParseServerAuthResponse(const char* text, ServerAuthResponse& out) {
     return true;
 }
 
+struct SelfAuthResponse {
+    bool success = false;
+    std::string id, authToken, failureReason;
+    std::string errorEnum;
+    std::string pdata;  // bytes
+};
+
+// /client/auth_with_self (PC MasterServerManager::AuthenticateWithOwnServer):
+// {success:true, id, authToken, persistentData:[byte, ...]}, or an error
+// object as for auth_with_server. PC reads persistentData as an array of
+// numbers 0-255 and refuses anything else.
+inline bool ParseSelfAuthResponse(const char* text, SelfAuthResponse& out) {
+    out = SelfAuthResponse{};
+    out.failureReason = "Authentication Failed";
+    const char* root = text ? JsonSkipWs(text) : nullptr;
+    if (!root || *root != '{') return false;
+    if (const char* error = JsonFindMember(root, "error")) {
+        if (!DecodeJsonString(JsonFindMember(error, "enum"), out.errorEnum)) out.errorEnum.clear();
+        std::string reason;
+        if (DecodeJsonString(JsonFindMember(error, "msg"), reason) && !reason.empty())
+            out.failureReason = reason;
+        else if (DecodeJsonString(JsonFindMember(error, "enum"), reason) && !reason.empty())
+            out.failureReason = reason;
+        else
+            out.failureReason = "No error message provided";
+        return false;
+    }
+    bool success = false;
+    if (!JsonBool(JsonFindMember(root, "success"), success) || !success) return false;
+    const char* array = JsonFindMember(root, "persistentData");
+    if (!DecodeJsonString(JsonFindMember(root, "id"), out.id) ||
+        !DecodeJsonString(JsonFindMember(root, "authToken"), out.authToken) || !array || *JsonSkipWs(array) != '[')
+        return false;
+    ClipToPcArray(out.authToken, 32);
+    if (!IsAuthToken(out.authToken)) {
+        out.failureReason = "Master server returned an invalid auth token";
+        return false;
+    }
+    const char* p = JsonSkipWs(array) + 1;
+    for (;;) {
+        p = JsonSkipWs(p);
+        if (*p == ']') break;
+        if (*p < '0' || *p > '9') return false;
+        unsigned value = 0;
+        while (*p >= '0' && *p <= '9') {
+            value = value * 10 + static_cast<unsigned>(*p - '0');
+            if (value > 255) return false;
+            ++p;
+        }
+        out.pdata.push_back(static_cast<char>(value));
+        p = JsonSkipWs(p);
+        if (*p == ',') {
+            ++p;
+            continue;
+        }
+        if (*p != ']') return false;
+    }
+    out.success = true;
+    out.failureReason.clear();
+    return true;
+}
+
 } // namespace northstar::ps4::mods

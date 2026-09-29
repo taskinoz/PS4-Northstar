@@ -114,9 +114,108 @@ int TryRemoteAuth(void* vm) {
     return 0;
 }
 
+// The host's own Atlas session: PC MasterServerManager::AuthenticateWithOwnServer.
+// "Launch Northstar" calls NSTryAuthWithLocalServer, waits for
+// NSIsAuthenticatingWithServer to go false, then on NSWasAuthSuccessful runs
+// NSCompleteAuthWithLocalServer, `setplaylist tdm` and `map mp_lobby`.
+//
+// POST /client/auth_with_self?id=&playerToken= returns the host's save and a
+// token. The save goes into the hosted server's Atlas records (see
+// runtime_atlas_server.inl), and NSCompleteAuthWithLocalServer puts the token
+// in serverfilter, so the host's own connect installs its save as READY_REMOTE
+// and the host's progress is written back to its account, as on PC.
+//
+// PC does not start the lobby when this fails. With only an imported identity
+// that expires, that would lock a PS4 player out of the lobby until they
+// re-export it, so here the lobby starts anyway with the local placeholder
+// save and the reason is logged.
+std::atomic<int> selfAuthState{kFetchIdle};
+SelfAuthResponse selfAuthResult;  // worker-owned while requesting
+std::string selfAuthToken;        // UI thread: set by a successful attempt
+
+void* SelfAuthWorker(void*) noexcept {
+    const std::string url = std::string(kMasterServerUrl) + "/client/auth_with_self?id=" + PercentEncode(g_atlasUid) +
+        "&playerToken=" + PercentEncode(g_atlasToken);
+    LogFormat("[NorthstarPS4] authenticating with own server\n");
+    selfAuthResult = SelfAuthResponse{};
+    constexpr std::size_t kCapacity = 1 << 20;  // the save arrives as a JSON array of bytes (~225 KB)
+    auto* buffer = new char[kCapacity];
+    int status = 0;
+    if (!HttpPost(url.c_str(), buffer, kCapacity, status)) {
+        selfAuthResult.failureReason = "Could not reach the Northstar master server";
+    } else if (std::strlen(buffer) >= kCapacity - 1) {
+        selfAuthResult.failureReason = "Authentication Failed";
+    } else if (ParseSelfAuthResponse(buffer, selfAuthResult) && selfAuthResult.id != g_atlasUid) {
+        selfAuthResult.success = false;
+        selfAuthResult.failureReason = "Master server returned a different account";
+    }
+    delete[] buffer;
+    if (selfAuthResult.success) {
+        if (g_addSelfAuthRecord)
+            g_addSelfAuthRecord(std::strtoull(g_atlasUid, nullptr, 10), selfAuthResult.authToken, selfAuthResult.pdata);
+        LogFormat("[NorthstarPS4] own server auth succeeded (%zu bytes of pdata)\n", selfAuthResult.pdata.size());
+    } else {
+        LogFormat("[NorthstarPS4] own server auth failed (status %d): %s; the lobby uses the local save\n", status,
+            selfAuthResult.failureReason.c_str());
+    }
+    selfAuthState.store(kFetchReady, std::memory_order_release);
+    return nullptr;
+}
+
+void PublishSelfAuthResult() {
+    if (selfAuthState.load(std::memory_order_acquire) != kFetchReady) return;
+    // The lobby starts either way; see above.
+    authSucceeded = true;
+    authFailure = selfAuthResult.success ? std::string() : selfAuthResult.failureReason;
+    selfAuthToken = selfAuthResult.success ? selfAuthResult.authToken : std::string();
+    selfAuthResult = SelfAuthResponse{};
+    selfAuthState.store(kFetchIdle, std::memory_order_release);
+}
+
+int TryLocalAuth(void*) {
+    PublishSelfAuthResult();
+    if (selfAuthState.load(std::memory_order_acquire) != kFetchIdle) return 0;
+    selfAuthToken.clear();
+    if (!AtlasIdentityReady()) {
+        authSucceeded = false;
+        authFailure = AtlasIdentityMessage();
+        LogFormat("[NorthstarPS4] local server auth refused: %s\n", authFailure.c_str());
+        return 0;
+    }
+    authSucceeded = false;
+    authFailure = "Authentication Failed";
+    int expected = kFetchIdle;
+    if (!selfAuthState.compare_exchange_strong(expected, kFetchRequesting)) return 0;
+    OrbisPthread thread{};
+    if (!InitHttpTransport() || scePthreadCreate(&thread, nullptr, SelfAuthWorker, nullptr, "NSSelfAuth") != 0) {
+        selfAuthResult = SelfAuthResponse{};
+        selfAuthResult.failureReason = "Could not start the authentication request";
+        selfAuthState.store(kFetchReady, std::memory_order_release);
+        return 0;
+    }
+    scePthreadDetach(thread);
+    return 0;
+}
+
+// Distinct from CompleteAuth: raising here would abort the script between the
+// success branch and the `map mp_lobby` that follows it.
+int CompleteLocalAuth(void* vm) {
+    PublishSelfAuthResult();
+    if (!authSucceeded) return Error(vm, AtlasIdentityMessage());
+    // PC: "literally just set serverfilter". Cleared when there is no token,
+    // so a token left over from a server join is not sent to the local server.
+    if (g_serverFilterConVar) SetConVarString(g_serverFilterConVar, selfAuthToken.c_str());
+    if (!selfAuthToken.empty()) EnsureConnectUid();
+    LogFormat("[NorthstarPS4] local server auth completed (%s); lobby launch follows\n",
+        selfAuthToken.empty() ? "local save" : "Atlas save");
+    return 0;
+}
+
 int IsAuthenticating(void* vm) {
     PublishJoinResult();
-    Boolean(vm, joinState.load(std::memory_order_acquire) != kFetchIdle);
+    PublishSelfAuthResult();
+    Boolean(vm, joinState.load(std::memory_order_acquire) != kFetchIdle ||
+        selfAuthState.load(std::memory_order_acquire) != kFetchIdle);
     return 1;
 }
 
