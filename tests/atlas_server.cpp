@@ -67,8 +67,14 @@ int main() {
     connect += "trailing";
     ConnectRequest request;
     CHECK(ParseConnectRequest(reinterpret_cast<const std::uint8_t*>(connect.data()), connect.size(), request));
-    CHECK(request.uid == uid && request.name == "Titanfall-PS4" && request.serverFilter == "0123456789abcdef");
-    CHECK(!ParseConnectRequest(reinterpret_cast<const std::uint8_t*>(connect.data()), 40, request));
+    CHECK(request.uid == uid && request.name == "Titanfall-PS4" && request.HasString("0123456789abcdef"));
+    // A PC client: an empty string between the name and the token.
+    std::string pc = connect.substr(0, 29) + std::string("Alluisve\0\0" "5707de674c78924d83dfc8a345b96c7\0", 42);
+    CHECK(ParseConnectRequest(reinterpret_cast<const std::uint8_t*>(pc.data()), pc.size(), request));
+    CHECK(request.name == "Alluisve" && request.strings.size() == 2 && request.strings[0].empty() &&
+          request.HasString("5707de674c78924d83dfc8a345b96c7") && !request.HasString("other"));
+    // Cut inside the name: no name, no request.
+    CHECK(!ParseConnectRequest(reinterpret_cast<const std::uint8_t*>(connect.data()), 35, request));
     std::string notConnect = connect;
     notConnect[4] = 'H';
     CHECK(!ParseConnectRequest(reinterpret_cast<const std::uint8_t*>(notConnect.data()), notConnect.size(), request));

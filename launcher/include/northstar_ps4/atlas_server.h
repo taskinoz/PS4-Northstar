@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace northstar::ps4::atlas {
 
@@ -70,15 +71,24 @@ inline bool ParseAtlasPacket(const std::uint8_t* packet, std::size_t size, std::
     return false;
 }
 
-// A client's connect request, as the engine writes it (engine+0x1554c3 on the
-// PS4 client, the same fields a PC client sends): 0xFFFFFFFF, 'A', four
-// 32-bit fields, the 64-bit uid (little-endian), the player name and the
-// serverfilter convar (the Atlas connection token), both NUL-terminated.
+// A client's connect request: 0xFFFFFFFF, 'A', four 32-bit fields, the 64-bit
+// uid (little-endian), the player name, then NUL-terminated strings, one of
+// which is the serverfilter convar (the Atlas connection token). The PS4 client
+// (engine+0x1554c3) writes serverfilter right after the name; a PC client sends
+// another, empty, string first. So the strings after the name are all kept and
+// the token is matched against each.
 struct ConnectRequest {
     std::uint64_t uid = 0;
     std::string name;
-    std::string serverFilter;
+    std::vector<std::string> strings;  // after the name, up to kMaxConnectStrings
+
+    bool HasString(const std::string& text) const {
+        for (const auto& value : strings)
+            if (value == text) return true;
+        return false;
+    }
 };
+constexpr std::size_t kMaxConnectStrings = 4;
 
 inline bool ParseConnectRequest(const std::uint8_t* packet, std::size_t size, ConnectRequest& out) {
     constexpr std::size_t kUidOffset = 21;
@@ -97,7 +107,11 @@ inline bool ParseConnectRequest(const std::uint8_t* packet, std::size_t size, Co
         ++at;
         return true;
     };
-    return readString(out.name) && readString(out.serverFilter);
+    if (!readString(out.name)) return false;
+    out.strings.clear();
+    std::string value;
+    while (out.strings.size() < kMaxConnectStrings && readString(value)) out.strings.push_back(value);
+    return true;
 }
 
 // PC's UnescapeUnicode: \uXXXX sequences in ns_server_name / ns_server_desc

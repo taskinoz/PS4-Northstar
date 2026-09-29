@@ -208,8 +208,19 @@ enum class AddResult { Success, Failed, FailedDuplicate, FailedNoRetry, FailedNo
 // PC: InternalAddServer / InternalUpdateServer. `id` empty adds.
 AddResult ReportPresence(const std::string& id) {
     const atlas::Presence presence = CurrentPresence();
+    if (ConVarInt(g_debugAtlasPacket, 0))
+        LogFormat("[NorthstarPS4] presence port=%d name=%s map=%s playlist=%s players=%d/%d password=%zu chars\n",
+            presence.port, presence.name.c_str(), presence.map.c_str(), presence.playlist.c_str(), presence.playerCount,
+            presence.maxPlayers, presence.password.size());
     const std::string url = std::string(uiapi::kMasterServerUrl) + (id.empty() ? "/server/add_server?" : "/server/update_values?") +
         atlas::PresenceQuery(presence, id);
+    if (ConVarInt(g_debugAtlasPacket, 0)) {
+        const std::string escaped = http::UrlEscape(presence.password);
+        const std::size_t at = url.rfind("&password=");
+        LogFormat("[NorthstarPS4] presence url %zu chars: %s<password %zu chars>, ends with the password: %d\n", url.size(),
+            url.substr(0, at == std::string::npos ? url.size() : at + 10).c_str(), escaped.size(),
+            at != std::string::npos && url.compare(at + 10, std::string::npos, escaped) == 0 ? 1 : 0);
+    }
     const std::string boundary = "NorthstarPS4ModInfo7f3a91c2";
     const std::string contentType = "multipart/form-data; boundary=" + boundary;
     std::string response;
@@ -446,12 +457,12 @@ void NoteConnectRequest(const std::uint8_t* data, std::size_t size) {
     atlas::ConnectRequest request;
     const bool parsed = atlas::ParseConnectRequest(data, size, request);
     if (ConVarInt(g_debugAtlasPacket, 0))
-        LogFormat("[NorthstarPS4] connect request parsed=%d name=%s token=%zu chars\n", parsed ? 1 : 0,
-            parsed ? request.name.c_str() : "", request.serverFilter.size());
-    if (!parsed || request.serverFilter.empty()) return;
+        LogFormat("[NorthstarPS4] connect request parsed=%d name=%s strings=%zu\n", parsed ? 1 : 0,
+            parsed ? request.name.c_str() : "", request.strings.size());
+    if (!parsed) return;
     Lock lock;
     for (const auto& record : g_records) {
-        if (record.token == request.serverFilter && record.uid == request.uid) {
+        if (record.uid == request.uid && !record.token.empty() && request.HasString(record.token)) {
             for (auto uid : g_authenticatedUids)
                 if (uid == request.uid) return;
             g_authenticatedUids.push_back(request.uid);
@@ -571,6 +582,25 @@ void InstallAtlasServer(std::uintptr_t engineBase, std::size_t engineSize) noexc
         "to impersonate Atlas)");
     if (g_modConVarCvar && g_modConVarFindVar) g_hostPort = g_modConVarFindVar(g_modConVarCvar, "hostport");
     ApplyStartupConVars();
+
+    // PC: "patch to disable kicking based on incorrect serverfilter in
+    // connectclient, since we repurpose it for use as an auth token" (engine.dll
+    // 0x114655 -> EB). The inlined ConnectClient compares the client's
+    // serverfilter with the server's own (engine+0xe7494) and otherwise rejects
+    // with "Incoming server filter of ... doesn't match our server filter of
+    // ...", which is what a PC joining through the browser saw. The je at
+    // engine+0xe749b becomes a jmp.
+    constexpr std::uint8_t filterCheckBytes[] = {0x48, 0x8b, 0x05, 0x1c, 0xe7, 0x36, 0x00, 0x48, 0x8d, 0x35, 0x50,
+        0x5d, 0x26, 0x00, 0x48, 0x89, 0x95, 0x18, 0xfb, 0xff, 0xff, 0x48, 0x8b, 0x40, 0x48, 0x48, 0x85, 0xc0, 0x48, 0x0f,
+        0x45, 0xf0, 0xeb, 0x0e, 0x48, 0x89, 0x95, 0x18, 0xfb, 0xff, 0xff, 0x48, 0x8d, 0x35, 0xd4, 0x55, 0x26, 0x00, 0x48,
+        0x8d, 0xbd, 0xa0, 0xfd, 0xff, 0xff, 0xe8, 0x4f, 0x8f, 0xf1, 0xff, 0x85, 0xc0, 0x74, 0x23};
+    constexpr std::uintptr_t kFilterCheckVa = 0xe745d;
+    constexpr std::uint8_t jump = 0xeb;
+    if (ValidateEnginePreimage(engineBase, engineSize, kFilterCheckVa, filterCheckBytes, sizeof(filterCheckBytes)) &&
+        WriteEngineCode(engineBase + kFilterCheckVa + sizeof(filterCheckBytes) - 2, &jump, 1))
+        LogFormat("[NorthstarPS4] server filter check disabled (the filter carries the Atlas token, as on PC)\n");
+    else
+        LogFormat("[NorthstarPS4] server filter check patch refused: engine profile mismatch\n");
 
     constexpr std::uint8_t handlerBytes[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54,
         0x53, 0x48, 0x81, 0xec, 0x08, 0x05, 0x00, 0x00, 0x4c, 0x8b, 0x25, 0x95, 0xb1, 0x2f, 0x00, 0x49, 0x89, 0xf3, 0x49,
