@@ -4538,3 +4538,62 @@ Atlas packet and each connect request's parse.
 PRX stopped at the Northstar.Custom localisation load, with the log cut mid-line and a
 spinner on screen. The same PRX then booted normally.
 
+## Remote players' pdata on a PS4 host (2026-09-29)
+
+**Layouts.** Atlas and PC use persistence layout 231. Its structure is 56,169 bytes (Atlas
+`pkg/pdata` UnmarshalBinary), with the version, 231, as the first int. A save carries
+trailing bytes after that structure, which Atlas keeps as they are; its placeholder pdata
+is 56,306 bytes, and PC mods' pdiff fields live in that space.
+
+Northstar.PS4's `persistent_player_data_version_929.pdef` is 231 followed by the console's
+black market (`bm`, 181 bytes), 56,350 bytes in all. Checked by parsing both definitions:
+- the first 165 root members are 231's, in order;
+- `bm` is the only addition, at the end;
+- all 48 of 231's enums and structs are identical member by member;
+- the only new types are the four black-market ones.
+
+So the 231 range lines up byte for byte. The earlier note's "56,169 = 231's size, 612 bytes
+spare" is right about the structure. The pdata Atlas sends is larger because of the
+trailing bytes.
+
+**Conversion** (`northstar_ps4/pdata_convert.h`, `tests/pdata_convert.cpp`, run against
+Atlas's own placeholder pdata):
+- **Atlas to PS4:** copy the 231 structure and zero the rest of the 56,781-byte buffer, so
+  the black market starts empty. The trailing bytes, which would land on the black market,
+  are kept aside.
+- **PS4 to Atlas:** the 231 structure plus the kept trailing bytes, so the save keeps its
+  size and whatever PC mods stored there. It is refused if the buffer no longer starts with
+  version 231.
+
+**Install** (PC AuthenticatePlayer):
+1. Atlas's `connect` handling keeps the fetched pdata with the record; the 16 most recent
+   records keep theirs.
+2. When a client's connect request matches the record's uid and token, the pdata waits for
+   that uid.
+3. On the slot's first persistence check once fully connected, runtime_persistence.inl
+   copies it into the buffer (element+0x74a) and sets `READY_REMOTE` (4; the engine reads
+   `> 2`).
+4. Anyone else stays `READY_INSECURE`.
+5. Northstar's InitPersistentData leaves an installed save alone, because
+   `initializedVersion` (231) is non-zero.
+
+The engine keeps a slot's state and buffer through map changes (the host's slot is marked
+once per session), and a reconnect is a new connection with a new Atlas record.
+
+**Write back** (PC WritePersistentData, POST `/accounts/write_persistence?id&serverId`, the
+pdata as a multipart `file.pdata`):
+- **On disconnect.** CBaseClient::Disconnect (engine+0xd75f0) starts with a detour: its
+  first 13 bytes (the register pushes) move to a stub that keeps every argument register,
+  including xmm0-7, since the function is variadic.
+- **On `NSEarlyWritePlayerPersistenceForLeave`**, and on each map change (the next SERVER
+  VM's init).
+- **`NSIsWritingPlayerPersistence`** reports writes in flight.
+
+Writes are **off** until installed saves have been seen to read correctly in game:
+`ns_ps4_write_remote_persistence` (default 0) gates them, and while it is off the host logs
+what it would have written.
+
+**Tested so far:** the host's own disconnect goes through the detour and hosting resumes,
+and all hooks install. A remote player's install is next, with PC players joining the
+listed lobby.
+

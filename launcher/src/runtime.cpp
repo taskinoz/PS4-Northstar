@@ -12,6 +12,7 @@
 #include "northstar_ps4/http_request.h"
 #include "northstar_ps4/atlas_server.h"
 #include "northstar_ps4/startup_args.h"
+#include "northstar_ps4/pdata_convert.h"
 #include "northstar_ps4/server_list.h"
 #include "northstar_ps4/mod_archive.h"
 #include "northstar_ps4/mod_download.h"
@@ -1868,6 +1869,17 @@ const char* (*g_clientUserInfo)(int client, const char* key, const char* fallbac
 // Prints to a client's console (PC: CGameClient::ClientPrintf); set with
 // g_disconnectClient.
 bool (*g_clientPrint)(int client, const char* message) noexcept = nullptr;
+// Set by runtime_atlas_server.inl: moves out the pdata Atlas sent for a player
+// who connected with its token (false when there is none), and writes a
+// player's pdata back to Atlas. Used by runtime_persistence.inl.
+bool (*g_takeRemotePdata)(std::uint64_t uid, std::string& pdata) noexcept = nullptr;
+void (*g_writeRemotePdata)(std::uint64_t uid, const std::string& pdata, const char* reason) noexcept = nullptr;
+// Set by runtime_atlas_server.inl: whether a pdata write is in flight
+// (NSIsWritingPlayerPersistence).
+bool (*g_remotePdataWriting)() noexcept = nullptr;
+// Defined in runtime_persistence.inl: writes a connected player's installed
+// Atlas save (NSEarlyWritePlayerPersistenceForLeave).
+bool WriteRemoteSave(int client, const char* reason, bool keep) noexcept;
 // Defined in runtime_chat.inl: the player entity for an entity index.
 void* ServerPlayerByIndex(int index) noexcept;
 // The engine's ClientSayText (engine+0x473e0), set by runtime_concommands.inl.

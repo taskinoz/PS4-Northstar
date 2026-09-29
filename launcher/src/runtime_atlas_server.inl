@@ -51,6 +51,9 @@ constexpr int kMaxRegistrationAttempts = 5;
 constexpr std::uint64_t kPresenceTimeoutUs = 60ull * 1000 * 1000;
 constexpr std::size_t kPersistenceMaxSize = 0xDDCD;  // PC PERSISTENCE_MAX_SIZE
 constexpr std::size_t kMaxRecords = 64;
+// Accepted connections whose pdata is kept until the player connects (56 KB
+// each).
+constexpr std::size_t kMaxPdataRecords = 16;
 
 using ConnectionlessFn = bool (*)(void* self, void* packet);
 ConnectionlessFn g_originalConnectionless = nullptr;
@@ -64,12 +67,13 @@ void* g_presenceUpdateRate = nullptr;
 void* g_debugAtlasPacket = nullptr;
 void* g_debugAtlasPacketInsecure = nullptr;
 void* g_hostPort = nullptr;
+void* g_writeRemotePersistence = nullptr;
 
 struct AuthRecord {
     std::string token;
     std::uint64_t uid = 0;
     std::string username;
-    std::size_t pdataSize = 0;
+    std::string pdata;
 };
 
 // Everything below is shared between the game threads and the reporter and
@@ -93,6 +97,10 @@ std::vector<std::string> g_handledTokens;
 std::vector<AuthRecord> g_records;
 std::vector<std::uint64_t> g_authenticatedUids;
 std::atomic<bool> g_reporterStarted{false};
+// Pdata for players whose connect request carried their Atlas token, until the
+// slot is ready for it (runtime_persistence.inl takes it).
+std::vector<std::pair<std::uint64_t, std::string>> g_pendingPdata;
+std::atomic<int> g_writesInFlight{0};
 
 std::uint64_t NowUs() { return sceKernelGetProcessTime(); }
 
@@ -401,8 +409,13 @@ void* ProcessSigreq1(void* argument) {
         static_cast<unsigned long long>(uid), username.c_str(), pdata.size());
     {
         Lock lock;
-        g_records.push_back({token, uid, username, pdata.size()});
+        g_records.push_back({token, uid, username, pdata});
+        // Only the most recent records keep their pdata.
         if (g_records.size() > kMaxRecords) g_records.erase(g_records.begin());
+        if (g_records.size() > kMaxPdataRecords) {
+            g_records[g_records.size() - kMaxPdataRecords - 1].pdata.clear();
+            g_records[g_records.size() - kMaxPdataRecords - 1].pdata.shrink_to_fit();
+        }
     }
     std::string reply;
     if (!AtlasHttp("POST", base + "&reject=", nullptr, "", reply, status) || status != 200)
@@ -463,6 +476,16 @@ void NoteConnectRequest(const std::uint8_t* data, std::size_t size) {
     Lock lock;
     for (const auto& record : g_records) {
         if (record.uid == request.uid && !record.token.empty() && request.HasString(record.token)) {
+            if (!record.pdata.empty()) {
+                bool replaced = false;
+                for (auto& pending : g_pendingPdata)
+                    if (pending.first == request.uid) {
+                        pending.second = record.pdata;
+                        replaced = true;
+                    }
+                if (!replaced) g_pendingPdata.emplace_back(request.uid, record.pdata);
+                if (g_pendingPdata.size() > kMaxPdataRecords) g_pendingPdata.erase(g_pendingPdata.begin());
+            }
             for (auto uid : g_authenticatedUids)
                 if (uid == request.uid) return;
             g_authenticatedUids.push_back(request.uid);
@@ -471,6 +494,76 @@ void NoteConnectRequest(const std::uint8_t* data, std::size_t size) {
         }
     }
 }
+
+bool TakeRemotePdata(std::uint64_t uid, std::string& pdata) noexcept {
+    Lock lock;
+    for (auto it = g_pendingPdata.begin(); it != g_pendingPdata.end(); ++it) {
+        if (it->first == uid) {
+            pdata = std::move(it->second);
+            g_pendingPdata.erase(it);
+            return true;
+        }
+    }
+    return false;
+}
+
+// PC: MasterServerManager::WritePlayerPersistentData, POST
+// /accounts/write_persistence?id=<uid>&serverId=<id> with the pdata as a
+// multipart file. Off unless ns_ps4_write_remote_persistence is 1: the PS4
+// layout has been checked against 231 byte for byte, but writes change real
+// players' Northstar accounts, so they wait for in-game confirmation that
+// installed saves read correctly. When off, what would be written is logged.
+struct PdataWrite {
+    std::uint64_t uid;
+    std::string pdata;
+    std::string reason;
+};
+
+void* WritePdataWorker(void* argument) {
+    auto* write = static_cast<PdataWrite*>(argument);
+    std::string serverId;
+    {
+        Lock lock;
+        serverId = g_serverId;
+    }
+    const std::string boundary = "NorthstarPS4Pdata5c1e0a7d";
+    std::string body = "--" + boundary +
+        "\r\nContent-Disposition: form-data; name=\"pdata\"; filename=\"file.pdata\"\r\n"
+        "Content-Type: application/octet-stream\r\n\r\n";
+    body += write->pdata;
+    body += "\r\n--" + boundary + "--\r\n";
+    const std::string url = std::string(uiapi::kMasterServerUrl) + "/accounts/write_persistence?id=" +
+        std::to_string(write->uid) + "&serverId=" + http::UrlEscape(serverId);
+    std::string response;
+    int status = 0;
+    const std::string contentType = "multipart/form-data; boundary=" + boundary;
+    const bool sent = AtlasHttp("POST", url, contentType.c_str(), body, response, status);
+    LogFormat("[NorthstarPS4] wrote pdata for uid %llu (%s, %zu bytes): %s status %d\n",
+        static_cast<unsigned long long>(write->uid), write->reason.c_str(), write->pdata.size(),
+        sent ? "sent" : "not sent", status);
+    delete write;
+    --g_writesInFlight;
+    return nullptr;
+}
+
+void WriteRemotePdata(std::uint64_t uid, const std::string& pdata, const char* reason) noexcept {
+    if (!ConVarInt(g_writeRemotePersistence, 0)) {
+        LogFormat("[NorthstarPS4] pdata for uid %llu (%s, %zu bytes) not written: ns_ps4_write_remote_persistence is 0\n",
+            static_cast<unsigned long long>(uid), reason, pdata.size());
+        return;
+    }
+    auto* write = new PdataWrite{uid, pdata, reason};
+    ++g_writesInFlight;
+    OrbisPthread thread{};
+    if (scePthreadCreate(&thread, nullptr, WritePdataWorker, write, "NSPdataWrite") != 0) {
+        --g_writesInFlight;
+        delete write;
+        return;
+    }
+    scePthreadDetach(thread);
+}
+
+bool RemotePdataWriting() noexcept { return g_writesInFlight.load() > 0; }
 
 bool RuntimeConnectionlessPacket(void* self, void* packet) noexcept {
     const auto bytes = static_cast<const char*>(packet);
@@ -491,6 +584,87 @@ bool RuntimeConnectionlessPacket(void* self, void* packet) noexcept {
 }
 
 } // namespace atlasserver
+
+// PC hooks CBaseClient::Disconnect to write a READY_REMOTE player's pdata
+// before the slot is released. The first 13 bytes of engine+0xd75f0 (push rbp;
+// mov rbp, rsp; push r15..rbx) move to this stub, which keeps every argument
+// register (the function is variadic) while it calls the write.
+extern "C" {
+__attribute__((used)) std::uintptr_t g_disconnectResume = 0;
+__attribute__((used)) void (*g_disconnectWrite)(void*) noexcept = nullptr;
+}
+
+__attribute__((naked)) void DisconnectWriteStub() {
+    asm volatile(
+        "pushq %rdi\n\t"
+        "pushq %rsi\n\t"
+        "pushq %rdx\n\t"
+        "pushq %rcx\n\t"
+        "pushq %r8\n\t"
+        "pushq %r9\n\t"
+        "pushq %rax\n\t"
+        "subq $128, %rsp\n\t"
+        "movdqu %xmm0, 0(%rsp)\n\t"
+        "movdqu %xmm1, 16(%rsp)\n\t"
+        "movdqu %xmm2, 32(%rsp)\n\t"
+        "movdqu %xmm3, 48(%rsp)\n\t"
+        "movdqu %xmm4, 64(%rsp)\n\t"
+        "movdqu %xmm5, 80(%rsp)\n\t"
+        "movdqu %xmm6, 96(%rsp)\n\t"
+        "movdqu %xmm7, 112(%rsp)\n\t"
+        "callq *g_disconnectWrite(%rip)\n\t"
+        "movdqu 0(%rsp), %xmm0\n\t"
+        "movdqu 16(%rsp), %xmm1\n\t"
+        "movdqu 32(%rsp), %xmm2\n\t"
+        "movdqu 48(%rsp), %xmm3\n\t"
+        "movdqu 64(%rsp), %xmm4\n\t"
+        "movdqu 80(%rsp), %xmm5\n\t"
+        "movdqu 96(%rsp), %xmm6\n\t"
+        "movdqu 112(%rsp), %xmm7\n\t"
+        "addq $128, %rsp\n\t"
+        "popq %rax\n\t"
+        "popq %r9\n\t"
+        "popq %r8\n\t"
+        "popq %rcx\n\t"
+        "popq %rdx\n\t"
+        "popq %rsi\n\t"
+        "popq %rdi\n\t"
+        "pushq %rbp\n\t"
+        "movq %rsp, %rbp\n\t"
+        "pushq %r15\n\t"
+        "pushq %r14\n\t"
+        "pushq %r13\n\t"
+        "pushq %r12\n\t"
+        "pushq %rbx\n\t"
+        "jmpq *g_disconnectResume(%rip)\n\t");
+}
+
+void InstallDisconnectWrite(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
+    constexpr std::uintptr_t kDisconnectVa = 0xd75f0;
+    constexpr std::uint8_t prologue[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53,
+        0x48, 0x81, 0xec, 0xe8, 0x04, 0x00, 0x00, 0x48, 0x89, 0xfb, 0x89};
+    constexpr std::size_t kMoved = 13;
+    const auto site = engineBase + kDisconnectVa;
+    const auto distance = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&DisconnectWriteStub)) -
+        static_cast<std::int64_t>(site + 5);
+    if (!ValidateEnginePreimage(engineBase, engineSize, kDisconnectVa, prologue, sizeof(prologue)) ||
+        distance < -2147483648LL || distance > 2147483647LL) {
+        LogFormat("[NorthstarPS4] disconnect pdata write refused: engine profile mismatch\n");
+        return;
+    }
+    g_disconnectResume = site + kMoved;
+    g_disconnectWrite = &WriteRemoteSaveOnDisconnect;
+    std::uint8_t jump[kMoved];
+    std::memset(jump, 0x90, sizeof(jump));
+    jump[0] = 0xe9;
+    const auto rel = static_cast<std::int32_t>(distance);
+    std::memcpy(jump + 1, &rel, sizeof(rel));
+    if (!WriteEngineCode(site, jump, sizeof(jump))) {
+        LogFormat("[NorthstarPS4] disconnect pdata write failed: mprotect\n");
+        return;
+    }
+    LogFormat("[NorthstarPS4] disconnect pdata write installed\n");
+}
 
 namespace uiapi {
 
@@ -581,6 +755,13 @@ void InstallAtlasServer(std::uintptr_t engineBase, std::size_t engineSize) noexc
         "Whether to disable signature verification for Atlas connectionless packets (DANGEROUS: this allows anyone "
         "to impersonate Atlas)");
     if (g_modConVarCvar && g_modConVarFindVar) g_hostPort = g_modConVarFindVar(g_modConVarCvar, "hostport");
+    alignas(16) static std::uint8_t writeStorage[0x90]{};
+    g_writeRemotePersistence = RegisterConVar(writeStorage, "ns_ps4_write_remote_persistence", "0",
+        "Whether this PS4 host writes Atlas-authenticated players' pdata back to Atlas");
+    g_takeRemotePdata = TakeRemotePdata;
+    g_writeRemotePdata = WriteRemotePdata;
+    g_remotePdataWriting = RemotePdataWriting;
+    InstallDisconnectWrite(engineBase, engineSize);
     ApplyStartupConVars();
 
     // PC: "patch to disable kicking based on incorrect serverfilter in

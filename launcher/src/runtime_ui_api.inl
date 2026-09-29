@@ -309,13 +309,21 @@ int ServerIsLocalPlayer(void* vm) {
 // There is no dedicated-server build for this platform.
 int ServerIsDedicated(void* vm) { Boolean(vm, false); return 1; }
 
-// Persistence is never written by this module, so a write is never in flight.
-int ServerWritingPersistence(void* vm) { Boolean(vm, false); return 1; }
+// PC: MasterServerManager::m_bSavingPersistentData, true while a pdata write
+// to Atlas is in flight (runtime_atlas_server.inl).
+int ServerWritingPersistence(void* vm) { Boolean(vm, g_remotePdataWriting && g_remotePdataWriting()); return 1; }
 // PC writes a leaving player's persistence to Atlas early, and only for a
-// player whose data Atlas supplied (READY_REMOTE). A PS4 host is not
-// registered with Atlas, so its players are READY_INSECURE (runtime_persistence.inl)
-// and PC would write nothing for them either.
-int ServerWritePersistenceForLeave(void*) { return 0; }
+// player whose data Atlas supplied (READY_REMOTE, runtime_persistence.inl);
+// anyone else has nothing to write.
+int ServerWritePersistenceForLeave(void* vm) {
+    const int client = PlayerClientArg(vm, 1);
+    if (client < 0) {
+        LogFormat("[NorthstarPS4] NSEarlyWritePlayerPersistenceForLeave got null player\n");
+        return 0;
+    }
+    WriteRemoteSave(client, "early write for leave", true);
+    return 0;
+}
 
 // PC: CBaseClient::Disconnect on the player's client, with a default reason.
 int ServerDisconnectPlayer(void* vm) {

@@ -200,6 +200,9 @@ bool RuntimeServerVmInit(void* owner, int context, float time) noexcept {
     // Only the SERVER context comes through server.prx, but the argument is
     // checked rather than assumed.
     if (context != 0 || !result || !owner) return result;
+    // PC writes remote players' pdata when they reconnect for the next map;
+    // here the slots (and their saves) carry over, so write them now.
+    WriteAllRemoteSaves("map change");
     // Reset on every VM creation, including allocator reuse of the same owner.
     g_runtimeServerLifecycle.owner = owner;
     g_runtimeServerLifecycle.started = false;
