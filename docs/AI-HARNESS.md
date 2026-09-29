@@ -25,6 +25,7 @@ From the repository in PowerShell:
 ./scripts/Send-AIHarnessCommand.ps1 -Action back
 ./scripts/Send-AIHarnessCommand.ps1 -Action json -Command '{"a":1,"b":[true,"x"]}'
 ./scripts/Send-AIHarnessCommand.ps1 -Action cvar -Command 'stream_memory'
+./scripts/Send-AIHarnessCommand.ps1 -Action playlistvar -Command 'tdm|scorelimit|fallback'
 ./scripts/Send-AIHarnessCommand.ps1 -Action localize -Command '#A_BUTTON_SELECT'
 # Mod auto-download without a server: fetch the verified list, download and install
 # (Northstar's own dialogs), enable, ReloadMods. Replies with the mod's state.
@@ -37,7 +38,7 @@ From the repository in PowerShell:
 ./scripts/Send-AIHarnessCommand.ps1 -FromConsoleFile
 ```
 
-`launch` follows Northstar's local authentication sequence, completes local authentication, then queues `setplaylist tdm` and `map mp_lobby`. Authentication failure is returned as an error. A successful reply says **queued**, not that the map loaded successfully. Check the fresh session log for script errors and actual lobby readiness. `status` confirms the UI polling thread is responding and now reports `connected`, `lobby`, `level`, `playlist` and `privateMatch` from game state (the last two only while connected). `cvar` returns a convar's value, and `localize` a token's localised text, in the reply's `json` field. These do not prove that every initialization callback succeeded; also inspect the current session for script errors.
+`launch` follows Northstar's local authentication sequence, completes local authentication, then queues `setplaylist tdm` and `map mp_lobby`. Authentication failure is returned as an error. A successful reply says **queued**, not that the map loaded successfully. Check the fresh session log for script errors and actual lobby readiness. `status` confirms the UI polling thread is responding and now reports `connected`, `lobby`, `level`, `playlist` and `privateMatch` from game state (the last two only while connected). `cvar` returns a convar's value, `playlistvar` reads an effective playlist variable from `<playlist>|<name>|<fallback>`, and `localize` resolves a token; each result is in the reply's `json` field. These do not prove that every initialization callback succeeded; also inspect the current session for script errors.
 
 `json` passes `-Command` through `DecodeJSON(text, true)` and `EncodeJSON` and returns the result in the reply's `json` field, to test the JSON natives in the UI VM. Member order follows the Squirrel table, not the input.
 

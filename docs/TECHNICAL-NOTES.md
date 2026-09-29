@@ -4806,7 +4806,15 @@ the generation flag. One bad mod manifest is logged and skipped rather than hidi
 particles or the other mods.
 
 The parser/builder suite, the complete host profile suite and a full runtime-manifest PS4
-build pass. A live particle mod still needs to prove engine ingestion and visible effects.
+build pass. Live validation on 2026-09-30 used a development-only isolated fixture made
+from Moblin.Archon 1.7.1's unmodified PCFs. `P_wpn_mflash_arcball_st` precached as `-484`
+and spawned as handle `65538` in the CLIENT VM. A second persistent fixture using
+`wpn_vortex_chargingCP_mod_arc` produced the same successful readback and visibly rendered
+the blue vortex arc around the lobby pilot. The successful transcript is
+`work/stage2/iterations/20260930-005639/shad-new-lines.log` and the capture is
+`work/particle-fixture/moblin-archon-persistent-particle.png`. This proves manifest
+combination, engine ingestion and rendering of real third-party PCF data; it does not claim
+that the complete Moblin.Archon package or its TitanFramework/RPAK dependencies work.
 
 ## STARPak ownership and the remaining RPAK boundary (2026-09-29)
 
@@ -4859,7 +4867,15 @@ engine+0x1491d0 `SetPlaylistVarOverride(name, value)`. `setplaylistvaroverrides`
 Northstar's multi-pair command and guards the retail table's 64-entry capacity plus its fixed
 128-byte name and 64-byte value buffers. The setter's six-byte pre-map conditional is NOPed,
 matching PC Northstar's ability to stage overrides before map initialization. It is
-build-verified but has not yet been invoked in a live private match.
+live-verified with release PRX SHA256
+`a42f4bbea26418233639e8607d6a5d25412e7300e4cba74cd2bbf2293a90b9ba` on shadPS4
+`2b5666b3`: from the local `tdm` lobby, one command changed `scorelimit` from 75 to 91 and
+`timelimit` to 17, and both values read back through `GetPlaylistVarOrUseValue`. A 128-byte
+name logged `playlist override refused: invalid name/value length`; the valid score limit
+remained 91. AI.Harness now has a `playlistvar` readback action for this test. The successful
+boot transcript is `work/stage2/iterations/20260930-002830/shad-new-lines.log`; the post-boot
+command evidence is in the same appended shadPS4 session log. The real controller menu and a
+match visibly ending at the overridden limit remain manual acceptance checks.
 
 ## Offline PS4 texture conversion for mod RPaks (2026-09-29)
 

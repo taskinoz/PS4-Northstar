@@ -151,6 +151,15 @@ void function AIHarness_Poll()
                 // Reads a convar; the value comes back in the reply's json field.
                 else if ( action == "cvar" )
                     json = GetConVarString( NSAIHarnessField( raw, "command" ) )
+                // "<playlist>|<name>|<fallback>": reads the effective playlist
+                // variable so console override tests can verify engine state.
+                else if ( action == "playlistvar" )
+                {
+                    array<string> parts = split( NSAIHarnessField( raw, "command" ), "|" )
+                    if ( parts.len() != 3 )
+                        throw "Expected <playlist>|<name>|<fallback>"
+                    json = GetPlaylistVarOrUseValue( parts[0], parts[1], parts[2] )
+                }
                 // Resolves a localisation token; the text comes back in the json field.
                 else if ( action == "localize" )
                     json = Localize( NSAIHarnessField( raw, "command" ) )
