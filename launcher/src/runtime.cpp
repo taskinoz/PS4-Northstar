@@ -13,6 +13,7 @@
 #include "northstar_ps4/atlas_server.h"
 #include "northstar_ps4/startup_args.h"
 #include "northstar_ps4/host_options.h"
+#include "northstar_ps4/mod_dependencies.h"
 #include "northstar_ps4/pdata_convert.h"
 #include "northstar_ps4/server_list.h"
 #include "northstar_ps4/mod_archive.h"
@@ -1907,6 +1908,44 @@ bool SendChat(const char* text, bool isTeam) noexcept {
 #include "runtime_ui_callbacks.inl"
 #include "runtime_chat_ui.inl"
 
+// The constants PC defines in every VM (squirrel.cpp VMCreated): VANILLA,
+// NS_VERSION_*, MAX_FOLDER_SIZE and the mods' dependency constants
+// (mod_dependencies.h). Read again for each VM, so a reload's enabled set
+// applies to the VMs it rebuilds.
+std::vector<std::pair<std::string, std::int64_t>> ScriptConstants(const char* vmName) noexcept {
+    std::vector<std::pair<std::string, std::int64_t>> values = {
+        {"VANILLA", 0}, {"NS_VERSION_MAJOR", 0}, {"NS_VERSION_MINOR", 1}, {"NS_VERSION_PATCH", 0},
+        {"NS_VERSION_DEV", 1}, {"MAX_FOLDER_SIZE", static_cast<std::int64_t>(kMaxSaveFolderSize / 1024)}};
+    static ModDiscovery all;
+    CollectModNames(all, true);
+    static char settings[kModJsonBufferSize];
+    std::strcpy(settings, "{}");
+    ReadEnabledSettings(settings, sizeof(settings));
+    std::vector<ModDependencyInfo> mods;
+    for (int i = 0; i < all.count; ++i) {
+        static char json[kModJsonBufferSize];
+        static ModInfo info;
+        char path[256];
+        std::size_t size = 0;
+        std::snprintf(path, sizeof(path), "%s/mod.json", all.dirs[i]);
+        if (!ReadFileIntoBuffer(path, json, sizeof(json), size) || !ParseModMetadata(json, info)) continue;
+        ModDependencyInfo mod;
+        mod.name = info.name;
+        mod.enabled = ModEnabledNow(settings, info, all.remote[i]);
+        ParseModDependencies(json, mod);
+        mods.push_back(std::move(mod));
+    }
+    const auto dependencies = ResolveDependencyConstants(mods);
+    for (const auto& conflict : dependencies.conflicts)
+        LogFormat("[NorthstarPS4] %s dependency constant conflict: %s\n", vmName, conflict.c_str());
+    for (const auto& value : dependencies.values) {
+        LogFormat("[NorthstarPS4] %s dependency constant %s = %lld\n", vmName, value.first.c_str(),
+            static_cast<long long>(value.second));
+        values.push_back(value);
+    }
+    return values;
+}
+
 bool RegisterRuntimeConstants(void* owner, int context) noexcept {
     const auto base = g_runtimeClientBase;
     constexpr std::uint8_t internBytes[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec};
@@ -1934,11 +1973,8 @@ bool RegisterRuntimeConstants(void* owner, int context) noexcept {
     using InsertFn = bool (*)(void*, const void*, const void*);
     auto intern = reinterpret_cast<InternFn>(base + 0x6a96a0);
     auto insert = reinterpret_cast<InsertFn>(base + 0x6ab3e0);
-    const struct { const char* name; std::int64_t value; } values[] = {
-        {"VANILLA", 0}, {"NS_VERSION_MAJOR", 0}, {"NS_VERSION_MINOR", 1},
-        {"NS_VERSION_PATCH", 0}, {"NS_VERSION_DEV", 1}
-    };
-    for (const auto& entry : values) {
+    for (const auto& constant : ScriptConstants(context == uiapi::kCtxUi ? "UI" : "CLIENT")) {
+        const struct { const char* name; std::int64_t value; } entry = {constant.first.c_str(), constant.second};
         void* keyString = intern(strings, entry.name, -1);
         if (!keyString) return false;
         // SQString::Create (0x6a96a0) never writes the shared-state back-pointer
@@ -1997,7 +2033,13 @@ bool BuildRuntimeManifest(void* self) noexcept {
     // both the overlay and PC's AddSearchPath semantics. The first occurrence
     // keeps its position, because scripts.rson order is load order and an
     // override should not reorder anything around it.
-    std::vector<std::pair<std::string, std::string>> scripts;  // normalized path, RunOn
+    //
+    // One mod may list the same file more than once with different RunOn, e.g.
+    // { "Path": "x.nut", "RunOn": "UI" } and { "Path": "x.nut", "RunOn":
+    // "CLIENT" }. PC writes a block per entry, so those all stay; only another
+    // mod's entry for the path overrides them.
+    struct ManifestScript { std::string path, when; int mod; };
+    std::vector<ManifestScript> scripts;
     for (int i = 0; i < discovery.count; ++i) {
         char metadataPath[kModDirCapacity + 16]{};
         std::snprintf(metadataPath, sizeof(metadataPath), "%s/mod.json", discovery.dirs[i]);
@@ -2031,12 +2073,21 @@ bool BuildRuntimeManifest(void* self) noexcept {
                 std::strpbrk(when, "\"\r\n") || std::strpbrk(path, "\"\r\n[]")) { LogFormat("[NorthstarPS4] manifest rejected mod=%s script=%s\n", info.name, path); return false; }
             auto existing = scripts.end();
             for (auto it = scripts.begin(); it != scripts.end(); ++it)
-                if (it->first == normalized) { existing = it; break; }
-            if (existing != scripts.end()) {
-                LogFormat("[NorthstarPS4] manifest override mod=%s script=%s\n", info.name, normalized);
-                existing->second = when;
+                if (it->path == normalized) { existing = it; break; }
+            if (existing == scripts.end()) {
+                scripts.push_back({normalized, when, i});
+            } else if (existing->mod == i) {
+                auto last = existing;
+                for (auto it = existing; it != scripts.end(); ++it)
+                    if (it->path == normalized) last = it;
+                scripts.insert(last + 1, {normalized, when, i});
             } else {
-                scripts.emplace_back(normalized, when);
+                LogFormat("[NorthstarPS4] manifest override mod=%s script=%s\n", info.name, normalized);
+                existing->when = when;
+                existing->mod = i;
+                const std::string key = normalized;
+                for (auto it = existing + 1; it != scripts.end();)
+                    it = it->path == key ? scripts.erase(it) : it + 1;
             }
             entries = JsonSkipWs(JsonSkipValue(entries));
             if (*entries != ',') break;
@@ -2045,9 +2096,9 @@ bool BuildRuntimeManifest(void* self) noexcept {
     }
     for (const auto& script : scripts) {
         modBlocks += "When: \"";
-        modBlocks += script.second;
+        modBlocks += script.when;
         modBlocks += "\"\nScripts:\n[\n";
-        modBlocks += script.first;
+        modBlocks += script.path;
         modBlocks += "\n]\n";
     }
     const int scriptCount = static_cast<int>(scripts.size());

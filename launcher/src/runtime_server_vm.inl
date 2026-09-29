@@ -70,11 +70,8 @@ bool RegisterServerConstants(void* owner) noexcept {
     auto insert = reinterpret_cast<InsertFn>(base + kServerInsertVa);
     // The same set the client contexts get, so a script compiled for either
     // sees the same definitions.
-    const struct { const char* name; std::int64_t value; } values[] = {
-        {"VANILLA", 0}, {"NS_VERSION_MAJOR", 0}, {"NS_VERSION_MINOR", 1},
-        {"NS_VERSION_PATCH", 0}, {"NS_VERSION_DEV", 1}
-    };
-    for (const auto& entry : values) {
+    for (const auto& constant : ScriptConstants("SERVER")) {
+        const struct { const char* name; std::int64_t value; } entry = {constant.first.c_str(), constant.second};
         void* keyString = intern(strings, entry.name, -1);
         if (!keyString) return false;
         // Same ownership fix the client path needs: SQString::Create writes
