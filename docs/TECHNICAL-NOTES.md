@@ -4864,3 +4864,46 @@ Northstar's multi-pair command and guards the retail table's 64-entry capacity p
 matching PC Northstar's ability to stage overrides before map initialization. It is
 build-verified but has not yet been invoked in a live private match.
 
+## Offline PS4 texture conversion for mod RPaks (2026-09-29)
+
+Matching uncompressed retail patch archives provided the missing size rule. PC
+`camo_skin101_col(01).rpak` is 44,111 bytes and its 256x256 BC1 permanent mip page is
+43,728 bytes. The PS4 archive has the same texture GUID and header version, but is 46,463
+bytes: the page is 46,080 bytes, platform byte is 8 and usage bit 0 is set. Every PS4 mip
+occupies complete 8x8 compression-block tiles, so the five smallest BC1 mips each consume
+512 bytes. RSX also establishes the second platform difference: PC v8 groups are stored
+bottom-to-top, while a swizzled texture is stored top-to-bottom.
+
+`rpak_texture_converter.h` implements the offline conversion for uncompressed, non-patch
+Titanfall 2 v7 archives. It:
+
+- converts PC linear blocks into the PS4 8x8 Morton order and reverses physical mip order;
+- applies complete-tile padding, updates `dataSize`, platform/usage bytes, page and slab sizes;
+- rebuilds permanent-mip pages and relocates asset pointers, pointer descriptors, their
+  pointed-to `PagePtr` values and asset-use locations;
+- converts streamed mip blocks within their existing 4 KiB STARPak allocations, preserving
+  offsets, entry tables, unrelated blocks and cross-asset references;
+- refuses compression, patch archives, arrays, unknown formats, malformed bounds, conflicting
+  shared stream conversions and any converted stream that does not fit its allocation.
+
+The host CLI and `Convert-NorthstarModRpaks.ps1` write a fresh overlay. Profile creation and
+sync expose it only through `-ConvertRpaksForPs4`, so source mods and retail archives remain
+unchanged. The experimental runtime still requires `-EnableExperimentalRpaks`.
+
+Validation:
+
+- the 256x256 retail PC camo converts to exactly 46,463 bytes with a 46,080-byte mip page;
+- LegionPlus exports the original PC camo and converted PS4 camo to byte-identical DDS files;
+- Northstar.Custom converts 47 textures and 41 distinct streamed blocks. The shotgun RPak
+  grows 197,556 -> 244,692 bytes while its 9,605,416-byte STARPak and every stream offset stay
+  fixed; LegionPlus exports all 18 PC/converted shotgun DDS files byte-identically;
+- a real converted profile reports 18 PS4 and zero PC texture headers for the shotgun pack;
+- two consecutive converted syncs report 840 added files, then 840 unchanged files;
+- all host suites pass. The runtime build with runtime-manifest and experimental-RPAK flags
+  succeeds: PRX SHA256 `9f6df145ecd61aa3fb62b61ab8812601869c11d3cc2b1965b8a787adab3105b4`.
+
+This is not yet gameplay verification. The next test is a clean shadPS4 boot with the converted
+profile, followed by the double-barrel shotgun skin/material in a match. If texture upload works
+but the material fails, compare v12 material headers and shader-set references before broadening
+the converter. Do not enable this path by default until that test passes.
+

@@ -3,7 +3,8 @@ param(
     [string] $Config = (Join-Path $PSScriptRoot '..\config\local.json'),
     [string] $Output = (Join-Path $PSScriptRoot '..\dist\northstar-profile'),
     [switch] $IncludePs4CompatibilityMods,
-    [switch] $IncludeAIHarness
+    [switch] $IncludeAIHarness,
+    [switch] $ConvertRpaksForPs4
 )
 $ErrorActionPreference = 'Stop'
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -45,7 +46,9 @@ if (Test-Path -LiteralPath $enabledSource -PathType Leaf) {
     $enabled = Get-Content -LiteralPath $enabledSource -Raw | ConvertFrom-Json
     if ($enabled -isnot [pscustomobject]) { throw "Expected enabledmods.json object: $enabledSource" }
 }
-if ($PSCmdlet.ShouldProcess($outputRoot, 'Create PC-layout Northstar profile (no game archive changes)')) {
+if ($PSCmdlet.ShouldProcess($outputRoot, $ConvertRpaksForPs4 ?
+        'Create Northstar profile with PS4-layout mod textures (no game archive changes)' :
+        'Create PC-layout Northstar profile (no game archive changes)')) {
     $modsDestination = Join-Path $profile 'mods'
     New-Item -ItemType Directory -Path $modsDestination -Force | Out-Null
     $hashes = [Collections.Generic.List[object]]::new()
@@ -57,7 +60,22 @@ if ($PSCmdlet.ShouldProcess($outputRoot, 'Create PC-layout Northstar profile (no
             Copy-Item -LiteralPath $file.FullName -Destination $destination
             $expected = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash
             if ((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash -ne $expected) { throw "Copy verification failed: $destination" }
-            $hashes.Add([pscustomobject]@{ Path = "mods/$($mod.Folder)/$($relative.Replace('\', '/'))"; SHA256 = $expected })
+        }
+    }
+    if ($ConvertRpaksForPs4) {
+        $conversionRoot = Join-Path $repositoryRoot ('work\profile-rpak-conversion\' + [guid]::NewGuid().ToString('N'))
+        try {
+            foreach ($mod in $plan) {
+                if (-not (Test-Path -LiteralPath (Join-Path $mod.Source 'paks') -PathType Container)) { continue }
+                $overlay = Join-Path $conversionRoot $mod.Folder
+                & (Join-Path $PSScriptRoot 'Convert-NorthstarModRpaks.ps1') -SourceModDirectory $mod.Source -Output $overlay | Out-Host
+                foreach ($file in Get-ChildItem -LiteralPath $overlay -File) {
+                    $destination = Join-Path (Join-Path (Join-Path $modsDestination $mod.Folder) 'paks') $file.Name
+                    Copy-Item -LiteralPath $file.FullName -Destination $destination -Force
+                }
+            }
+        } finally {
+            if (Test-Path -LiteralPath $conversionRoot) { Remove-Item -LiteralPath $conversionRoot -Recurse -Force }
         }
     }
     if (Test-Path -LiteralPath $enabledSource -PathType Leaf) {
@@ -67,6 +85,11 @@ if ($PSCmdlet.ShouldProcess($outputRoot, 'Create PC-layout Northstar profile (no
     }
     # Only used when the emulator cannot enumerate directories; not a mod allowlist.
     [IO.File]::WriteAllLines((Join-Path $modsDestination '.ns_mod_manifest'), [string[]]@($plan.Folder), [Text.UTF8Encoding]::new($false))
+    foreach ($file in Get-ChildItem -LiteralPath $modsDestination -Recurse -File) {
+        if ($file.Name -eq '.ns_mod_manifest') { continue }
+        $relative = $file.FullName.Substring($modsDestination.Length + 1)
+        $hashes.Add([pscustomobject]@{ Path = "mods/$($relative.Replace('\', '/'))"; SHA256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash })
+    }
     [IO.File]::WriteAllText((Join-Path $outputRoot 'profile-files.json'), ($hashes | ConvertTo-Json -Depth 4), [Text.UTF8Encoding]::new($false))
 }
-[pscustomobject]@{ Profile = $profile; Mods = $plan.Count; Files = ($plan.Files | Measure-Object).Count; RuntimeScriptLoading = 'Experimental; PS4 lifecycle hooks incomplete' }
+[pscustomobject]@{ Profile = $profile; Mods = $plan.Count; Files = ($plan.Files | Measure-Object).Count; Ps4Rpaks = [bool]$ConvertRpaksForPs4; RuntimeScriptLoading = 'Experimental; PS4 lifecycle hooks incomplete' }

@@ -55,6 +55,8 @@ Use a new output directory each time:
 
 This copies mod folders byte-for-byte and verifies their hashes. It also copies the source profile's `enabledmods.json` when present. It does not modify game archives. Add `-IncludePs4CompatibilityMods` to include this port's own mods, `Northstar.PS4` and `Northstar.DirectConnect`. The runtime needs `Northstar.PS4`: it carries the PS4 fixes (save layout, controller menus, client command bridge) as overrides, so the Northstar mods themselves stay unchanged. `scripts\Sync-NorthstarProfile.ps1` keeps an existing install in sync the same way. Release builds ship both mods in `northstar-ps4-mods-<version>.zip`.
 
+Experimental RPAK textures use `-ConvertRpaksForPs4` on either profile command. This converts only the copied profile's uncompressed Titanfall 2 v7 RPaks/STARPaks; the PC source stays byte-for-byte unchanged. Build the matching runtime with `-EnableRuntimeManifest -EnableExperimentalRpaks`. Unsupported compressed, patch, array, or unknown texture layouts stop with an error rather than being installed. This path has passed archive and independent DDS round-trip tests, but still needs its first in-game weapon-skin test.
+
 For a fresh installation, copy `dist/install-profile/R2Northstar` beside the game's `eboot.bin`. If a profile already exists there, preserve it outside the active game folder before replacing it; do not merge an old modded profile into the fresh one.
 
 Expected layout:
@@ -126,7 +128,7 @@ Reloading mods works live, as on PC: the server browser switches client-required
 
 Mods that servers require are downloaded, as on PC, when they are on Northstar's [verified list](https://github.com/R2Northstar/VerifiedMods) and `allow_mod_auto_download` is on. They go to guest `/data/northstar_ps4/runtime/remote/mods` (PC: `R2Northstar/runtime/remote/mods`), are checked against the list's SHA-256, and are only switched on for servers that need them.
 
-**What PC mods can use on PS4.** Scripts, `RunOn` conditions, console variables, localisation (English), KeyValues (weapons, playlists, AI settings), VPKs and custom maps, `Dependencies` constants for optional mods, particle manifests, and sound replacements (`audio/` folders, as on PC) work. `ns_print_played_sounds 1` in the console logs the sound events that play, to find their names. Particle-manifest loading is new and has passed build/host tests, but still needs a real particle mod checked in game. Not yet: rpak assets (skins, models, loading-screen images), datatable CSVs, mod console commands (`ConCommands`) and plugins.
+**What PC mods can use on PS4.** Scripts, `RunOn` conditions, console variables, localisation (English), KeyValues (weapons, playlists, AI settings), VPKs and custom maps, `Dependencies` constants for optional mods, particle manifests, and sound replacements (`audio/` folders, as on PC) work. `ns_print_played_sounds 1` in the console logs the sound events that play, to find their names. Particle-manifest loading is new and has passed build/host tests, but still needs a real particle mod checked in game. RPAK texture assets (including weapon skins) have an opt-in converted-profile path that is host-verified but not yet verified in game. Still missing or unsupported: general RPAK model/material compatibility beyond that experiment, datatable CSVs, mod console commands (`ConCommands`) and plugins.
 
 ### Hosting a private match for other players
 

@@ -40,6 +40,7 @@ param(
     # Defaults to the deployed profile under the PS4 game root.
     [string] $Destination,
     [switch] $IncludePs4CompatibilityMods = $true,
+    [switch] $ConvertRpaksForPs4,
     [switch] $Prune
 )
 $ErrorActionPreference = 'Stop'
@@ -63,6 +64,9 @@ foreach ($source in $sources) {
 # Build the intended file set: relative path -> source file.
 $intended = [ordered]@{}
 $modOrigin = [ordered]@{}
+$conversionRoot = if ($ConvertRpaksForPs4) {
+    Join-Path $repositoryRoot ('work\sync-rpak-conversion\' + [guid]::NewGuid().ToString('N'))
+} else { $null }
 foreach ($source in $sources) {
     foreach ($directory in (Get-ChildItem -LiteralPath $source -Directory | Sort-Object Name)) {
         if (-not (Test-Path -LiteralPath (Join-Path $directory.FullName 'mod.json') -PathType Leaf)) { continue }
@@ -73,6 +77,14 @@ foreach ($source in $sources) {
             }
             $relative = $directory.Name + '\' + $file.FullName.Substring($directory.FullName.Length + 1)
             $intended[$relative] = $file.FullName
+        }
+        if ($ConvertRpaksForPs4 -and (Test-Path -LiteralPath (Join-Path $directory.FullName 'paks') -PathType Container)) {
+            $overlay = Join-Path $conversionRoot ($directory.Name + '-' + [guid]::NewGuid().ToString('N'))
+            & (Join-Path $PSScriptRoot 'Convert-NorthstarModRpaks.ps1') -SourceModDirectory $directory.FullName -Output $overlay | Out-Host
+            foreach ($file in Get-ChildItem -LiteralPath $overlay -File) {
+                $relative = $directory.Name + '\paks\' + $file.Name
+                $intended[$relative] = $file.FullName
+            }
         }
     }
 }
@@ -134,6 +146,9 @@ if ($PSCmdlet.ShouldProcess($modsDestination, 'Write manifests')) {
 foreach ($entry in $added) { Write-Verbose "added   $entry" }
 foreach ($entry in $updated) { Write-Verbose "updated $entry" }
 foreach ($entry in $removed) { Write-Verbose "stale   $entry" }
+if ($conversionRoot -and (Test-Path -LiteralPath $conversionRoot)) {
+    Remove-Item -LiteralPath $conversionRoot -Recurse -Force
+}
 
 [pscustomobject]@{
     Destination = $modsDestination
@@ -143,5 +158,6 @@ foreach ($entry in $removed) { Write-Verbose "stale   $entry" }
     Unchanged   = $unchanged
     Stale       = $removed.Count
     Pruned      = if ($Prune) { $removed.Count } else { 0 }
+    Ps4Rpaks    = [bool]$ConvertRpaksForPs4
     InSync      = ($added.Count -eq 0 -and $updated.Count -eq 0 -and ($removed.Count -eq 0 -or -not $Prune))
 }

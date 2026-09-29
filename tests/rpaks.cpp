@@ -1,4 +1,5 @@
 #include "northstar_ps4/mod_rpaks.h"
+#include "northstar_ps4/rpak_texture_converter.h"
 #include <cassert>
 #include <cstdio>
 #include <fstream>
@@ -145,6 +146,65 @@ int main(int argc, char** argv) {
     assert(platforms.textures == 1 && platforms.pc == 1 && platforms.ps4 == 0);
     texturePak.resize(texturePak.size() - 1);
     assert(!InspectRpakTexturePlatforms(texturePak.data(), texturePak.size(), platforms));
+
+    // --- PC -> PS4 texture conversion --------------------------------------
+    // Three BC1 mips (16, 8 and 4 pixels) occupy 176 bytes in RePak's linear
+    // layout. PS4 stores every mip as a complete 8x8-block tile: 512 bytes
+    // each. The conversion therefore grows this page to 1536 bytes.
+    std::vector<std::uint8_t> convertible(0x58, 0);
+    std::memcpy(convertible.data(), "RPak", 4);
+    convertible[4] = 7;
+    convertible[0x3a] = 2;  // slabs
+    convertible[0x3c] = 2;  // pages
+    convertible[0x44] = 1;  // assets
+    const std::size_t converterSlabs = convertible.size();
+    convertible.resize(convertible.size() + 2 * 16, 0);
+    const std::size_t converterPages = convertible.size();
+    convertible.resize(convertible.size() + 2 * 12, 0);
+    const std::size_t converterAsset = convertible.size();
+    convertible.resize(convertible.size() + 72, 0);
+    const std::size_t converterData = convertible.size();
+    RpakWriteU32(convertible.data() + converterPages + 8, 56);
+    RpakWriteU32(convertible.data() + converterPages + 12, 1);  // slab 1
+    RpakWriteU32(convertible.data() + converterPages + 12 + 8, 176);
+    RpakWriteU64(convertible.data() + converterSlabs + 8, 56);
+    RpakWriteU64(convertible.data() + converterSlabs + 16 + 8, 176);
+    RpakWriteU32(convertible.data() + converterAsset + 16, 0);
+    RpakWriteU32(convertible.data() + converterAsset + 20, 0);
+    RpakWriteU32(convertible.data() + converterAsset + 24, 1);
+    RpakWriteU32(convertible.data() + converterAsset + 28, 0);
+    RpakWriteU64(convertible.data() + converterAsset + 32, ~std::uint64_t(0));
+    RpakWriteU32(convertible.data() + converterAsset + 60, 56);
+    RpakWriteU32(convertible.data() + converterAsset + 64, 8);
+    std::memcpy(convertible.data() + converterAsset + 68, "txtr", 4);
+    convertible.resize(converterData + 56 + 176, 0);
+    std::uint8_t* converterHeader = convertible.data() + converterData;
+    RpakWriteU16(converterHeader + 16, 16);
+    RpakWriteU16(converterHeader + 18, 16);
+    RpakWriteU16(converterHeader + 22, 0);  // BC1
+    RpakWriteU32(converterHeader + 24, 176);
+    converterHeader[30] = 1;
+    converterHeader[33] = 3;
+    for (std::size_t i = converterData + 56; i < convertible.size(); ++i)
+        convertible[i] = static_cast<std::uint8_t>(i);
+    const std::uint8_t largestMipFirstByte = convertible[converterData + 56 + 48];
+    RpakWriteU64(convertible.data() + 0x18, convertible.size());
+    RpakWriteU64(convertible.data() + 0x28, convertible.size());
+    std::vector<std::vector<std::uint8_t>> noStarpaks;
+    RpakPs4ConversionReport conversion;
+    std::string conversionError;
+    assert(ConvertRpakTexturesToPs4(convertible, noStarpaks, conversion, conversionError));
+    assert(conversion.textures == 1 && conversion.permanentBytesBefore == 176 &&
+        conversion.permanentBytesAfter == 1536 && conversion.streamedBlocks == 0);
+    assert(convertible.size() == converterData + 56 + 1536);
+    assert(RpakReadU32(convertible.data() + converterPages + 12 + 8) == 1536);
+    assert(RpakReadU64(convertible.data() + converterSlabs + 16 + 8) == 1536);
+    converterHeader = convertible.data() + converterData;
+    assert(converterHeader[28] == 8 && converterHeader[32] == 1);
+    assert(RpakReadU32(converterHeader + 24) == 1536);
+    assert(convertible[converterData + 56] == largestMipFirstByte);  // PS4 top-to-bottom order
+    assert(RpakReadU64(convertible.data() + 0x18) == convertible.size());
+    assert(RpakReadU64(convertible.data() + 0x28) == convertible.size());
 
     std::puts("rpak config tests passed.");
 
