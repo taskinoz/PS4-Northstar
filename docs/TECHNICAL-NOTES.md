@@ -4667,3 +4667,44 @@ applied. Checked against the file's other values on PS4:
 
 Verified: the same match with the fix gave no reset and no kick.
 
+## Host Options: listing, name and password (2026-09-29)
+
+PC servers take these from a config file or the command line. On PS4 the private lobby's
+L1 Host Options sets them (Northstar.PS4 `ui/ps4_host_options_menu.nut`).
+- A dialog has four buttons (`dialog.menu` has four `DialogButtonClass` elements), so the
+  listing, name, description and password are on a second dialog.
+- The dialog closes when a button is chosen; the script opens it again with the new state
+  and the same button focused.
+
+**Text entry.** `NSPS4_OpenTextInput(title, text, maxLength, secret)`,
+`NSPS4_UpdateTextInput()` and `NSPS4_GetTextInput()` (UI, `runtime_chat_ui.inl`) use the
+same sceImeDialog as chat, one keyboard at a time. The buffer starts with `text`, and
+shadPS4 shows it. The password option (4) is refused with `0x80bc0030` (invalid parameter)
+unless the type is Basic Latin (1) or Number, as on the console, so a secret field uses
+Basic Latin.
+
+**Saving.** `NSPS4_SetHostOption(name, value)` sets one of the six console variables in
+`host_options.h` and rewrites that entry in `/data/northstar_ps4/host_options.txt`
+(`name=value` lines). Only entries changed in the menu are written, so values from startup
+arguments are not saved. At startup the file is read before `ns_startup_args.txt`, and the
+startup arguments win, as PC's `+` options do over its configs. The password is logged as
+"(value hidden)".
+
+**Listing** (the presence reporter in `runtime_atlas_server.inl`):
+- PC stops heartbeats when `ns_report_server_to_masterserver` goes to 0, and Atlas drops the
+  entry later. Here the reporter sends `remove_server` straight away, and starts registration
+  again (with fresh attempts) when it goes back to 1.
+- `update_values` carries the name and description, and Atlas updates both.
+- Atlas reads `password` only when a server is created. The reporter keeps the password the
+  listing was created with; when `ns_server_password` differs, it removes the listing and
+  adds it again.
+- `NSPS4_IsServerListed()` reports whether an add succeeded, for the dialog's status line.
+
+Verified with scripted pad input: listing on and off (Atlas list checked), a name change
+shown by Atlas within one heartbeat, a password change re-listed with `hasPassword`, an
+empty password cleared, and the file read back at the next boot.
+
+shadPS4 logs each HTTP request's URL at Info, and the Atlas API puts the password in the
+query, so it reaches `shad_log.txt` unless `Lib.Http` is filtered to Warning. The token was
+already a reason for that filter.
+

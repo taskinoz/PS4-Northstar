@@ -130,10 +130,14 @@ Mods that servers require are downloaded, as on PC, when they are on Northstar's
 
 In the private lobby, **L1 opens Host Options**:
 
-- **Other players** (`ns_auth_allow_insecure`, off by default as on PC servers). A PS4 host is not registered with Northstar's master server, so it can't check who joins; while this is off, anyone else who connects is removed. Turn it on to play with others.
+- **Server browser** opens its own page:
+  - **Listed** (`ns_report_server_to_masterserver`, on by default as on PC): whether the lobby is on Northstar's server list. Switching it off takes the lobby off the list straight away.
+  - **Name** and **Description** (`ns_server_name`, `ns_server_desc`): typed on the system keyboard. The list shows a change within a few seconds.
+  - **Password** (`ns_server_password`): players who join from the server browser are asked for it. The keyboard starts empty; **Done** with nothing typed removes the password, and cancelling keeps the current one. Northstar only takes a password when a server is added to the list, so a new password takes the lobby off the list and adds it again.
+- **Other players** (`ns_auth_allow_insecure`, off by default as on PC servers). Players who join through the server browser are signed in by Northstar and always let in. Anyone else who connects (by address, for example) is removed while this is off. Turn it on to play with them.
 - **Same account on several machines** (`ns_allow_duplicate_accounts`, PC's `-allowdupeaccounts`). Two machines signed in with the same Atlas identity have the same account, and the second is otherwise refused with "Player's account is already on the server", as on PC.
 
-The settings last until the game restarts. To start with duplicate accounts on, put `-allowdupeaccounts` in `ns_startup_args.txt` in the game folder (next to `eboot.bin`, where PC Northstar keeps it; writable under shadPS4) or in guest `/data/northstar_ps4/ns_startup_args.txt` (writable on hardware too).
+What you change here is saved in `host_options.txt` in the shadPS4 user data folder (guest `/data/northstar_ps4/`) and kept after a restart. Launch options in `ns_startup_args.txt` in the game folder (next to `eboot.bin`, where PC Northstar keeps it) or in guest `/data/northstar_ps4/ns_startup_args.txt` are applied afterwards, so they win. For example, `-allowdupeaccounts` starts with duplicate accounts on.
 
 **On the server browser.** A PS4-hosted match puts itself on Northstar's server list, as a PC-hosted one does (a private match shows up while its lobby is open). This only works if other players can reach your machine:
 - UDP port 37015 must be forwarded on your router to the PC running shadPS4.
@@ -141,15 +145,11 @@ The settings last until the game restarts. To start with duplicate accounts on, 
 
 Northstar checks the port when the match starts, and doesn't list the match if it can't reach it.
 
-Name the server the way PC servers are named, with launch options in `ns_startup_args.txt`:
+Set the name and password in **Host Options → Server browser**. PC-style launch options (`+ns_server_name "My PS4 server"`, `+ns_server_password ...`, `+ns_report_server_to_masterserver 0`) in `ns_startup_args.txt` still work and override the menu.
 
-```
-+ns_server_name "My PS4 server" +ns_server_desc "Casual games" +ns_server_password secret
-```
+shadPS4 writes web requests to `shad_log.txt` when its `Lib.Http` log level is Info or lower, and the listing request carries the server password (Northstar's API takes it in the address). Keep `Lib.Http:Warning` in the log filter, or don't share that log, if the password matters.
 
-`+ns_report_server_to_masterserver 0` keeps the match off the list.
-
-Players who join through the server browser are signed in by Northstar, so they are let in even with **Other players** off, as on PC. They play with their own Northstar progress, and what they earn is saved back to their account when a match ends or they leave, as on a PC server. To host without saving players' progress, add `+ns_ps4_write_remote_persistence 0` to `ns_startup_args.txt`. As the host you play with your own Northstar progress too, and it is saved to your account the same way. If Northstar can't be reached or your exported token has expired, the lobby still opens, but with a fresh local profile, and nothing from that session is saved to your account.
+Players who join through the server browser play with their own Northstar progress, and what they earn is saved back to their account when a match ends or they leave, as on a PC server. To host without saving players' progress, add `+ns_ps4_write_remote_persistence 0` to `ns_startup_args.txt`. As the host you play with your own Northstar progress too, and it is saved to your account the same way. If Northstar can't be reached or your exported token has expired, the lobby still opens, but with a fresh local profile, and nothing from that session is saved to your account.
 
 PC players can connect to a PS4 host: it no longer sends the PS4 client module's checksum, which a PC always rejected with "Your .dll [..\bin\x64_retail\client.dll] differs from the server\'s."
 

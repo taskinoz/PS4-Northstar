@@ -85,6 +85,9 @@ struct Lock {
 };
 std::string g_serverId;
 std::string g_serverAuthToken;
+// The password the listing was created with: Atlas only takes a password in
+// add_server, so a new one needs a new listing.
+std::string g_registeredPassword;
 struct PresenceState {
     std::string map;
     std::string playlist;
@@ -264,6 +267,8 @@ AddResult ReportPresence(const std::string& id) {
             return AddResult::FailedNoRetry;
         }
         LogFormat("[NorthstarPS4] Successfully registered the local server to the master server.\n");
+        Lock lock;
+        g_registeredPassword = presence.password;
     }
     // update_values sends a new id and token when it had to re-create the
     // entry.
@@ -319,8 +324,36 @@ void* PresenceReporter(void*) {
             lastSend = 0;
             wasAlive = true;
         }
-        if (!ConVarInt(g_reportServer, 1)) continue;
-        if (singleplayer && !ConVarInt(g_reportSpServer, 0)) continue;
+        // PC stops sending heartbeats when reporting is switched off, and Atlas
+        // drops the listing some time later. The Host Options menu switches it
+        // while hosting, so the listing goes at once, and comes back (with new
+        // attempts) when it is switched on again.
+        const bool reporting = ConVarInt(g_reportServer, 1) && (!singleplayer || ConVarInt(g_reportSpServer, 0));
+        std::string registeredPassword;
+        {
+            Lock lock;
+            registeredPassword = g_registeredPassword;
+        }
+        const bool passwordChanged = !id.empty() && ConVarText(g_serverPassword) != registeredPassword;
+        if (!id.empty() && (!reporting || passwordChanged)) {
+            if (passwordChanged) LogFormat("[NorthstarPS4] server password changed; listing the server again\n");
+            RemovePresence(id);
+            Lock lock;
+            g_serverId.clear();
+            g_serverAuthToken.clear();
+            id.clear();
+        }
+        if (!reporting) {
+            attempts = 0;
+            nextAdd = 0;
+            lastSend = 0;
+            continue;
+        }
+        if (passwordChanged) {
+            attempts = 0;
+            nextAdd = 0;
+            lastSend = 0;
+        }
         const int rate = ConVarInt(g_presenceUpdateRate, 5000);
         if (lastSend && (now - lastSend) / 1000 < static_cast<std::uint64_t>(rate < 0 ? 0 : rate)) continue;
         lastSend = now;
@@ -693,6 +726,44 @@ void InstallDisconnectWrite(std::uintptr_t engineBase, std::size_t engineSize) n
     LogFormat("[NorthstarPS4] disconnect pdata write installed\n");
 }
 
+// Host Options (Northstar.PS4 ui/ps4_host_options_menu.nut) saved by
+// NSPS4_SetHostOption, read back at startup before the startup arguments,
+// which can still override them.
+constexpr const char* kHostOptionsFile = "/data/northstar_ps4/host_options.txt";
+
+void LoadHostOptions() noexcept {
+    char text[4096];
+    std::size_t size = 0;
+    if (!ReadFileIntoBuffer(kHostOptionsFile, text, sizeof(text), size)) return;
+    for (const auto& option : hostoptions::Parse(std::string(text, size))) {
+        void* convar = g_modConVarFindVar ? g_modConVarFindVar(g_modConVarCvar, option.first.c_str()) : nullptr;
+        if (!convar) continue;
+        const bool set = SetConVarString(convar, option.second.c_str());
+        LogFormat("[NorthstarPS4] host option %s %s%s\n", option.first.c_str(),
+            option.first.find("password") != std::string::npos ? "(value hidden)" : option.second.c_str(),
+            set ? "" : " could not be set");
+    }
+}
+
+bool SaveHostOption(const char* name, const char* value) noexcept {
+    char existing[4096];
+    std::size_t size = 0;
+    auto values = ReadFileIntoBuffer(kHostOptionsFile, existing, sizeof(existing), size)
+        ? hostoptions::Parse(std::string(existing, size))
+        : std::vector<std::pair<std::string, std::string>>();
+    hostoptions::Set(values, name, value);
+    const std::string text = hostoptions::Serialize(values);
+    const int fd = open(kHostOptionsFile, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd < 0) {
+        LogFormat("[NorthstarPS4] host options not saved: can't open %s\n", kHostOptionsFile);
+        return false;
+    }
+    const bool written = write(fd, text.data(), text.size()) == static_cast<ssize_t>(text.size());
+    close(fd);
+    if (!written) LogFormat("[NorthstarPS4] host options not saved: write failed\n");
+    return written;
+}
+
 namespace uiapi {
 
 // NSPS4_UpdateServerPresence( string map, string playlist, int maxPlayers,
@@ -736,6 +807,34 @@ int IsClientAtlasAuthenticated(void* vm) {
             if (known == value) authenticated = true;
     }
     Boolean(vm, authenticated);
+    return 1;
+}
+
+// NSPS4_IsServerListed(), UI: whether Atlas has accepted this server's
+// listing (add_server succeeded and it has not been removed since).
+int IsServerListed(void* vm) {
+    bool listed;
+    {
+        atlasserver::Lock lock;
+        listed = !atlasserver::g_serverId.empty();
+    }
+    Boolean(vm, listed);
+    return 1;
+}
+
+// NSPS4_SetHostOption( string name, string value ), UI: sets one of the Host
+// Options' console variables (host_options.h) and saves it. False for
+// any other variable, or if it could not be set or saved.
+int SetHostOption(void* vm) {
+    const char* name = TextArg(vm, 1);
+    const char* value = TextArg(vm, 2);
+    if (!name || !value) return Error(vm, "NSPS4_SetHostOption expects string name, string value");
+    void* convar = hostoptions::IsHostOption(name) && g_modConVarFindVar ? g_modConVarFindVar(g_modConVarCvar, name) : nullptr;
+    const bool set = convar && SetConVarString(convar, hostoptions::OneLine(value).c_str());
+    const bool saved = set && SaveHostOption(name, value);
+    LogFormat("[NorthstarPS4] host option %s %s%s\n", name,
+        std::strstr(name, "password") ? "(value hidden)" : value, !set ? ": not set" : saved ? "" : ": not saved");
+    Boolean(vm, saved);
     return 1;
 }
 
@@ -803,6 +902,7 @@ void InstallAtlasServer(std::uintptr_t engineBase, std::size_t engineSize) noexc
         if (SetConVarString(unlocked, "1"))
             LogFormat("[NorthstarPS4] everything_unlocked 1 (Northstar's autoexec_ns_server.cfg)\n");
     }
+    LoadHostOptions();
     ApplyStartupConVars();
 
     // PC: "patch to disable kicking based on incorrect serverfilter in

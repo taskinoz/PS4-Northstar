@@ -163,6 +163,11 @@ int IsClientAtlasAuthenticated(void* vm);
 // Defined in runtime_chat_ui.inl, which needs the CLIENT VM's lifecycle state.
 int OpenChatKeyboard(void* vm);
 int UpdateChatKeyboard(void* vm);
+int OpenTextInput(void* vm);
+int UpdateTextInput(void* vm);
+int GetTextInput(void* vm);
+int SetHostOption(void* vm);
+int IsServerListed(void* vm);
 int AuthResult(void* vm) {
     Struct(vm, 3);
     Boolean(vm, AtlasIdentityReady()); Seal(vm, 0);
@@ -572,6 +577,11 @@ const Registration registrations[] = {
     {"NSPS4_DisconnectClient", "bool", "int client, string reason", ServerDisconnectClient, kCtxServer},
     {"NSPS4_OpenChatKeyboard", "bool", "bool isTeam", OpenChatKeyboard, kCtxUi},
     {"NSPS4_UpdateChatKeyboard", "int", "", UpdateChatKeyboard, kCtxUi},
+    {"NSPS4_OpenTextInput", "bool", "string title, string text, int maxLength, bool secret", OpenTextInput, kCtxUi},
+    {"NSPS4_UpdateTextInput", "int", "", UpdateTextInput, kCtxUi},
+    {"NSPS4_GetTextInput", "string", "", GetTextInput, kCtxUi},
+    {"NSPS4_SetHostOption", "bool", "string name, string value", SetHostOption, kCtxUi},
+    {"NSPS4_IsServerListed", "bool", "", IsServerListed, kCtxUi},
     {"NSIsDedicated", "bool", "", ServerIsDedicated, kCtxServer},
     {"NSIsWritingPlayerPersistence", "bool", "", ServerWritingPersistence, kCtxServer},
     {"NSEarlyWritePlayerPersistenceForLeave", "void", "entity player", ServerWritePersistenceForLeave, kCtxServer},

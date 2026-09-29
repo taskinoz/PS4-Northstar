@@ -12,6 +12,7 @@
 #include "northstar_ps4/http_request.h"
 #include "northstar_ps4/atlas_server.h"
 #include "northstar_ps4/startup_args.h"
+#include "northstar_ps4/host_options.h"
 #include "northstar_ps4/pdata_convert.h"
 #include "northstar_ps4/server_list.h"
 #include "northstar_ps4/mod_archive.h"

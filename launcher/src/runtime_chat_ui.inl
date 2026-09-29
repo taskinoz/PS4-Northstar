@@ -53,6 +53,8 @@ std::int32_t sceUserServiceGetInitialUser(std::int32_t* userId);
 char16_t g_chatText[kChatMaxLength + 1];
 bool g_chatKeyboardOpen = false;
 bool g_chatKeyboardTeam = false;
+// The Host Options keyboard (below) uses the same system keyboard.
+bool g_textInputOpen = false;
 
 std::string Utf16ToUtf8(const char16_t* text) {
     std::string out;
@@ -106,7 +108,7 @@ bool CallPreSendMessage(const char* text, bool isTeam) noexcept {
 // one is already open or the system refused.
 int OpenChatKeyboard(void* vm) {
     if (Arg(vm, 1).tag != 0x1000008) return Error(vm, "NSPS4_OpenChatKeyboard expects bool isTeam");
-    if (g_chatKeyboardOpen) { Boolean(vm, false); return 1; }
+    if (g_chatKeyboardOpen || g_textInputOpen) { Boolean(vm, false); return 1; }
     std::int32_t user = 0;
     if (sceUserServiceGetInitialUser(&user) < 0) user = 0;
     std::memset(g_chatText, 0, sizeof(g_chatText));
@@ -147,6 +149,86 @@ int UpdateChatKeyboard(void* vm) {
     if (!CallPreSendMessage(text.c_str(), g_chatKeyboardTeam) && !SendChat(text.c_str(), g_chatKeyboardTeam))
         LogFormat("[NorthstarPS4] chat not sent: not in a match\n");
     Integer(vm, 2);
+    return 1;
+}
+
+} // namespace uiapi
+
+namespace uiapi {
+
+// Text for other menus (the private lobby's Host Options: server name,
+// description, password), on the same system keyboard. One keyboard is open
+// at a time, chat's or this one.
+constexpr std::uint32_t kTextInputMaxLength = 255;
+constexpr std::uint32_t kImeOptionPassword = 4;
+char16_t g_textInput[kTextInputMaxLength + 1];
+char16_t g_textInputTitle[64];
+std::uint32_t g_textInputLength = 0;
+std::string g_textInputResult;
+
+// NSPS4_OpenTextInput( string title, string text, int maxLength, bool secret ):
+// opens the system keyboard holding `text`; `secret` hides what is typed. False
+// if a keyboard is already open or the system refused.
+int OpenTextInput(void* vm) {
+    const char* title = TextArg(vm, 1);
+    const char* text = TextArg(vm, 2);
+    if (!title || !text || Arg(vm, 3).tag != kSqInteger || Arg(vm, 4).tag != 0x1000008)
+        return Error(vm, "NSPS4_OpenTextInput expects string title, string text, int maxLength, bool secret");
+    if (g_chatKeyboardOpen || g_textInputOpen) { Boolean(vm, false); return 1; }
+    const auto requested = static_cast<std::int64_t>(Arg(vm, 3).value);
+    g_textInputLength = requested < 1 ? 1 : requested > kTextInputMaxLength ? kTextInputMaxLength
+                                                                          : static_cast<std::uint32_t>(requested);
+    std::memset(g_textInput, 0, sizeof(g_textInput));
+    std::memset(g_textInputTitle, 0, sizeof(g_textInputTitle));
+    const std::u16string initial = chat::Utf8ToUtf16(text, std::strlen(text));
+    std::memcpy(g_textInput, initial.data(), std::min<std::size_t>(initial.size(), g_textInputLength) * sizeof(char16_t));
+    const std::u16string heading = chat::Utf8ToUtf16(title, std::strlen(title));
+    std::memcpy(g_textInputTitle, heading.data(),
+        std::min<std::size_t>(heading.size(), sizeof(g_textInputTitle) / sizeof(char16_t) - 1) * sizeof(char16_t));
+    std::int32_t user = 0;
+    if (sceUserServiceGetInitialUser(&user) < 0) user = 0;
+    ImeDialogParam param{};
+    param.userId = user;
+    // A hidden (password) field takes the Basic Latin layout only; the system
+    // refuses it on the default one (0x80bc0030, invalid parameter).
+    const bool secret = Arg(vm, 4).value != 0;
+    param.type = secret ? 1 : 0;
+    param.enterLabel = 0;            // default ("Done")
+    param.option = secret ? kImeOptionPassword : 0;
+    param.maxTextLength = g_textInputLength;
+    param.inputTextBuffer = g_textInput;
+    param.posx = 960.0f;
+    param.posy = 540.0f;
+    param.horizontalAlignment = 1;
+    param.verticalAlignment = 1;
+    param.title = g_textInputTitle;
+    const std::int32_t result = sceImeDialogInit(&param, nullptr);
+    g_textInputOpen = result >= 0;
+    if (!g_textInputOpen) LogFormat("[NorthstarPS4] text keyboard refused: 0x%x\n", static_cast<unsigned>(result));
+    Boolean(vm, g_textInputOpen);
+    return 1;
+}
+
+// NSPS4_UpdateTextInput(): 0 no keyboard, 1 open, 2 finished (the text is in
+// NSPS4_GetTextInput), 3 cancelled. Closes the keyboard when it finishes.
+int UpdateTextInput(void* vm) {
+    if (!g_textInputOpen) { Integer(vm, 0); return 1; }
+    const std::int32_t status = sceImeDialogGetStatus();
+    if (status == kImeStatusRunning) { Integer(vm, 1); return 1; }
+    ImeDialogResult result{};
+    const bool finished = status == kImeStatusFinished && sceImeDialogGetResult(&result) >= 0 &&
+        result.endStatus == kImeEndOk;
+    sceImeDialogTerm();
+    g_textInputOpen = false;
+    g_textInput[kTextInputMaxLength] = 0;
+    g_textInputResult = finished ? Utf16ToUtf8(g_textInput) : std::string();
+    Integer(vm, finished ? 2 : 3);
+    return 1;
+}
+
+// NSPS4_GetTextInput(): the text the last keyboard finished with.
+int GetTextInput(void* vm) {
+    String(vm, g_textInputResult.c_str());
     return 1;
 }
 
