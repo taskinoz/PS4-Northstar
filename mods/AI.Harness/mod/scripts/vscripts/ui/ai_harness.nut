@@ -160,6 +160,20 @@ void function AIHarness_Poll()
                         throw "Expected <playlist>|<name>|<fallback>"
                     json = GetPlaylistVarOrUseValue( parts[0], parts[1], parts[2] )
                 }
+                // Exercises every scalar CSV datatable accessor plus a row
+                // search against a table shipped by Northstar.CustomServers.
+                else if ( action == "datatable" )
+                {
+                    var dataTable = GetDataTable( $"datatable/burn_meter_rewards.rpak" )
+                    int refColumn = GetDataTableColumnByName( dataTable, "itemRef" )
+                    int row = GetDataTableRowMatchingStringValue( dataTable, refColumn, "burnmeter_maphack" )
+                    bool selectable = GetDataTableBool( dataTable, row, GetDataTableColumnByName( dataTable, "selectable" ) )
+                    json = format( "%d|%s|%d|%.3f|%d", GetDatatableRowCount( dataTable ),
+                        GetDataTableString( dataTable, row, refColumn ),
+                        GetDataTableInt( dataTable, row, GetDataTableColumnByName( dataTable, "cost" ) ),
+                        GetDataTableFloat( dataTable, row, GetDataTableColumnByName( dataTable, "activationCost" ) ),
+                        selectable ? 1 : 0 )
+                }
                 // Resolves a localisation token; the text comes back in the json field.
                 else if ( action == "localize" )
                     json = Localize( NSAIHarnessField( raw, "command" ) )

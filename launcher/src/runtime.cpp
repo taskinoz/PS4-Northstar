@@ -16,6 +16,7 @@
 #include "northstar_ps4/mod_dependencies.h"
 #include "northstar_ps4/audio_override.h"
 #include "northstar_ps4/particle_manifest.h"
+#include "northstar_ps4/datatable_csv.h"
 #include "northstar_ps4/pdata_convert.h"
 #include "northstar_ps4/server_list.h"
 #include "northstar_ps4/mod_archive.h"
@@ -30,6 +31,7 @@
 #include <cstdarg>
 #include <cerrno>
 #include <cstddef>
+#include <cstdlib>
 #include <cstdio>
 #include <dirent.h>
 #include <fcntl.h>

@@ -95,6 +95,7 @@ void ReloadModState() noexcept {
 
     CollectKeyValuePatches();
     g_particleManifestGenerated = false;
+    uiapi::ClearDatatableCache();
 
     // UI and CLIENT callbacks are read when their hooks are installed; SERVER
     // rereads at every VM. Without this, a mod enabled by the reload had its

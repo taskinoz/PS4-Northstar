@@ -51,6 +51,10 @@ bool RuntimeVmInit(void* owner, int context, float time) noexcept {
 }
 bool InstallRuntimeVmInit() noexcept {
     if (g_runtimeVmInitHooked) return true;
+    if (!uiapi::InstallClientDatatableRegistrarHook()) {
+        LogFormat("[NorthstarPS4] datatable registrar hook refused\n");
+        return false;
+    }
     const struct { std::uintptr_t va; const char* bytes; std::size_t size; } gates[] = {
         {0x6717af, "\xe8\x0c\x2f\x00\x00", 5},
         {0x6746c0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x81\xec\xa8\x00\x00\x00", 20},

@@ -491,6 +491,8 @@ int UserInfoKvBool(void* vm) {
     return 1;
 }
 
+#include "runtime_datatables.inl"
+
 // Script contexts a native is registered into, matching PC's ADD_SQFUNC
 // masks. SERVER entries are live now that server.prx is hooked: they are
 // registered from RuntimeServerVmInit rather than from the client VM hook.

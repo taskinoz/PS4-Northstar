@@ -4816,6 +4816,35 @@ the blue vortex arc around the lobby pilot. The successful transcript is
 combination, engine ingestion and rendering of real third-party PCF data; it does not claim
 that the complete Moblin.Archon package or its TitanFramework/RPAK dependencies work.
 
+## Custom CSV datatables (2026-09-30)
+
+PC Northstar replaces the engine's datatable builtins while each Squirrel function is
+registered, then resolves `datatable/*.rpak` names to enabled mods' corresponding
+`scripts/datatable/*.csv` files. The PS4 port now intercepts only client executable call
+sites whose decoded rel32 target is the verified native registrar. The registrar preimage
+and every call target are checked before mutation; calls for unrelated engine functions
+remain unchanged. This covers the UI and CLIENT VMs while retaining each original builtin
+as the fallback when no enabled mod supplies a CSV. SERVER registration is not intercepted
+yet.
+
+`datatable_csv.h` parses UTF-8 BOMs, CRLF, quoted commas, doubled quotes and empty cells,
+and rejects NULs, unterminated rows/quotes and unexpected text after a closing quote. The
+runtime caches the highest-priority resolved mod file, clears that cache on mod reload and
+supports row/column counts, string/asset/int/float/bool scalar accessors, exact row searches
+and PC-compatible integer/float comparison searches. Vector-valued cells are explicitly
+reported as unsupported instead of returning invented data.
+
+Live validation used shadPS4 `2b5666b3` and experimental PRX SHA256
+`48398ffa878b2c778c1747b6fe221047a883a77975d0e219d400e1ce88b68c17`. Normal startup loaded
+Northstar.CustomServers tables including `titan_properties`, `xp_per_player_level`,
+`startpoints`, `camo_skins`, `calling_cards`, `burn_meter_store` and
+`burn_meter_rewards`. The harness independently queried `burn_meter_rewards` and returned
+`20|burnmeter_maphack|125|0.700|1`, exercising row count, column lookup, row matching and
+all scalar accessors. The boot transcript is
+`work/stage2/iterations/20260930-013544/shad-new-lines.log`; the later command and CSV-load
+lines are in that session's appended shadPS4 log. The portable parser suite and complete
+host profile suite cover malformed inputs and the runtime build.
+
 ## STARPak ownership and the remaining RPAK boundary (2026-09-29)
 
 PC does not register a STARPak with the RPAK load call. It reads the NUL-separated stream
