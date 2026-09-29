@@ -22,7 +22,8 @@
 //   - the ConVars of newly enabled mods (PC keeps existing ones too);
 //   - the mod catalog the menus read.
 // VM-side state - InitScripts, callbacks, natives - is read again at each VM
-// creation already. Rpaks stay off (runtime_rpaks.inl).
+// creation already. RPaks are loaded at process startup; live unload/reload
+// ownership is still unsupported (runtime_rpaks.inl).
 
 using LocaliseAddFileFn = bool (*)(void*, const char*, const char*, bool);
 LocaliseAddFileFn g_localiseAddFile = nullptr;  // set by ProbeLocaliseInterface

@@ -208,6 +208,11 @@ struct RpakTexturePlatforms {
     std::size_t other = 0;
 };
 
+inline bool IsSupportedPs4TextureRpak(const RpakTexturePlatforms& platforms) {
+    return platforms.textures != 0 && platforms.ps4 == platforms.textures &&
+        platforms.pc == 0 && platforms.other == 0;
+}
+
 inline std::uint16_t RpakReadU16(const std::uint8_t* data) {
     return static_cast<std::uint16_t>(data[0]) |
         (static_cast<std::uint16_t>(data[1]) << 8);

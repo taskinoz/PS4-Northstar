@@ -6,7 +6,7 @@ The target is PC Northstar behaviour with unchanged mod packages. This is an alp
 
 What works: the Northstar lobby and menus; signing in with an Atlas identity exported from a PC; the server browser; joining public servers; hosting private matches; leaving a match back to the lobby; custom map mods (tested with `mp_box`); mod localisation; controller navigation in the game mode menu; live mod reload; and downloading a server's required mods from the verified list (tested in the lobby, not yet as part of a real server join).
 
-What does not yet: mod rpaks (the shipped ones are PC builds, so custom maps have no loading screen), and mods whose files are PC-only in other ways. Crowded, heavily modded servers can exhaust a 6 GB GPU under shadPS4. See the [release notes](https://github.com/taskinoz/PS4-Northstar/releases) for the current list.
+What remains limited: RPaks must use the supported converted PS4 texture layout, and mods whose assets use other PC-only formats still do not work. Crowded, heavily modded servers can exhaust a 6 GB GPU under shadPS4. See the [release notes](https://github.com/taskinoz/PS4-Northstar/releases) for the current list.
 
 A PRX being present, or mod folders being discovered, does not prove scripts executed. The bootstrap-only build in the rollback section deliberately loads no mods.
 
@@ -55,7 +55,7 @@ Use a new output directory each time:
 
 This copies mod folders byte-for-byte and verifies their hashes. It also copies the source profile's `enabledmods.json` when present. It does not modify game archives. Add `-IncludePs4CompatibilityMods` to include this port's own mods, `Northstar.PS4` and `Northstar.DirectConnect`. The runtime needs `Northstar.PS4`: it carries the PS4 fixes (save layout, controller menus, client command bridge) as overrides, so the Northstar mods themselves stay unchanged. `scripts\Sync-NorthstarProfile.ps1` keeps an existing install in sync the same way. Release builds ship both mods in `northstar-ps4-mods-<version>.zip`.
 
-Experimental RPAK textures use `-ConvertRpaksForPs4` on either profile command. This converts only the copied profile's uncompressed Titanfall 2 v7 RPaks/STARPaks; the PC source stays byte-for-byte unchanged. Build the matching runtime with `-EnableRuntimeManifest -EnableExperimentalRpaks`. Unsupported compressed, patch, array, or unknown texture layouts stop with an error rather than being installed. This path has passed archive and independent DDS round-trip tests, but still needs its first in-game weapon-skin test.
+RPAK textures use `-ConvertRpaksForPs4` on either profile command. This converts only the copied profile's uncompressed Titanfall 2 v7 RPaks/STARPaks; the PC source stays byte-for-byte unchanged. Normal runtime builds include the loader. Unsupported compressed, patch, array, or unknown texture layouts stop with an error rather than being installed, and a manually copied PC-layout archive is refused at runtime. Northstar.Custom's 47 textures and 41 streamed blocks have passed archive checks, independent LegionPlus DDS round trips, a clean engine load, and an in-game holiday-tree material/texture render.
 
 For a fresh installation, copy `dist/install-profile/R2Northstar` beside the game's `eboot.bin`. If a profile already exists there, preserve it outside the active game folder before replacing it; do not merge an old modded profile into the fresh one.
 
@@ -128,7 +128,7 @@ Reloading mods works live, as on PC: the server browser switches client-required
 
 Mods that servers require are downloaded, as on PC, when they are on Northstar's [verified list](https://github.com/R2Northstar/VerifiedMods) and `allow_mod_auto_download` is on. They go to guest `/data/northstar_ps4/runtime/remote/mods` (PC: `R2Northstar/runtime/remote/mods`), are checked against the list's SHA-256, and are only switched on for servers that need them.
 
-**What PC mods can use on PS4.** Scripts, `RunOn` conditions, console variables, localisation (English), KeyValues (weapons, playlists, AI settings), VPKs and custom maps, `Dependencies` constants for optional mods, particle manifests, and sound replacements (`audio/` folders, as on PC) work. `ns_print_played_sounds 1` in the console logs the sound events that play, to find their names. Particle-manifest loading is new and has passed build/host tests, but still needs a real particle mod checked in game. RPAK texture assets (including weapon skins) have an opt-in converted-profile path that is host-verified but not yet verified in game. Still missing or unsupported: general RPAK model/material compatibility beyond that experiment, datatable CSVs, mod console commands (`ConCommands`) and plugins.
+**What PC mods can use on PS4.** Scripts, `RunOn` conditions, console variables, localisation (English), KeyValues (weapons, playlists, AI settings), VPKs and custom maps, `Dependencies` constants for optional mods, particle manifests, sound replacements (`audio/` folders, as on PC), and converted RPAK texture/material assets work. `ns_print_played_sounds 1` in the console logs the sound events that play, to find their names. Particle-manifest loading is new and has passed build/host tests, but still needs a real particle mod checked in game. Still missing or unsupported: compressed/patch/array and non-texture RPak layouts, datatable CSVs, mod console commands (`ConCommands`) and plugins.
 
 ### Hosting a private match for other players
 
@@ -226,7 +226,7 @@ Use the build/deploy commands in section 3 and restart the game. No additional a
 
 An absent `vpk/vpk.json` preloads the mod's archives. An object with `"Preload": true` does the same; `false` or an object without that member mounts only when an engine mount has the same archive stem. Comments and trailing commas are supported. Mods follow enabled state and ascending load priority; changes require a restart. Only the supported `english*.bsp.pak000_dir.vpk` naming convention is discovered, and overlong paths are rejected with a log message.
 
-A successful boot logs `mod VPK discovered`, a non-null `mod VPK mount` result and `UI lifecycle completed`. With the shipped Northstar.Custom archive, the diagnostic also logs `VPK asset lookup: models/titans/buddy/titan_buddy.mdl read=12 IDST=1`. This verifies an engine asset read. In-game model rendering, texture/material compatibility and RPAK loading remain separate checks; arbitrary PC assets are not guaranteed compatible.
+A successful boot logs `mod VPK discovered`, a non-null `mod VPK mount` result and `UI lifecycle completed`. With converted Northstar.Custom assets it also logs `mod rpak load` with non-negative handles and `mod starpak redirect` for both streams. The shipped Buddy diagnostic logs `VPK asset lookup: models/titans/buddy/titan_buddy.mdl read=12 IDST=1`. Arbitrary PC assets are still not guaranteed compatible.
 
 ## Optional local automation
 

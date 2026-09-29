@@ -141,9 +141,13 @@ int main(int argc, char** argv) {
     RpakTexturePlatforms platforms;
     assert(InspectRpakTexturePlatforms(texturePak.data(), texturePak.size(), platforms));
     assert(platforms.textures == 1 && platforms.pc == 0 && platforms.ps4 == 1 && platforms.other == 0);
+    assert(IsSupportedPs4TextureRpak(platforms));
     texturePak[textureHeader + 0x1c] = 0;
     assert(InspectRpakTexturePlatforms(texturePak.data(), texturePak.size(), platforms));
     assert(platforms.textures == 1 && platforms.pc == 1 && platforms.ps4 == 0);
+    assert(!IsSupportedPs4TextureRpak(platforms));
+    platforms = {};
+    assert(!IsSupportedPs4TextureRpak(platforms));
     texturePak.resize(texturePak.size() - 1);
     assert(!InspectRpakTexturePlatforms(texturePak.data(), texturePak.size(), platforms));
 

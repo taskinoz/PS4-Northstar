@@ -22,11 +22,10 @@
 // module's own data page RWX aborts the emulator with "Protect: Unreachable
 // code!". Patching the call sites needs no new executable memory at all,
 // because the loader itself is left intact and called directly as the original.
-// Off by default, and deliberately so. The mechanism below is proven end to
-// end: both call sites patch, both of Northstar.Custom's paks are dispatched
-// after `common.rpak` with valid handles, and the engine opens and reads
-// `mp_weapon_shotgun_doublebarrel.rpak` from the mod directory with no pak
-// error. The first experiment failed before asset compatibility was reached:
+// The mechanism below is proven end to end: both call sites patch, both of
+// Northstar.Custom's converted paks are dispatched after `common.rpak` with
+// valid handles, and the engine opens their RPaks and redirected STARPaks. The
+// first experiment failed before asset compatibility was reached:
 // the engine looked for `mp_weapon_shotgun_doublebarrel.starpak` at
 // `/app0/r2/`, where a mod's streamed data does not live, and then wedged.
 // The code below now reads each v7 header's streamed paths and patches the
@@ -37,17 +36,24 @@
 // This is the opposite of how the VPK work turned out, where the shipped
 // archive held bytes identical to the PS4 originals. PC mod textures use
 // linear blocks, while retail PS4 texture headers carry platform byte 8 and
-// Morton-swizzled blocks. Leave loading off until a clean boot reaches asset
-// creation and the required conversion/material differences are established.
-#if defined(NORTHSTAR_PS4_ENABLE_EXPERIMENTAL_RPAKS)
+// Morton-swizzled blocks. Discovery therefore refuses anything except the
+// verified PS4 texture layout before a load request can reach the engine.
 constexpr bool kModRpakLoadingEnabled = true;
-#else
-constexpr bool kModRpakLoadingEnabled = false;
-#endif
 constexpr std::uintptr_t kRtechLoadPakVa = 0x76f0;
 constexpr std::uintptr_t kRtechLoadPakCallSites[] = {0x78c0, 0x7ed1};
 constexpr std::uintptr_t kRtechOpenFileVa = 0x0a90;
 constexpr std::uintptr_t kRtechStarpakOpenCallVa = 0x6773;
+// The v7 loader keeps 512 entries in rtech_game's data segment.  LoadPakAsync
+// writes the handle, state, copied request name and allocator at these offsets
+// before publishing the entry to the worker.  The runtime module watcher can
+// install this hook after the initial requests have already passed the two
+// call sites, so the table is also the authoritative catch-up source.
+constexpr std::uintptr_t kRtechPakTableVa = 0x2a66d08;
+constexpr std::size_t kRtechPakEntrySize = 0xa8;
+constexpr std::size_t kRtechPakEntryCount = 512;
+constexpr std::size_t kRtechPakStateOffset = 0x04;
+constexpr std::size_t kRtechPakNameOffset = 0x10;
+constexpr std::size_t kRtechPakAllocatorOffset = 0x20;
 constexpr std::int32_t kInvalidPakHandle = -1;
 // PC passes 7 for every mod pak it loads; the pak system is the same lineage
 // here, so the same value is used rather than echoing the engine's own flags,
@@ -178,8 +184,16 @@ void DiscoverModRpaks() {
                     name.c_str(), platforms.textures, platforms.pc, platforms.ps4, platforms.other,
                     platforms.pc ? " conversion-required" : "");
             } else {
-                LogFormat("[NorthstarPS4] mod rpak texture inspection unavailable: %s\n",
+                LogFormat("[NorthstarPS4] mod rpak refused, unsupported archive: %s\n",
                     name.c_str());
+                g_modRpaks.pop_back();
+                continue;
+            }
+            if (!IsSupportedPs4TextureRpak(platforms)) {
+                LogFormat("[NorthstarPS4] mod rpak refused, PS4 texture conversion required: %s\n",
+                    name.c_str());
+                g_modRpaks.pop_back();
+                continue;
             }
             for (const auto& reference : references) {
                 RuntimeModStarpak stream;
@@ -235,6 +249,48 @@ std::int32_t ModLoadPakAsync(const char* path, void* allocator, std::int32_t fla
     return result;
 }
 
+void CatchUpQueuedModRpaks(std::uintptr_t rtechBase) noexcept {
+    auto* const table = reinterpret_cast<const std::uint8_t*>(rtechBase + kRtechPakTableVa);
+    std::size_t queued = 0;
+    // State 7 is the loader's successful terminal state (11 is failure).  Do
+    // not insert a late dependent while its parent is still being processed:
+    // the ordinary hooked path queues them serially on the calling thread,
+    // whereas this catch-up runs on the independent module-watcher thread.
+    for (std::uint32_t attempt = 0; attempt < 1000; ++attempt) {
+        queued = 0;
+        for (std::size_t i = 0; i < kRtechPakEntryCount; ++i) {
+            const std::uint8_t* const entry = table + i * kRtechPakEntrySize;
+            std::int32_t handle = kInvalidPakHandle;
+            std::int32_t state = 0;
+            const char* name = nullptr;
+            void* allocator = nullptr;
+            std::memcpy(&handle, entry, sizeof(handle));
+            std::memcpy(&state, entry + kRtechPakStateOffset, sizeof(state));
+            std::memcpy(&name, entry + kRtechPakNameOffset, sizeof(name));
+            std::memcpy(&allocator, entry + kRtechPakAllocatorOffset, sizeof(allocator));
+            if (handle == kInvalidPakHandle || state == 0 || !name || !allocator) continue;
+            g_rpakAllocator = allocator;
+            ++queued;
+            if (state == 7) LoadModRpaks(name, allocator);
+        }
+        bool complete = true;
+        for (const auto& pak : g_modRpaks) {
+            if (pak.handle == kInvalidPakHandle) {
+                complete = false;
+                break;
+            }
+        }
+        if (complete) {
+            LogFormat("[NorthstarPS4] mod rpak catch-up: queued=%zu allocator=%p attempt=%u\n",
+                queued, g_rpakAllocator, attempt);
+            return;
+        }
+        sceKernelUsleep(10000);
+    }
+    LogFormat("[NorthstarPS4] mod rpak catch-up timed out: queued=%zu allocator=%p\n",
+        queued, g_rpakAllocator);
+}
+
 // Rewrites one `call rel32` to reach `target` instead. Same shape as the
 // lifecycle hooks' patcher, but against rtech_game rather than the client.
 bool PatchRpakCallSite(std::uintptr_t base, std::size_t span, std::uintptr_t va,
@@ -263,10 +319,7 @@ bool PatchRpakCallSite(std::uintptr_t base, std::size_t span, std::uintptr_t va,
 }
 
 void InstallModRpakHook(OrbisKernelModule rtechHandle) noexcept {
-    if (!kModRpakLoadingEnabled) {
-        LogFormat("[NorthstarPS4] mod rpak loading disabled: shipped mod paks are PC builds\n");
-        return;
-    }
+    if (!kModRpakLoadingEnabled) return;
     OrbisKernelModuleInfo info{};
     info.size = sizeof(info);
     if (sceKernelGetModuleInfo(rtechHandle, &info) != 0 || info.segmentCount == 0) {
@@ -315,4 +368,5 @@ void InstallModRpakHook(OrbisKernelModule rtechHandle) noexcept {
     }
     g_modRpakHookReady = true;
     LogFormat("[NorthstarPS4] mod rpak hook installed sites=%d paks=%zu\n", patched, g_modRpaks.size());
+    CatchUpQueuedModRpaks(base);
 }

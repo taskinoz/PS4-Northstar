@@ -60,9 +60,9 @@ This inventories explicit registrations, **not implementation or runtime compati
 | `NSSendClientPrint` | `void` / `entity player, string msg` | `ScriptContext::SERVER` | `ServerSendClientPrint` / `kCtxServer` | `scripts/server/miscserverscript.cpp:103` |
 | `GetUserInfoKVString_Internal` | `string` / `entity player, string key, string defaultValue = \"\"` | `ScriptContext::SERVER` | `UserInfoKvString` / `kCtxServer` | `scripts/server/scriptuserinfo.cpp:6` |
 | `GetUserInfoKVAsset_Internal` | `asset` / `entity player, string key, asset defaultValue = $\"\"` | `ScriptContext::SERVER` | `UserInfoKvAsset` / `kCtxServer` | `scripts/server/scriptuserinfo.cpp:26` |
-| `GetUserInfoKVInt_Internal` | `int` / `entity player, string key, int defaultValue = 0` | `ScriptContext::SERVER` | `UserInfoKvPrimitive` / `kCtxServer` | `scripts/server/scriptuserinfo.cpp:47` |
-| `GetUserInfoKVFloat_Internal` | `float` / `entity player, string key, float defaultValue = 0` | `ScriptContext::SERVER` | `UserInfoKvPrimitive` / `kCtxServer` | `scripts/server/scriptuserinfo.cpp:67` |
-| `GetUserInfoKVBool_Internal` | `bool` / `entity player, string key, bool defaultValue = false` | `ScriptContext::SERVER` | `UserInfoKvPrimitive` / `kCtxServer` | `scripts/server/scriptuserinfo.cpp:87` |
+| `GetUserInfoKVInt_Internal` | `int` / `entity player, string key, int defaultValue = 0` | `ScriptContext::SERVER` | `UserInfoKvInt` / `kCtxServer` | `scripts/server/scriptuserinfo.cpp:47` |
+| `GetUserInfoKVFloat_Internal` | `float` / `entity player, string key, float defaultValue = 0` | `ScriptContext::SERVER` | `UserInfoKvFloat` / `kCtxServer` | `scripts/server/scriptuserinfo.cpp:67` |
+| `GetUserInfoKVBool_Internal` | `bool` / `entity player, string key, bool defaultValue = false` | `ScriptContext::SERVER` | `UserInfoKvBool` / `kCtxServer` | `scripts/server/scriptuserinfo.cpp:87` |
 | `NSSendMessage` | `void` / `int playerIndex, string text, bool isTeam` | `ScriptContext::SERVER` | `SendMessage` / `kCtxClient`; `ServerSendMessage` / `kCtxServer` | `server/serverchathooks.cpp:123` |
 | `NSBroadcastMessage` | `void` / `int fromPlayerIndex, int toPlayerIndex, string text, bool isTeam, bool isDead, int messageType` | `ScriptContext::SERVER` | `ServerBroadcastMessage` / `kCtxServer` | `server/serverchathooks.cpp:134` |
 | `NSGetCurrentModName` | `string` / `` | `ScriptContext::UI \| ScriptContext::CLIENT \| ScriptContext::SERVER` | `CurrentModName` / `kCtxAll` | `squirrel/squirrel.cpp:652` |
@@ -73,4 +73,4 @@ This inventories explicit registrations, **not implementation or runtime compati
 
 Empty arrays, default arguments, constant false/true and logged no-ops are adapters. In particular, HTTP/downloads/server-list, server chat/disconnect/userinfo and persistence-write registrations do not establish working implementations. `kCtxAll` means UI/CLIENT/SERVER. Duplicate names can have different signatures by context (NSSendMessage).
 
-Coverage: 62 explicit PC ADD_SQFUNC declarations; 68 distinct names in the PS4 registration table. These counts measure different things and are not a completion percentage.
+Coverage: 62 explicit PC ADD_SQFUNC declarations; 78 distinct names in the PS4 registration table. These counts measure different things and are not a completion percentage.

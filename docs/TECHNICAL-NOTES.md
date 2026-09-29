@@ -4834,20 +4834,17 @@ as PS4 and unswizzles its 8-by-8 Morton blocks, while RePak emits PC-oriented li
 data. The official LegionPlus 1.9.2 CLI successfully decoded and listed the same texture from
 both local retail PC and PS4 archives, confirming the comparison is of equivalent assets.
 
-One experimental build enabled the loader with the new redirect, but shadPS4 exited before
-eboot with `Invalid or corrupted deserialization container/shader cache`; another shadPS4
-process was already running, so it was left alone. No RPAK hook or game code ran. The installed
-PRX was immediately rebuilt/deployed with the loader disabled. A clean emulator boot is still
-needed before deciding whether the PS4 engine rejects PC texture headers directly or reaches
-rendering with bad layout. The safe gate remains off.
+The initial live test exposed a startup race: the module watcher installed the hook after
+`common.rpak` had entered the queue but before its worker open. The loader therefore never saw
+the dependency request. The pak table at `rtech_game+0x2a66d08` has 512 entries of 0xa8 bytes;
+each retains its handle (`+0x00`), state (`+0x04`), copied request name (`+0x10`) and allocator
+(`+0x20`). Catch-up now waits for the named dependency's successful terminal state 7, then
+queues its dependants. Queueing immediately while the dependency was still active reproduced
+an access violation on RTech worker threads; waiting for state 7 removed it.
 
-For the next isolated run, no source edit is needed:
-
-    .\scripts\Invoke-Stage2Iteration.ps1 -EnableRuntimeManifest -EnableExperimentalRpaks `
-        -SuccessPattern '\[NorthstarPS4\] UI lifecycle completed' -TimeoutSeconds 150
-
-`EnableExperimentalRpaks` is recorded in `northstar_ps4.build.json`. Ordinary builds omit the
-define and keep the loader disabled.
+Normal filesystem-overlay builds now include the loader. Discovery refuses an archive unless
+the bounded v7 inspector succeeds and every texture carries the verified PS4 platform marker;
+PC-linear, mixed, compressed/patch, texture-free and unknown layouts never reach the engine.
 
 The v7 archive inspector now walks the slab/page/asset tables with bounds checks and reports
 each texture header's platform marker before an experimental load. It refuses compressed and
@@ -4888,7 +4885,7 @@ Titanfall 2 v7 archives. It:
 
 The host CLI and `Convert-NorthstarModRpaks.ps1` write a fresh overlay. Profile creation and
 sync expose it only through `-ConvertRpaksForPs4`, so source mods and retail archives remain
-unchanged. The experimental runtime still requires `-EnableExperimentalRpaks`.
+unchanged. Normal runtime builds contain the loader and reject unconverted archives safely.
 
 Validation:
 
@@ -4899,11 +4896,20 @@ Validation:
   fixed; LegionPlus exports all 18 PC/converted shotgun DDS files byte-identically;
 - a real converted profile reports 18 PS4 and zero PC texture headers for the shotgun pack;
 - two consecutive converted syncs report 840 added files, then 840 unchanged files;
-- all host suites pass. The runtime build with runtime-manifest and experimental-RPAK flags
-  succeeds: PRX SHA256 `9f6df145ecd61aa3fb62b61ab8812601869c11d3cc2b1965b8a787adab3105b4`.
+- all host suites pass.
 
-This is not yet gameplay verification. The next test is a clean shadPS4 boot with the converted
-profile, followed by the double-barrel shotgun skin/material in a match. If texture upload works
-but the material fails, compare v12 material headers and shader-set references before broadening
-the converter. Do not enable this path by default until that test passes.
+Live validation used shadPS4 `2b5666b3` and the converted deployed profile. The final test build
+was PRX SHA256 `ed9ce0505fb3d972aca41e69aefc9e83bdab73762e26dde83965c291d8f1eaa9`;
+`work/stage2/iterations/20260929-235400/shad-new-lines.log` reached UI lifecycle completion in
+38.523 seconds. The late catch-up loaded the shotgun and event packs with handles 3 and 4,
+both mod RPaks were opened by the worker, and both embedded STARPaks redirected and opened from
+Northstar.Custom. No fatal or pak error followed.
+
+For a visible end-to-end check, only the installed test copy of `_event_models.gnut` had its
+December date condition temporarily forced true (the source mod was not changed). Launching the
+local lobby loaded the holiday tree/floor models and their material files, and the tree rendered
+with its coloured light textures in `work/rpak-event-model.png`. The installed script was then
+restored by a converted profile sync. The double-barrel archive also loads cleanly, but its
+weapon definition points at a model absent from both the PC and PS4 game data, so it is not a
+valid visual test target.
 
