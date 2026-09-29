@@ -14,6 +14,7 @@
 #include "northstar_ps4/startup_args.h"
 #include "northstar_ps4/host_options.h"
 #include "northstar_ps4/mod_dependencies.h"
+#include "northstar_ps4/audio_override.h"
 #include "northstar_ps4/pdata_convert.h"
 #include "northstar_ps4/server_list.h"
 #include "northstar_ps4/mod_archive.h"
@@ -2144,6 +2145,7 @@ std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noex
 // After runtime_vpks.inl: the map command guard checks mod map archives.
 #include "runtime_concommands.inl"
 #include "runtime_chat_client.inl"
+#include "runtime_audio.inl"
 #endif
 #include "runtime_server_vm.inl"
 #include "runtime_console.inl"
@@ -2629,6 +2631,7 @@ void* ModuleTracker(void*) noexcept {
     g_runtimeClientSpan = clientSpan;
     InstallRuntimeVmInit();
     InstallClientChat(clientBase, clientSpan);
+    InstallCustomAudio(clientBase, clientSpan);
 #endif
 #if defined(NORTHSTAR_PS4_ENABLE_M6_FS_OVERLAY)
     if (fsHandle != static_cast<OrbisKernelModule>(-1)) {

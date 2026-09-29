@@ -452,6 +452,7 @@ __attribute__((naked)) void ConnectUidPick() {
 
 // Defined in runtime_atlas_server.inl.
 void InstallAtlasServer(std::uintptr_t engineBase, std::size_t engineSize) noexcept;
+void RegisterAudioConVars() noexcept; // runtime_audio.inl
 
 void InstallConnectUid(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
     constexpr std::uint8_t pickBytes[] = {0xf6, 0x05, 0xec, 0x00, 0x8c, 0x01, 0x10, 0x48, 0x8d, 0x1d, 0x3d, 0x75, 0x1f,
@@ -555,6 +556,7 @@ void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize
     InstallReloadLocalizationGuard(engineBase, engineSize);
     InstallHostOptions(engineBase, engineSize);
     InstallConnectUid(engineBase, engineSize);
+    RegisterAudioConVars();
     InstallAtlasServer(engineBase, engineSize);
     AllowTextChat();
 }

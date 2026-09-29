@@ -73,6 +73,10 @@ void AddModLocalisationFiles(std::int32_t& total, std::int32_t& loaded) noexcept
 
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 // Called by NSReloadMods on the UI thread after enabledmods.json is saved.
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+void ReloadAudioOverrides() noexcept; // runtime_audio.inl
+#endif
+
 void ReloadModState() noexcept {
     g_modsReloaded = true;
 
@@ -111,6 +115,10 @@ void ReloadModState() noexcept {
             RegisterModConVars(mod, g_modConVarSlot, g_modConVarCvar, g_modConVarFindVar, g_modConVarConstructor);
         }
     }
+
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    ReloadAudioOverrides();
+#endif
 
     uiapi::catalog.clear();
     uiapi::catalogReady = false;
