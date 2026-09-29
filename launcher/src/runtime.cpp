@@ -10,6 +10,8 @@
 #include "northstar_ps4/keyvalues.h"
 #include "northstar_ps4/chat_text.h"
 #include "northstar_ps4/http_request.h"
+#include "northstar_ps4/atlas_server.h"
+#include "northstar_ps4/startup_args.h"
 #include "northstar_ps4/server_list.h"
 #include "northstar_ps4/mod_archive.h"
 #include "northstar_ps4/mod_download.h"
@@ -2080,6 +2082,10 @@ std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noex
 #include "runtime_console.inl"
 #include "runtime_http.inl"
 #include "runtime_http_script.inl"
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+// After the HTTP transport (the Atlas template) and runtime_concommands.inl.
+#include "runtime_atlas_server.inl"
+#endif
 
 // IBaseFileSystem::ReadFile - secondary slot 14, filesystem_stdio+0xc3d0.
 //

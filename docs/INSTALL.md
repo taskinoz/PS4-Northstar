@@ -135,6 +135,22 @@ In the private lobby, **L1 opens Host Options**:
 
 The settings last until the game restarts. To start with duplicate accounts on, put `-allowdupeaccounts` in `ns_startup_args.txt` in the game folder (next to `eboot.bin`, where PC Northstar keeps it; writable under shadPS4) or in guest `/data/northstar_ps4/ns_startup_args.txt` (writable on hardware too).
 
+**On the server browser.** A PS4-hosted match puts itself on Northstar's server list, as a PC-hosted one does (a private match shows up while its lobby is open). This only works if other players can reach your machine:
+- UDP port 37015 must be forwarded on your router to the PC running shadPS4.
+- If your internet provider puts you behind carrier-grade NAT (your router's WAN address starts with `100.64`–`100.127`), port forwarding can't work. Ask the provider for a public address.
+
+Northstar checks the port when the match starts, and doesn't list the match if it can't reach it.
+
+Name the server the way PC servers are named, with launch options in `ns_startup_args.txt`:
+
+```
++ns_server_name "My PS4 server" +ns_server_desc "Casual games" +ns_server_password secret
+```
+
+`+ns_report_server_to_masterserver 0` keeps the match off the list.
+
+Players who join through the server browser are signed in by Northstar, so they are let in even with **Other players** off, as on PC. Their saved progress isn't used on a PS4 host yet: PC and PS4 save data are laid out differently, so they play with default unlocks.
+
 PC players can connect to a PS4 host: it no longer sends the PS4 client module's checksum, which a PC always rejected with "Your .dll [..\bin\x64_retail\client.dll] differs from the server\'s."
 
 ### Text chat

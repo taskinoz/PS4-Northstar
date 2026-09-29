@@ -41,6 +41,13 @@
       }
     },
     {
+      "Path": "ps4_server_presence.nut",
+      "RunOn": "SERVER && MP",
+      "ServerCallback": {
+        "After": "PS4ServerPresence_Init"
+      }
+    },
+    {
       "Path": "ps4_async_calls.nut",
       "RunOn": "UI || CLIENT || SERVER",
       "UICallback": {

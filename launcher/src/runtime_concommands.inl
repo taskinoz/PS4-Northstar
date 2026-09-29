@@ -450,6 +450,9 @@ __attribute__((naked)) void ConnectUidPick() {
         "jmpq *g_connectUidResume(%rip)\n\t");
 }
 
+// Defined in runtime_atlas_server.inl.
+void InstallAtlasServer(std::uintptr_t engineBase, std::size_t engineSize) noexcept;
+
 void InstallConnectUid(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
     constexpr std::uint8_t pickBytes[] = {0xf6, 0x05, 0xec, 0x00, 0x8c, 0x01, 0x10, 0x48, 0x8d, 0x1d, 0x3d, 0x75, 0x1f,
         0x00, 0x48, 0x89, 0xdf, 0x75, 0x19, 0x48, 0x8b, 0x05, 0xe8, 0x00, 0x8c, 0x01, 0x48, 0x8d, 0x3d, 0x84, 0x7c, 0x1f,
@@ -552,5 +555,6 @@ void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize
     InstallReloadLocalizationGuard(engineBase, engineSize);
     InstallHostOptions(engineBase, engineSize);
     InstallConnectUid(engineBase, engineSize);
+    InstallAtlasServer(engineBase, engineSize);
     AllowTextChat();
 }

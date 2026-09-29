@@ -151,16 +151,15 @@ public:
             if (used_ == 64) { Compress(block_); used_ = 0; }
         }
     }
+    // The 32-byte digest.
+    void Finish(std::uint8_t out[32]) {
+        Pad();
+        for (int i = 0; i < 8; ++i)
+            for (int j = 0; j < 4; ++j) out[4 * i + j] = static_cast<std::uint8_t>(state_[i] >> (24 - 8 * j));
+    }
     // Lowercase hex, the form the verified-mods list uses.
     std::string FinishHex() {
-        const std::uint64_t bits = length_ * 8;
-        const std::uint8_t pad = 0x80;
-        Update(&pad, 1);
-        const std::uint8_t zero = 0;
-        while (used_ != 56) Update(&zero, 1);
-        std::uint8_t tail[8];
-        for (int i = 0; i < 8; ++i) tail[i] = static_cast<std::uint8_t>(bits >> (56 - 8 * i));
-        Update(tail, 8);
+        Pad();
         static constexpr char kHex[] = "0123456789abcdef";
         std::string out;
         for (std::uint32_t word : state_)
@@ -169,6 +168,16 @@ public:
     }
 
 private:
+    void Pad() {
+        const std::uint64_t bits = length_ * 8;
+        const std::uint8_t pad = 0x80;
+        Update(&pad, 1);
+        const std::uint8_t zero = 0;
+        while (used_ != 56) Update(&zero, 1);
+        std::uint8_t tail[8];
+        for (int i = 0; i < 8; ++i) tail[i] = static_cast<std::uint8_t>(bits >> (56 - 8 * i));
+        Update(tail, 8);
+    }
     static std::uint32_t Rotr(std::uint32_t x, int n) { return (x >> n) | (x << (32 - n)); }
     void Compress(const std::uint8_t* block) {
         static constexpr std::uint32_t k[64] = {

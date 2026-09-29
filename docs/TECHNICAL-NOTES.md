@@ -4434,3 +4434,89 @@ CLIENT and SERVER after a map load:
 | httpbin.org/status/404 | success callback with 404, as PC |
 | http://127.0.0.1:8080/ | refused, code 0, PC's message |
 
+## Hosted servers on the Atlas server list (2026-09-29)
+
+PC's server presence and Atlas server protocol are ported in `runtime_atlas_server.inl`:
+- `server/serverpresence.cpp`;
+- `masterserver/masterserver.cpp` (MasterServerPresenceReporter and
+  ProcessConnectionlessPacketSigreq1);
+- `server/servernethooks.cpp`.
+
+**Presence.** PC reports from CHostState::FrameUpdate. Here:
+1. Northstar.PS4's `ps4_server_presence.nut` (SERVER && MP) calls
+   `NSPS4_UpdateServerPresence(GetMapName(), GetCurrentPlaylistName(),
+   GetCurrentPlaylistVarInt("max_players", 6), GetPlayerArray().len())` once a second.
+2. A reporter thread takes it from there, as MasterServerPresenceReporter does:
+   - **add_server**: POST with PC's query (`port`=hostport, `authPort=udp`, name,
+     description, map, playlist, maxPlayers, password). `modinfo.json` goes as a multipart
+     part: PC's BuildModInfo over the loaded mods, including each mod's `mod.pdiff` text.
+   - **Retries**: five attempts, a 20 s pause after DUPLICATE_SERVER, and none after an
+     unreadable reply or no connection.
+   - **update_values** every `ns_server_presence_update_rate` ms. Atlas re-creates the
+     entry if it had dropped it, and a returned id and token replace ours.
+   - **remove_server** (DELETE) when the SERVER VM stops reporting for 60 s. That stands
+     in for PC's GameShutdown and covers map changes.
+3. PC's convars are registered: `ns_server_name`, `ns_server_desc`, `ns_server_password`,
+   `ns_report_server_to_masterserver` (1), `ns_report_sp_server_to_masterserver` (0),
+   `ns_server_presence_update_rate` (5000), `net_debug_atlas_packet` and
+   `net_debug_atlas_packet_insecure`.
+4. The name and description get PC's `\uXXXX` unescape.
+5. `+name value` pairs in `ns_startup_args.txt` now set existing convars at startup, as
+   PC's command line does. Password values are not logged.
+
+**Atlas's packets.** Atlas signs requests with HMAC-SHA256 and the server auth token and
+sends them to the game port as 'T' connectionless packets. The hook sits on
+CBaseServer::ProcessConnectionlessPacket:
+- The IConnectionlessPacketHandler vtable is engine+0x3acfb0; slot 2, at engine+0x3acfc0,
+  points to engine+0xe4b40 (PC engine.dll 0x117800). ConnectClient is inlined there, which
+  is why the "Bad challenge." string and the duplicate-account check sit inside it.
+- The packet layout was read from live packets: raw data (with the `ff ff ff ff` header)
+  at +0x18, the bit reader at +0x20 (data base at +0x58), and the size in bytes at +0x60.
+- A 'T' packet never reaches the engine. For `sigreq1` the hook checks the signature in
+  constant time, then a thread handles the `connect` request as PC does:
+  1. It deduplicates the token and reads uid and username.
+  2. It fetches the pdata (GET `/server/connect?serverId&token`), which must be status 200,
+     non-empty and at most 0xDDCD bytes.
+  3. It stores the record and accepts (POST `...&reject=`).
+- HMAC-SHA256 (built on the mod-download SHA-256, now with a raw `Finish`) passes PC's own
+  self-test vector and RFC 4231 cases 2 and 6 (`tests/atlas_server.cpp`).
+
+**Admission.** A client's connect request ('A', written byte-aligned by the engine at
+engine+0x1554c3) holds, in order:
+1. `ff ff ff ff 'A'`;
+2. four 32-bit fields;
+3. the uid (u64 LE);
+4. the name;
+5. `serverfilter`, which is the Atlas token.
+
+When uid and token match an accepted `connect`, the uid is Atlas-authenticated, as PC's
+CheckAuthentication decides. `NSPS4_IsClientAtlasAuthenticated(client)` lets Northstar.PS4's
+host options keep such players with `ns_auth_allow_insecure 0`. Their pdata is not
+installed (PC 231 vs PS4 929 layouts, G02), so they stay READY_INSECURE with script
+placeholder data, and nothing is written back.
+
+**Tested:**
+- **Registration.** Atlas accepted the requests: version gate, parameters and modinfo
+  passed. It then refused them with `NO_GAMESERVER_RESPONSE` ("failed to connect to game
+  port"). This machine is behind carrier-grade NAT (100.64/10); the Windows firewall
+  already allows shadPS4. After five attempts reporting stopped, as on PC.
+- **Reachability.** A local copy of Atlas's `Hconnect` probe (AES-GCM, `r2crypto.go`) sent
+  from the LAN address got the reply Atlas waits for: 'I', the same uid, `connect\0`.
+  With or without Atlas's trailing platform byte. The engine ignores the probe from
+  loopback. So a host with a reachable UDP hostport would pass verification.
+- **Signed requests.** A local `Tsigreq1` packet reached the hook and was refused
+  correctly ("no masterserver token yet").
+- **Connect parsing.** The local client's own connect request parsed with its name. Its
+  token was empty, as a local connect has none.
+- **Startup arguments.** `+ns_server_name "..."`, a description with `\u00e9`, a hidden
+  password and an unknown name were each applied or reported (`tests/startup_args.cpp`).
+- **Not yet seen end to end:** Atlas's real `connect` request and a browser join to a PS4
+  host. That needs a host whose UDP 37015 is reachable.
+
+**Debugging:** `net_debug_atlas_packet 1` logs each connectionless packet's type, each
+Atlas packet and each connect request's parse.
+
+**Boot hang (intermittent).** Twice on 2026-09-29, the first boot of a freshly deployed
+PRX stopped at the Northstar.Custom localisation load, with the log cut mid-line and a
+spinner on screen. The same PRX then booted normally.
+

@@ -183,6 +183,9 @@ int ScriptLocalHttpAllowed(void* vm);
 int RunAsyncCallsUi(void* vm);
 int RunAsyncCallsClient(void* vm);
 int RunAsyncCallsServer(void* vm);
+// Defined in runtime_atlas_server.inl: the hosted server's Atlas presence.
+int UpdateServerPresence(void* vm);
+int IsClientAtlasAuthenticated(void* vm);
 // Defined in runtime_chat_ui.inl, which needs the CLIENT VM's lifecycle state.
 int OpenChatKeyboard(void* vm);
 int UpdateChatKeyboard(void* vm);
@@ -524,6 +527,10 @@ const Registration registrations[] = {
     {"NSPS4_RunAsyncCalls", "void", "", RunAsyncCallsUi, kCtxUi},
     {"NSPS4_RunAsyncCalls", "void", "", RunAsyncCallsClient, kCtxClient},
     {"NSPS4_RunAsyncCalls", "void", "", RunAsyncCallsServer, kCtxServer},
+    // PS4-only, for Northstar.PS4's ps4_server_presence.nut and host options
+    // (runtime_atlas_server.inl).
+    {"NSPS4_UpdateServerPresence", "void", "string map, string playlist, int maxPlayers, int playerCount", UpdateServerPresence, kCtxServer},
+    {"NSPS4_IsClientAtlasAuthenticated", "bool", "int client", IsClientAtlasAuthenticated, kCtxServer},
     {"NSFetchVerifiedModsManifesto", "void", "", FetchVerifiedMods, kCtxAll},
     {"NSIsModDownloadable", "bool", "string name, string version", IsModDownloadable, kCtxAll},
     {"NSDownloadMod", "void", "string name, string version", DownloadMod, kCtxAll},

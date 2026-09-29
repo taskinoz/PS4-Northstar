@@ -29,7 +29,7 @@ void function PS4HostOptions_Open( var button )
 	DialogData dialogData
 	dialogData.header = "Host Options"
 	dialogData.message = "These apply to matches you host.\n\n"
-		+ "Other players: anyone can join while this is on. A PS4 host can't check Northstar sign-ins, so with it off only you can play.\n\n"
+		+ "Other players: anyone can join while this is on. With it off, only you and players who join through the server browser can play.\n\n"
 		+ "Same account on several machines: lets players signed in with the same account join (PC's -allowdupeaccounts)."
 	AddDialogButton( dialogData, "Other players: " + PS4HostOptions_State( "ns_auth_allow_insecure" ), PS4HostOptions_ToggleInsecure )
 	AddDialogButton( dialogData, "Same account on several machines: " + PS4HostOptions_State( "ns_allow_duplicate_accounts" ), PS4HostOptions_ToggleDuplicates )
