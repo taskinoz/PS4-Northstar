@@ -4856,3 +4856,11 @@ Against Northstar.Custom's real double-barrel shotgun archive it reports 18 text
 PC-linear and none PS4-swizzled. This establishes that existing weapon-skin archives need a
 texture-data conversion/rebuild; renaming or only changing the header marker is not sufficient.
 
+**Playlist variable overrides.** The stock PS4 SERVER native at server+0x6cd2e0 identifies
+the engine-server interface operation: vtable slot 72 is engine+0x2d9120, a thunk to
+engine+0x1491d0 `SetPlaylistVarOverride(name, value)`. `setplaylistvaroverrides` now mirrors
+Northstar's multi-pair command and guards the retail table's 64-entry capacity plus its fixed
+128-byte name and 64-byte value buffers. The setter's six-byte pre-map conditional is NOPed,
+matching PC Northstar's ability to stage overrides before map initialization. It is
+build-verified but has not yet been invoked in a live private match.
+

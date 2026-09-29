@@ -28,6 +28,11 @@
 // 0x50020000 = SERVER_CAN_EXECUTE | CLIENTCMD_CAN_EXECUTE | DONTRECORD).
 constexpr std::uintptr_t kConCommandConstructorVa = 0x204e60;
 constexpr std::uintptr_t kSetCurrentPlaylistVa = 0x14a3a0;
+// server.prx's SetPlaylistVarOverride native (server+0x6cd2e0) calls slot 72
+// of the engine-server interface. The engine vtable slot is a thunk at
+// engine+0x2d9120, which forwards its two string arguments here.
+constexpr std::uintptr_t kSetPlaylistVarOverrideVa = 0x1491d0;
+constexpr std::uintptr_t kPlaylistOverrideCountVa = 0x471be38;
 constexpr int kFcvarNone = 0;
 constexpr int kFcvarServerCanExecute = 1 << 28;
 
@@ -43,8 +48,11 @@ static_assert(offsetof(CCommandView, argv) == 0x410, "CCommand layout");
 using ConCommandCallbackFn = void (*)(const CCommandView*);
 using ConCommandConstructorFn = void (*)(void*, const char*, ConCommandCallbackFn, const char*, int, void*);
 using SetCurrentPlaylistFn = bool (*)(const char*);
+using SetPlaylistVarOverrideFn = void (*)(const char*, const char*);
 
 SetCurrentPlaylistFn g_setCurrentPlaylist = nullptr;
+SetPlaylistVarOverrideFn g_setPlaylistVarOverride = nullptr;
+std::uint64_t* g_playlistOverrideCount = nullptr;
 
 // `tdm` is what both roads to the local lobby set before `map mp_lobby`: the
 // leave-to-lobby command and "Launch Northstar". The local server takes its
@@ -97,6 +105,29 @@ bool SetPlaylist(const char* name) noexcept {
 void ConCommandSetPlaylist(const CCommandView* args) {
     if (args->argc < 2) return;
     SetPlaylist(args->argv[1]);
+}
+
+// PC Northstar's command accepts one or more name/value pairs. The retail
+// setter uses a fixed table of 64 entries and fixed 128/64-byte strings; its
+// full-table path calls Error, so validate all three limits before entering
+// it. An odd final argument is ignored instead of manufacturing an empty
+// value from outside CCommand's argv array.
+void ConCommandSetPlaylistVarOverrides(const CCommandView* args) {
+    if (!g_setPlaylistVarOverride || !g_playlistOverrideCount || args->argc < 3) return;
+    for (std::int64_t i = 1; i + 1 < args->argc; i += 2) {
+        const char* name = args->argv[i];
+        const char* value = args->argv[i + 1];
+        if (!name || !value || std::strlen(name) >= 128 || std::strlen(value) >= 64) {
+            LogFormat("[NorthstarPS4] playlist override refused: invalid name/value length\n");
+            continue;
+        }
+        if (*g_playlistOverrideCount >= 64) {
+            LogFormat("[NorthstarPS4] playlist override refused: table full\n");
+            break;
+        }
+        g_setPlaylistVarOverride(name, value);
+        LogFormat("[NorthstarPS4] playlist override: %s=%s\n", name, value);
+    }
 }
 
 // PC's pair is ns_start_reauth_and_leave_to_lobby, which authenticates with the
@@ -514,20 +545,43 @@ void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize
         0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53, 0x50,
         0x49, 0x89, 0xfe, 0x41, 0x80, 0x3e, 0x00, 0x0f, 0x84, 0xf1, 0x00, 0x00, 0x00,
     };
+    constexpr std::uint8_t playlistOverrideBytes[] = {
+        0x41, 0x56, 0x53, 0x83, 0x3d, 0xae, 0xf4, 0x6c, 0x03, 0x02,
+        0x49, 0x89, 0xf3, 0x49, 0x89, 0xfe, 0x0f, 0x8c, 0xed, 0x00, 0x00, 0x00,
+    };
     if (!ValidateEnginePreimage(engineBase, engineSize, kConCommandConstructorVa + 0x14,
             constructorBytes, sizeof(constructorBytes)) ||
         !ValidateEnginePreimage(engineBase, engineSize, kSetCurrentPlaylistVa,
-            playlistBytes, sizeof(playlistBytes))) {
+            playlistBytes, sizeof(playlistBytes)) ||
+        !ValidateEnginePreimage(engineBase, engineSize, kSetPlaylistVarOverrideVa,
+            playlistOverrideBytes, sizeof(playlistOverrideBytes))) {
         LogFormat("[NorthstarPS4] native concommands refused: engine profile mismatch\n");
         return;
     }
     g_setCurrentPlaylist = reinterpret_cast<SetCurrentPlaylistFn>(engineBase + kSetCurrentPlaylistVa);
+    g_setPlaylistVarOverride = reinterpret_cast<SetPlaylistVarOverrideFn>(
+        engineBase + kSetPlaylistVarOverrideVa);
+    g_playlistOverrideCount = reinterpret_cast<std::uint64_t*>(
+        engineBase + kPlaylistOverrideCountVa);
+    // As on PC Northstar, allow overrides to be staged before map init. The
+    // skipped retail branch sends the pair through an initialization-only
+    // fallback instead of adding it to the override table.
+    const std::uint8_t overrideBeforeMapNops[6] = {0x90, 0x90, 0x90, 0x90, 0x90, 0x90};
+    if (!WriteEngineCode(engineBase + kSetPlaylistVarOverrideVa + 0x10,
+            overrideBeforeMapNops, sizeof(overrideBeforeMapNops))) {
+        LogFormat("[NorthstarPS4] playlist override setup failed: mprotect\n");
+        g_setPlaylistVarOverride = nullptr;
+        g_playlistOverrideCount = nullptr;
+        return;
+    }
     auto construct = reinterpret_cast<ConCommandConstructorFn>(engineBase + kConCommandConstructorVa);
 
     struct Definition { const char* name; ConCommandCallbackFn callback; const char* help; int flags; };
     static const Definition definitions[] = {
         {"playlist", ConCommandSetPlaylist, "Sets the current playlist", kFcvarNone},
         {"setplaylist", ConCommandSetPlaylist, "Sets the current playlist", kFcvarNone},
+        {"setplaylistvaroverrides", ConCommandSetPlaylistVarOverrides,
+            "Sets one or more playlist variable overrides", kFcvarNone},
         {"ns_start_reauth_and_leave_to_lobby", ConCommandLeaveToLobby,
             "called by the server, used to reauth and return the player to lobby when leaving a game",
             kFcvarServerCanExecute},
