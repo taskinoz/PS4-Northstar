@@ -4593,7 +4593,18 @@ Writes are **off** until installed saves have been seen to read correctly in gam
 `ns_ps4_write_remote_persistence` (default 0) gates them, and while it is off the host logs
 what it would have written.
 
-**Tested so far:** the host's own disconnect goes through the detour and hosting resumes,
-and all hooks install. A remote player's install is next, with PC players joining the
-listed lobby.
+**Tested:**
+- **The detour.** The host's own disconnect goes through it and hosting resumes.
+- **Late install fails.** The first install came at the slot's first persistence check,
+  after the client had been sent its data. The engine only sends script changes after
+  that, so the PC kept zeros and stopped at `sh_loadouts.nut` IsTitanClassPrime:
+  "Execution reached script marked as unreachable".
+- **Install at connect works.** The install now happens right after the engine has
+  handled the connect request that carried the player's token (the slot is at signon 2),
+  as PC does in CBaseClient::Connect. It is installed again if the engine resets the slot.
+  With that, a PC player joined and confirmed their progress loaded.
+- **Connect retries.** A client that retries its connect request is disconnected and
+  connected again with nothing played. So a write goes out only when the save differs
+  from what was last received or written, and it logs how many bytes changed.
+- **Writes are still off** (`ns_ps4_write_remote_persistence 0`).
 

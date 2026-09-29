@@ -246,7 +246,20 @@ bool WriteRemoteSave(int client, const char* reason, bool keep) noexcept {
         LogFormat("[NorthstarPS4] client #%d: not writing pdata (%s): the buffer no longer holds a layout-231 save\n",
             client, reason);
     } else {
-        g_writeRemotePdata(save.uid, out, reason);
+        // Only what changed since the save was received or last written: a
+        // client that retries its connect request is disconnected and
+        // connected again with nothing played, and its unchanged save need not
+        // go back (nor overtake a newer write).
+        std::size_t changed = 0;
+        for (std::size_t i = 0; i < out.size(); ++i)
+            if (i >= save.pdata.size() || out[i] != save.pdata[i]) ++changed;
+        if (changed == 0 && out.size() == save.pdata.size()) {
+            LogFormat("[NorthstarPS4] client #%d: pdata unchanged (%s), nothing to write\n", client, reason);
+        } else {
+            LogFormat("[NorthstarPS4] client #%d: pdata has %zu changed bytes (%s)\n", client, changed, reason);
+            g_writeRemotePdata(save.uid, out, reason);
+            save.pdata = out;
+        }
     }
     if (!keep) {
         save.installed = false;
