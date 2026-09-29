@@ -39,7 +39,11 @@
 // linear blocks, while retail PS4 texture headers carry platform byte 8 and
 // Morton-swizzled blocks. Leave loading off until a clean boot reaches asset
 // creation and the required conversion/material differences are established.
+#if defined(NORTHSTAR_PS4_ENABLE_EXPERIMENTAL_RPAKS)
+constexpr bool kModRpakLoadingEnabled = true;
+#else
 constexpr bool kModRpakLoadingEnabled = false;
+#endif
 constexpr std::uintptr_t kRtechLoadPakVa = 0x76f0;
 constexpr std::uintptr_t kRtechLoadPakCallSites[] = {0x78c0, 0x7ed1};
 constexpr std::uintptr_t kRtechOpenFileVa = 0x0a90;

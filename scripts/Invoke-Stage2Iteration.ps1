@@ -21,6 +21,8 @@ param(
     [switch]$EnableM6ScriptInject,
     [switch]$EnableM6ScriptInjectFromMods,
     [switch]$EnableM6Localise,
+    [switch]$EnableRuntimeManifest,
+    [switch]$EnableExperimentalRpaks,
     [switch]$SkipR2ModStage
 )
 
@@ -43,7 +45,7 @@ foreach ($required in @($ShadPs4Exe, $eboot)) {
 }
 
 if (-not $SkipBuild) {
-    & (Join-Path $PSScriptRoot 'Build-Stage2Poc.ps1') -EnableDiagnosticConVar:$EnableDiagnosticConVar -EnableTeamChangesConVar:$EnableTeamChangesConVar -EnableDiagnosticUiNative:$EnableDiagnosticUiNative -EnableM6FsOverlay:$EnableM6FsOverlay -EnableM6ModMetadata:$EnableM6ModMetadata -EnableM6ScriptProbe:$EnableM6ScriptProbe -EnableM6ScriptInject:$EnableM6ScriptInject -EnableM6ScriptInjectFromMods:$EnableM6ScriptInjectFromMods -EnableM6Localise:$EnableM6Localise
+    & (Join-Path $PSScriptRoot 'Build-Stage2Poc.ps1') -EnableDiagnosticConVar:$EnableDiagnosticConVar -EnableTeamChangesConVar:$EnableTeamChangesConVar -EnableDiagnosticUiNative:$EnableDiagnosticUiNative -EnableM6FsOverlay:$EnableM6FsOverlay -EnableM6ModMetadata:$EnableM6ModMetadata -EnableM6ScriptProbe:$EnableM6ScriptProbe -EnableM6ScriptInject:$EnableM6ScriptInject -EnableM6ScriptInjectFromMods:$EnableM6ScriptInjectFromMods -EnableM6Localise:$EnableM6Localise -EnableRuntimeManifest:$EnableRuntimeManifest -EnableExperimentalRpaks:$EnableExperimentalRpaks
     if (-not $?) { throw 'Stage 2 build failed.' }
 }
 if (-not $SkipDeploy) {

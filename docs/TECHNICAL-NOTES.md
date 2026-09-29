@@ -4841,3 +4841,11 @@ PRX was immediately rebuilt/deployed with the loader disabled. A clean emulator 
 needed before deciding whether the PS4 engine rejects PC texture headers directly or reaches
 rendering with bad layout. The safe gate remains off.
 
+For the next isolated run, no source edit is needed:
+
+    .\scripts\Invoke-Stage2Iteration.ps1 -EnableRuntimeManifest -EnableExperimentalRpaks `
+        -SuccessPattern '\[NorthstarPS4\] UI lifecycle completed' -TimeoutSeconds 150
+
+`EnableExperimentalRpaks` is recorded in `northstar_ps4.build.json`. Ordinary builds omit the
+define and keep the loader disabled.
+

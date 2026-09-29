@@ -11,11 +11,13 @@ param(
     [switch] $EnableM6ScriptInject,
     [switch] $EnableM6ScriptInjectFromMods,
     [switch] $EnableRuntimeManifest,
+    [switch] $EnableExperimentalRpaks,
     [switch] $EnableM6Localise
 )
 $ErrorActionPreference = 'Stop'
 if ($EnableRuntimeManifest) { $EnableM6FsOverlay = $true }
 if ($EnableM6FsOverlay -or $EnableM6Localise) { $EnableM6ModMetadata = $true }
+if ($EnableExperimentalRpaks) { $EnableM6ModMetadata = $true }
 if ($EnableM6ScriptInjectFromMods -and -not ($EnableM6ScriptProbe -and $EnableM6ScriptInject -and $EnableM6ModMetadata -and $EnableM6FsOverlay)) {
     throw 'Real mod script injection requires metadata, filesystem overlay, script probe and script injection flags.'
 }
@@ -79,6 +81,7 @@ if ($EnableM6Localise) {
     $runtimeCompileArgs = @('-DNORTHSTAR_PS4_ENABLE_M6_LOCALISE=1') + $runtimeCompileArgs
 }
 if ($EnableRuntimeManifest) { $runtimeCompileArgs = @('-DNORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST=1') + $runtimeCompileArgs }
+if ($EnableExperimentalRpaks) { $runtimeCompileArgs = @('-DNORTHSTAR_PS4_ENABLE_EXPERIMENTAL_RPAKS=1') + $runtimeCompileArgs }
 & $clang @runtimeCompileArgs
 if ($LASTEXITCODE) { throw "OpenOrbis runtime compile failed: $LASTEXITCODE" }
 $linkArgs = @('-m','elf_x86_64','-pie','--script',(Join-Path $sourceRoot 'link.x'),'--eh-frame-hdr','-L',(Join-Path $toolchainRoot 'lib'),$object,$runtimeObject,'-lc','-lc++','-lkernel','-lSceNet','-lSceSsl','-lSceHttp','-lSceImeDialog','-lSceUserService',(Join-Path $toolchainRoot 'lib\crtlib.o'),'-o',$elf)
@@ -123,11 +126,12 @@ $buildInfo = [ordered]@{
     schemaVersion = 1
     prxSha256 = (Get-FileHash -LiteralPath $prx -Algorithm SHA256).Hash.ToLowerInvariant()
     runtimeManifest = [bool]$EnableRuntimeManifest
+    experimentalRpaks = [bool]$EnableExperimentalRpaks
     filesystemOverrides = [bool]$EnableM6FsOverlay
     lateScriptInjection = [bool]$EnableM6ScriptInject
     authentication = 'atlas-imported-identity'
     fullNorthstarCompatibility = $false
-    knownBlocker = 'Atlas identity imported from a PC Northstar client (Export-AtlasCredentials.ps1); server browser and joining work, and the PS4 can host private matches (SERVER VM hooked). Runs on shadPS4 nightly 2b5666b3 (2026-09-25). Builds before ca89b01 crash when leaving a loaded map; builds from c6fa48c7 (#5110) on render matches black. Enable the pipeline cache for CUSA04013, or remote matches can time out while shaders compile after a map load. Mod rpak loading is implemented but disabled: the shipped mod paks are PC builds and stall the boot.'
+    knownBlocker = 'Atlas identity imported from a PC Northstar client (Export-AtlasCredentials.ps1); server browser and joining work, and the PS4 can host private matches (SERVER VM hooked). Runs on shadPS4 nightly 2b5666b3 (2026-09-25). Builds before ca89b01 crash when leaving a loaded map; builds from c6fa48c7 (#5110) on render matches black. Enable the pipeline cache for CUSA04013, or remote matches can time out while shaders compile after a map load. Mod rpak loading is experimental and disabled by default: streamed-data redirection is implemented, but PC texture layout compatibility has not been verified on PS4.'
 }
 $buildInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputRoot 'northstar_ps4.build.json') -Encoding UTF8
 [pscustomobject]@{ File=$file.FullName; Bytes=$file.Length; SHA256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); Toolchain=$toolchainRoot }

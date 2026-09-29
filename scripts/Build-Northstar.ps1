@@ -3,6 +3,7 @@ param(
     [string] $Toolchain = (Join-Path $PSScriptRoot '..\tools\openorbis-0.5.4\OpenOrbis\PS4Toolchain'),
     [string] $Output = (Join-Path $PSScriptRoot '..\dist\northstar-ps4'),
     [switch] $EnableRuntimeManifest,
+    [switch] $EnableExperimentalRpaks,
     [switch] $EnableExperimentalScriptLoading
 )
 $ErrorActionPreference = 'Stop'
@@ -15,6 +16,7 @@ $options = @{
     EnableM6ModMetadata = $true
     EnableM6Localise = $true
     EnableRuntimeManifest = $EnableRuntimeManifest
+    EnableExperimentalRpaks = $EnableExperimentalRpaks
 }
 if ($EnableExperimentalScriptLoading) {
     $options.EnableM6ScriptProbe = $true
