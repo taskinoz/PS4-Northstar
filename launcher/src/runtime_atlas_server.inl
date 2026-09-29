@@ -466,33 +466,44 @@ void HandleAtlasPacket(const std::uint8_t* data, std::size_t size) {
 
 // PC: the token/uid half of CheckAuthentication, at the client's connect
 // request, before the engine sees it.
-void NoteConnectRequest(const std::uint8_t* data, std::size_t size) {
+// Returns the uid and pdata of a request whose token matched, for the install
+// once the engine has made the slot.
+bool NoteConnectRequest(const std::uint8_t* data, std::size_t size, std::uint64_t& matchedUid, std::string& matchedPdata) {
     atlas::ConnectRequest request;
     const bool parsed = atlas::ParseConnectRequest(data, size, request);
     if (ConVarInt(g_debugAtlasPacket, 0))
         LogFormat("[NorthstarPS4] connect request parsed=%d name=%s strings=%zu\n", parsed ? 1 : 0,
             parsed ? request.name.c_str() : "", request.strings.size());
-    if (!parsed) return;
+    if (!parsed) return false;
     Lock lock;
     for (const auto& record : g_records) {
         if (record.uid == request.uid && !record.token.empty() && request.HasString(record.token)) {
-            if (!record.pdata.empty()) {
-                bool replaced = false;
-                for (auto& pending : g_pendingPdata)
-                    if (pending.first == request.uid) {
-                        pending.second = record.pdata;
-                        replaced = true;
-                    }
-                if (!replaced) g_pendingPdata.emplace_back(request.uid, record.pdata);
-                if (g_pendingPdata.size() > kMaxPdataRecords) g_pendingPdata.erase(g_pendingPdata.begin());
-            }
+            matchedUid = request.uid;
+            matchedPdata = record.pdata;
+            bool known = false;
             for (auto uid : g_authenticatedUids)
-                if (uid == request.uid) return;
-            g_authenticatedUids.push_back(request.uid);
-            if (g_authenticatedUids.size() > kMaxRecords) g_authenticatedUids.erase(g_authenticatedUids.begin());
-            return;
+                if (uid == request.uid) known = true;
+            if (!known) {
+                g_authenticatedUids.push_back(request.uid);
+                if (g_authenticatedUids.size() > kMaxRecords) g_authenticatedUids.erase(g_authenticatedUids.begin());
+            }
+            return !matchedPdata.empty();
         }
     }
+    return false;
+}
+
+// When the slot could not be found at connect, the pdata waits for the slot's
+// first persistence check instead (TakeRemotePdata).
+void KeepPendingPdata(std::uint64_t uid, std::string pdata) {
+    Lock lock;
+    for (auto& pending : g_pendingPdata)
+        if (pending.first == uid) {
+            pending.second = std::move(pdata);
+            return;
+        }
+    g_pendingPdata.emplace_back(uid, std::move(pdata));
+    if (g_pendingPdata.size() > kMaxPdataRecords) g_pendingPdata.erase(g_pendingPdata.begin());
 }
 
 bool TakeRemotePdata(std::uint64_t uid, std::string& pdata) noexcept {
@@ -578,7 +589,15 @@ bool RuntimeConnectionlessPacket(void* self, void* packet) noexcept {
             HandleAtlasPacket(data, static_cast<std::size_t>(size));
             return false;
         }
-        if (data[4] == 'A') NoteConnectRequest(data, static_cast<std::size_t>(size));
+        if (data[4] == 'A') {
+            std::uint64_t uid = 0;
+            std::string pdata;
+            const bool matched = NoteConnectRequest(data, static_cast<std::size_t>(size), uid, pdata);
+            const bool result = g_originalConnectionless(self, packet);
+            // PC: AuthenticatePlayer in CBaseClient::Connect, before signon.
+            if (matched && !InstallRemoteSaveAtConnect(uid, pdata)) KeepPendingPdata(uid, std::move(pdata));
+            return result;
+        }
     }
     return g_originalConnectionless(self, packet);
 }

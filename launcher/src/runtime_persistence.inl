@@ -138,9 +138,49 @@ struct RemoteSave {
     bool installed = false;
     std::uint64_t uid = 0;
     std::string trailing;
+    std::string pdata;  // as received, to install again if the engine resets the slot
 };
 RemoteSave g_remoteSaves[kMaxRemoteSaveSlots];
 char* ClientSlot(int client) noexcept;  // below, with the UID code
+
+void InstallRemoteSave(int client, char* slot, std::uint64_t uid, const std::string& pdata) noexcept {
+    auto& save = g_remoteSaves[client];
+    save.trailing = pdata::InstallFromPc(pdata, reinterpret_cast<std::uint8_t*>(slot + kClientPersistenceBufferOffset));
+    save.uid = uid;
+    if (&save.pdata != &pdata) save.pdata = pdata;
+    save.installed = true;
+    *reinterpret_cast<std::int32_t*>(slot + kClientPersistenceReadyOffset) = kPersistenceReadyRemote;
+}
+
+// PC installs the pdata in CBaseClient::Connect, before signon, so the client
+// receives it with its first persistence data. The engine only sends script
+// changes after that, so data written into the buffer later never reaches the
+// client (a PC saw its own loadouts as zeros and stopped in sh_loadouts.nut
+// IsTitanClassPrime). Called by runtime_atlas_server.inl right after the
+// engine has handled the connect request that carried the player's token:
+// the slot holding that uid is the one just connected.
+bool InstallRemoteSaveAtConnect(std::uint64_t uid, const std::string& pdata) noexcept {
+    const auto engine = g_engineBaseForPersistence;
+    if (!engine) return false;
+    if (!pdata::CanInstall(pdata)) {
+        LogFormat("[NorthstarPS4] Atlas pdata for uid %llu not installable (%zu bytes)\n",
+            static_cast<unsigned long long>(uid), pdata.size());
+        return false;
+    }
+    const int count = *reinterpret_cast<const std::int32_t*>(engine + kEngineClientCountVa);
+    for (int client = 0; client < count && client < kMaxRemoteSaveSlots; ++client) {
+        char* slot = reinterpret_cast<char*>(engine + kEngineClientArrayVa) + static_cast<std::size_t>(client) * kEngineClientStride;
+        if (*reinterpret_cast<const std::uint64_t*>(slot + kClientConnectUidOffset) != uid ||
+            *reinterpret_cast<const std::uint8_t*>(slot + kClientFakePlayerOffset) != 0 ||
+            *reinterpret_cast<const std::int32_t*>(slot + kClientSignonStateOffset) < 1)
+            continue;
+        InstallRemoteSave(client, slot, uid, pdata);
+        LogFormat("[NorthstarPS4] client #%d persistence installed from Atlas at connect (%zu bytes, READY_REMOTE, signon %d)\n",
+            client, pdata.size(), *reinterpret_cast<const std::int32_t*>(slot + kClientSignonStateOffset));
+        return true;
+    }
+    return false;
+}
 
 bool RuntimePersistenceAvailable(void* self, int client) noexcept {
     const auto engine = g_engineBaseForPersistence;
@@ -159,16 +199,18 @@ bool RuntimePersistenceAvailable(void* self, int client) noexcept {
             const auto uid = *reinterpret_cast<const std::uint64_t*>(slot + kClientConnectUidOffset);
             const bool fake = *reinterpret_cast<const std::uint8_t*>(slot + kClientFakePlayerOffset) != 0;
             std::string pdata;
+            // Installed at connect, but the engine reset the slot since.
+            if (!fake && client < kMaxRemoteSaveSlots && g_remoteSaves[client].installed &&
+                g_remoteSaves[client].uid == uid && !g_remoteSaves[client].pdata.empty()) {
+                InstallRemoteSave(client, slot, uid, g_remoteSaves[client].pdata);
+                LogFormat("[NorthstarPS4] client #%d persistence installed again from Atlas (the engine reset the slot)\n", client);
+                return g_originalPersistenceAvailable(self, client);
+            }
             if (!fake && client < kMaxRemoteSaveSlots && g_takeRemotePdata && g_takeRemotePdata(uid, pdata)) {
                 if (pdata::CanInstall(pdata)) {
-                    auto& save = g_remoteSaves[client];
-                    save.trailing = pdata::InstallFromPc(pdata,
-                        reinterpret_cast<std::uint8_t*>(slot + kClientPersistenceBufferOffset));
-                    save.uid = uid;
-                    save.installed = true;
-                    *ready = kPersistenceReadyRemote;
-                    LogFormat("[NorthstarPS4] client #%d persistence installed from Atlas (%zu bytes, READY_REMOTE)\n",
-                        client, pdata.size());
+                    InstallRemoteSave(client, slot, uid, pdata);
+                    LogFormat("[NorthstarPS4] client #%d persistence installed from Atlas late (%zu bytes, READY_REMOTE); "
+                        "the client may not receive it\n", client, pdata.size());
                     return g_originalPersistenceAvailable(self, client);
                 }
                 LogFormat("[NorthstarPS4] client #%d: Atlas pdata not installable (%zu bytes, version %d)\n", client,
@@ -206,7 +248,11 @@ bool WriteRemoteSave(int client, const char* reason, bool keep) noexcept {
     } else {
         g_writeRemotePdata(save.uid, out, reason);
     }
-    if (!keep) save.installed = false;
+    if (!keep) {
+        save.installed = false;
+        save.pdata.clear();
+        save.pdata.shrink_to_fit();
+    }
     return !out.empty();
 }
 
