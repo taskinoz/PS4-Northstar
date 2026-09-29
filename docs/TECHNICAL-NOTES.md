@@ -4606,5 +4606,14 @@ what it would have written.
 - **Connect retries.** A client that retries its connect request is disconnected and
   connected again with nothing played. So a write goes out only when the save differs
   from what was last received or written, and it logs how many bytes changed.
-- **Writes are still off** (`ns_ps4_write_remote_persistence 0`).
+- **Writes, first test.** With `+ns_ps4_write_remote_persistence 1` (startup args) and
+  the player's consent:
+  - Connect retries logged "pdata unchanged (disconnect), nothing to write", as did the
+    map change into the match.
+  - Two matches produced writes of 162 and 104 changed bytes. Both went out as full
+    56,306-byte saves and got status 200 from Atlas.
+  - On PC the player's end-of-match summary showed the PS4-hosted match with its merits
+    and credits applied (Skirmish on Forwardbase Kodai, 1 kill, victory). That summary is
+    read from the saved pdata.
+- **The default stays 0** until more sessions have gone through. PC writes always.
 
