@@ -4849,3 +4849,10 @@ For the next isolated run, no source edit is needed:
 `EnableExperimentalRpaks` is recorded in `northstar_ps4.build.json`. Ordinary builds omit the
 define and keep the loader disabled.
 
+The v7 archive inspector now walks the slab/page/asset tables with bounds checks and reports
+each texture header's platform marker before an experimental load. It refuses compressed and
+patch archives, whose page pointers cannot be interpreted without decoding or the base pak.
+Against Northstar.Custom's real double-barrel shotgun archive it reports 18 textures, all 18
+PC-linear and none PS4-swizzled. This establishes that existing weapon-skin archives need a
+texture-data conversion/rebuild; renaming or only changing the header marker is not sufficient.
+

@@ -120,6 +120,32 @@ int main(int argc, char** argv) {
     assert(!ParseRpakStarpakReferences(traversal.data(), traversal.size(), references));
     assert(!ParseRpakStarpakReferences("bad", 3, references));
 
+    // --- bounded texture-platform inspection -------------------------------
+    // One slab, one page and one txtr descriptor. The texture header starts
+    // at page offset zero and carries the PS4 layout marker at +0x1c.
+    std::string texturePak(0x58, '\0');
+    std::memcpy(texturePak.data(), "RPak", 4);
+    texturePak[4] = 7;
+    texturePak[0x3a] = 1;  // slab count
+    texturePak[0x3c] = 1;  // page count
+    texturePak[0x44] = 1;  // asset count
+    texturePak.resize(0x58 + 16 + 12 + 72 + 0x38, '\0');
+    const std::size_t pageHeader = 0x58 + 16;
+    texturePak[pageHeader + 8] = 0x38;
+    const std::size_t assetHeader = pageHeader + 12;
+    texturePak[assetHeader + 60] = 0x38;
+    std::memcpy(texturePak.data() + assetHeader + 68, "txtr", 4);
+    const std::size_t textureHeader = assetHeader + 72;
+    texturePak[textureHeader + 0x1c] = 8;
+    RpakTexturePlatforms platforms;
+    assert(InspectRpakTexturePlatforms(texturePak.data(), texturePak.size(), platforms));
+    assert(platforms.textures == 1 && platforms.pc == 0 && platforms.ps4 == 1 && platforms.other == 0);
+    texturePak[textureHeader + 0x1c] = 0;
+    assert(InspectRpakTexturePlatforms(texturePak.data(), texturePak.size(), platforms));
+    assert(platforms.textures == 1 && platforms.pc == 1 && platforms.ps4 == 0);
+    texturePak.resize(texturePak.size() - 1);
+    assert(!InspectRpakTexturePlatforms(texturePak.data(), texturePak.size(), platforms));
+
     std::puts("rpak config tests passed.");
 
     // --- the real shipped config, when this test is given it ----------------
@@ -151,6 +177,12 @@ int main(int argc, char** argv) {
         }
         std::printf("rpak live-stream check passed: %zu reference(s), first=%s\n",
             references.size(), references[0].c_str());
+        if (!InspectRpakTexturePlatforms(livePak.data(), livePak.size(), platforms)) {
+            std::fprintf(stderr, "live-rpak check: could not inspect texture platforms in %s\n", argv[2]);
+            return 1;
+        }
+        std::printf("rpak live-texture check passed: textures=%zu pc=%zu ps4=%zu other=%zu\n",
+            platforms.textures, platforms.pc, platforms.ps4, platforms.other);
     }
     return 0;
 }

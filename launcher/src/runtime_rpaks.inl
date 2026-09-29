@@ -97,6 +97,27 @@ bool ReadRpakStarpaks(const std::string& path, std::vector<std::string>& referen
     return bodyRead && ParseRpakStarpakReferences(bytes.data(), bytes.size(), references);
 }
 
+bool ReadRpakTexturePlatforms(const std::string& path, RpakTexturePlatforms& platforms) {
+    platforms = {};
+    FILE* file = std::fopen(path.c_str(), "rb");
+    if (!file) return false;
+    constexpr long kInspectionLimit = 64L * 1024L * 1024L;
+    if (std::fseek(file, 0, SEEK_END) != 0) {
+        std::fclose(file);
+        return false;
+    }
+    const long length = std::ftell(file);
+    if (length < 0 || length > kInspectionLimit || std::fseek(file, 0, SEEK_SET) != 0) {
+        std::fclose(file);
+        return false;
+    }
+    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(length));
+    const bool read = bytes.empty() ||
+        std::fread(bytes.data(), 1, bytes.size(), file) == bytes.size();
+    std::fclose(file);
+    return read && InspectRpakTexturePlatforms(bytes.data(), bytes.size(), platforms);
+}
+
 void DiscoverModRpaks() {
     g_modRpaks.clear();
     g_modStarpaks.clear();
@@ -150,6 +171,15 @@ void DiscoverModRpaks() {
                     mods.names[i], name.c_str());
                 g_modRpaks.pop_back();
                 continue;
+            }
+            RpakTexturePlatforms platforms;
+            if (ReadRpakTexturePlatforms(rpakPath, platforms)) {
+                LogFormat("[NorthstarPS4] mod rpak textures: %s total=%zu pc=%zu ps4=%zu other=%zu%s\n",
+                    name.c_str(), platforms.textures, platforms.pc, platforms.ps4, platforms.other,
+                    platforms.pc ? " conversion-required" : "");
+            } else {
+                LogFormat("[NorthstarPS4] mod rpak texture inspection unavailable: %s\n",
+                    name.c_str());
             }
             for (const auto& reference : references) {
                 RuntimeModStarpak stream;

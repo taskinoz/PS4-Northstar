@@ -201,6 +201,107 @@ inline bool ParseRpakStarpakReferences(const void* bytes, std::size_t size,
     return begin == referenceSize;
 }
 
+struct RpakTexturePlatforms {
+    std::size_t textures = 0;
+    std::size_t pc = 0;
+    std::size_t ps4 = 0;
+    std::size_t other = 0;
+};
+
+inline std::uint16_t RpakReadU16(const std::uint8_t* data) {
+    return static_cast<std::uint16_t>(data[0]) |
+        (static_cast<std::uint16_t>(data[1]) << 8);
+}
+
+inline std::uint32_t RpakReadU32(const std::uint8_t* data) {
+    return static_cast<std::uint32_t>(data[0]) |
+        (static_cast<std::uint32_t>(data[1]) << 8) |
+        (static_cast<std::uint32_t>(data[2]) << 16) |
+        (static_cast<std::uint32_t>(data[3]) << 24);
+}
+
+inline bool RpakAdvance(std::size_t& cursor, std::size_t count,
+    std::size_t stride, std::size_t size) {
+    if (cursor > size) return false;
+    if (stride && count > (size - cursor) / stride) return false;
+    cursor += count * stride;
+    return true;
+}
+
+// Inspect an uncompressed Titanfall 2 v7 archive without following any of its
+// pointers outside the supplied buffer. Texture header byte +0x1c is the
+// platform/layout marker written by RePak: 0 for PC linear blocks and 8 for
+// PS4 Morton-swizzled blocks. Compressed and patch archives are deliberately
+// refused; they need decoding/base-pak resolution before page pointers mean
+// file offsets.
+inline bool InspectRpakTexturePlatforms(const void* bytes, std::size_t size,
+    RpakTexturePlatforms& result) {
+    result = {};
+    constexpr std::size_t kHeaderSize = 0x58;
+    constexpr std::size_t kSlabSize = 16;
+    constexpr std::size_t kPageSize = 12;
+    constexpr std::size_t kPointerSize = 8;
+    constexpr std::size_t kAssetSize = 72;
+    constexpr std::uint32_t kTextureType =
+        static_cast<std::uint32_t>('t') |
+        (static_cast<std::uint32_t>('x') << 8) |
+        (static_cast<std::uint32_t>('t') << 16) |
+        (static_cast<std::uint32_t>('r') << 24);
+    if (!bytes || size < kHeaderSize) return false;
+    const auto* data = static_cast<const std::uint8_t*>(bytes);
+    if (std::memcmp(data, "RPak", 4) != 0 || RpakReadU16(data + 4) != 7 ||
+        RpakReadU16(data + 6) != 0 || RpakReadU16(data + 0x3e) != 0) return false;
+
+    const std::size_t pathSize = RpakReadU16(data + 0x38);
+    const std::size_t slabCount = RpakReadU16(data + 0x3a);
+    const std::size_t pageCount = RpakReadU16(data + 0x3c);
+    const std::size_t pointerCount = RpakReadU32(data + 0x40);
+    const std::size_t assetCount = RpakReadU32(data + 0x44);
+    const std::size_t usesCount = RpakReadU32(data + 0x48);
+    const std::size_t dependentsCount = RpakReadU32(data + 0x4c);
+    std::size_t cursor = kHeaderSize;
+    if (!RpakAdvance(cursor, pathSize, 1, size) ||
+        !RpakAdvance(cursor, slabCount, kSlabSize, size)) return false;
+
+    const std::size_t pagesOffset = cursor;
+    if (!RpakAdvance(cursor, pageCount, kPageSize, size) ||
+        !RpakAdvance(cursor, pointerCount, kPointerSize, size)) return false;
+    const std::size_t assetsOffset = cursor;
+    if (!RpakAdvance(cursor, assetCount, kAssetSize, size) ||
+        !RpakAdvance(cursor, usesCount, kPointerSize, size) ||
+        !RpakAdvance(cursor, dependentsCount, 4, size)) return false;
+    const std::size_t pageDataOffset = cursor;
+
+    std::vector<std::size_t> pageOffsets;
+    pageOffsets.reserve(pageCount);
+    std::size_t pageCursor = pageDataOffset;
+    for (std::size_t i = 0; i < pageCount; ++i) {
+        const std::size_t pageHeader = pagesOffset + i * kPageSize;
+        const std::size_t pageBytes = RpakReadU32(data + pageHeader + 8);
+        pageOffsets.push_back(pageCursor);
+        if (!RpakAdvance(pageCursor, pageBytes, 1, size)) return false;
+    }
+
+    for (std::size_t i = 0; i < assetCount; ++i) {
+        const std::size_t asset = assetsOffset + i * kAssetSize;
+        if (RpakReadU32(data + asset + 68) != kTextureType) continue;
+        const std::size_t page = RpakReadU32(data + asset + 16);
+        const std::size_t offset = RpakReadU32(data + asset + 20);
+        const std::size_t headSize = RpakReadU32(data + asset + 60);
+        if (page >= pageCount || headSize <= 0x1c) return false;
+        const std::size_t pageBytes = RpakReadU32(data + pagesOffset + page * kPageSize + 8);
+        if (offset > pageBytes || headSize > pageBytes - offset) return false;
+        const std::size_t header = pageOffsets[page] + offset;
+        if (header > size || headSize > size - header) return false;
+        const std::uint8_t platform = data[header + 0x1c];
+        ++result.textures;
+        if (platform == 0) ++result.pc;
+        else if (platform == 8) ++result.ps4;
+        else ++result.other;
+    }
+    return true;
+}
+
 inline std::string NormaliseRpakStreamPath(const char* path) {
     std::string result;
     if (!path) return result;
