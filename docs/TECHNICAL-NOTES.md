@@ -4510,8 +4510,26 @@ placeholder data, and nothing is written back.
   token was empty, as a local connect has none.
 - **Startup arguments.** `+ns_server_name "..."`, a description with `\u00e9`, a hidden
   password and an unknown name were each applied or reported (`tests/startup_args.cpp`).
-- **Not yet seen end to end:** Atlas's real `connect` request and a browser join to a PS4
-  host. That needs a host whose UDP 37015 is reachable.
+- **End to end (later the same day):** the user's host had a reachable port. The server
+  registered and was listed with `hasPassword: true` once the password came from
+  `ns_startup_args.txt`. Atlas takes the password only at creation, and the harness's
+  `launch` starts the lobby before console commands run.
+  - Two PC players joined through the browser. Their first attempts failed on the engine's
+    own serverfilter comparison ("Incoming server filter of ... doesn't match our server
+    filter of"). PC patches that out (engine.dll 0x114655 -> EB); here the `je` at
+    engine+0xe749b becomes `jmp`.
+  - A PC client's connect request has an empty string before serverfilter, so admission
+    now matches the token against every string after the name.
+  - After both fixes, each player's Atlas `connect` was verified, 56306 bytes of pdata
+    fetched, and the connection accepted and admitted with `ns_auth_allow_insecure 0`.
+  - They played a fastball match on mp_lf_uma and returned to the lobby. Chat worked both
+    ways, and the server script logged their real UIDs.
+  - Their pdata is not installed yet (G02).
+  - One reported a disconnect in fastball naming `ServerCallback_HideHudForFPHackAnim`
+    (Northstar.Custom's sh_3psequence_to_1p_hacks.gnut). It is not visible in the host log
+    and is under investigation.
+  - `net_debug_atlas_packet 1` logs each request in full, including the player's IP address
+    and token, as PC does. Leave it off outside debugging.
 
 **Debugging:** `net_debug_atlas_packet 1` logs each connectionless packet's type, each
 Atlas packet and each connect request's parse.
