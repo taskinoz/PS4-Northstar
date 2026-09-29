@@ -126,6 +126,8 @@ Reloading mods works live, as on PC: the server browser switches client-required
 
 Mods that servers require are downloaded, as on PC, when they are on Northstar's [verified list](https://github.com/R2Northstar/VerifiedMods) and `allow_mod_auto_download` is on. They go to guest `/data/northstar_ps4/runtime/remote/mods` (PC: `R2Northstar/runtime/remote/mods`), are checked against the list's SHA-256, and are only switched on for servers that need them.
 
+**What PC mods can use on PS4.** Scripts, `RunOn` conditions, console variables, localisation (English), KeyValues (weapons, playlists, AI settings), VPKs and custom maps, `Dependencies` constants for optional mods, particle manifests, and sound replacements (`audio/` folders, as on PC) work. `ns_print_played_sounds 1` in the console logs the sound events that play, to find their names. Particle-manifest loading is new and has passed build/host tests, but still needs a real particle mod checked in game. Not yet: rpak assets (skins, models, loading-screen images), datatable CSVs, mod console commands (`ConCommands`) and plugins.
+
 ### Hosting a private match for other players
 
 In the private lobby, **L1 opens Host Options**:

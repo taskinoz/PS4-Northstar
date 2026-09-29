@@ -93,6 +93,7 @@ void ReloadModState() noexcept {
     g_mountingModVpks.clear(std::memory_order_release);
 
     CollectKeyValuePatches();
+    g_particleManifestGenerated = false;
 
     // UI and CLIENT callbacks are read when their hooks are installed; SERVER
     // rereads at every VM. Without this, a mod enabled by the reload had its

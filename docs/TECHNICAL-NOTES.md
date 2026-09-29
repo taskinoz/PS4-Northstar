@@ -4708,3 +4708,136 @@ shadPS4 logs each HTTP request's URL at Info, and the Atlas API puts the passwor
 query, so it reaches `shad_log.txt` unless `Lib.Http` is filtered to Warning. The token was
 already a reason for that filter.
 
+## Mod features used on Thunderstore; dependency constants (2026-09-29)
+
+To pick what to port next, the GitHub sources of about 100 of the most downloaded Northstar
+mods on Thunderstore were checked for the mod features they use (scratchpad survey, repository
+trees and `mod.json` through the GitHub API):
+- `Dependencies` constants: HUD Revamp, Titan Framework, VanillaPlus, BetterServerBrowser,
+  Server Utilities and others. Missing on PS4, so `#if CONSTANT` failed to compile.
+- `audio/` replacements: several sound mods. Missing.
+- rpaks: most skin, model, reticle and titan mods. Loader present, off (PC formats).
+- `RunOn` expressions, `ConVars`, `Localisation`, `keyvalues`, `InitScript`, `.menu`/`.res`
+  files: common, already supported.
+- Datatable CSVs and particle manifests: one mod each. `ConCommands`, `mod.pdiff`: none.
+
+**Dependency constants** (PC `mods/mod.cpp` ParseDependencies, `squirrel.cpp` VMCreated).
+`mod_dependencies.h` (host-tested) reads `Dependencies` (`{ "CONSTANT": "Mod Name" }`) and
+`PluginDependencies` (`[ "CONSTANT" ]`) from every mod, enabled or not; the first mod to
+register a name keeps it. Each VM gets the constant as whether an enabled mod has that
+`Name`. Plugin constants are always false, since no plugin can load here. `ScriptConstants()`
+builds the list with `VANILLA`, `NS_VERSION_*` and `MAX_FOLDER_SIZE` (51200, PC's 50 MiB / 1024,
+which the port lacked) for the UI, CLIENT and SERVER constant tables. It is rebuilt for each
+VM, so a reload's enabled set applies.
+
+**Manifest fix found by the test.** A mod listing one file three times (`RunOn` UI, CLIENT and
+SERVER) only compiled it in SERVER: the `scripts.rson` generator kept one entry per path so a
+higher-priority mod could override a script, and that also collapsed a mod's own entries. PC
+writes a block per entry. Repeats within one mod are now kept; another mod's entry still
+replaces them.
+
+Verified with a throwaway mod: all three VMs printed `custom yes`, `missing no`, `plugin no`
+and `MAX_FOLDER_SIZE 51200` from `#if` blocks.
+
+## Custom audio (2026-09-29)
+
+PC (`client/audio.cpp`) replaces the sample Miles is about to load when the sound event has
+an override. Mods ship `audio/<name>.json` (`EventId`, optional `EventIdRegex` and
+`AudioSelectionStrategy`) and `.wav` files under `audio/<name>/`.
+
+**Miles on PS4.** Miles 10.0.10 is linked into `client.prx` (PC: `mileswin64.dll`). The two
+functions PC hooks were matched by their strings and structure:
+
+| PC (mileswin64) | PS4 (client.prx) | Role |
+|---|---|---|
+| `0xF110` | `0x99b0` | LoadSampleMetadata(sample, buffer, length, type); "Unknown File Type", "Bink Audio decoder has not been registered." |
+| `0x294C0` | `0x22450` | plays an event; the event's name is at arg2+0x30 on both |
+
+- The sample keeps its data pointer at `+0xe8` and its length at `+0xf0` on both platforms
+  (the PS4 callers load both from there before calling).
+- On PC the sample setup is inlined into the event function. On PS4 it is a separate function,
+  `0x9f50`, called from `0x22450`.
+- Type 64 makes Miles detect the format (`0xcc80`: `1FCB` Bink, `3PMM` MP3, `OggS`, `RIFF`…`WAVE`).
+
+**Hooks.** shadPS4 cannot give this module an executable trampoline, so the call sites are
+patched instead of the functions:
+- The event function's three call sites (`0x162c4`, `0x2bd0f`, `0x2cc35`) go through
+  `AudioEventStub`. It stores `[rsi+0x30]` and jumps on.
+- LoadSampleMetadata's four call sites (`0x9fbf`, `0xa40a`, `0x133a1`, `0x13d1c`) go to
+  `AudioLoadSampleMetadata`. It swaps in the replacement and calls Miles with type 64, as PC
+  does.
+
+The rules are PC's, in `audio_override.h` (host-tested):
+- lookup is exact, then `*`, then the regexes, with regex matches cached;
+- the first mod in load order keeps an event;
+- a sample whose folder names an already claimed event is skipped;
+- `!event` leaves an event alone, and `*` leaves ambient and emitter events alone;
+- selection is sequential or random, and no samples means silence (PC's empty WAVE);
+- `ns_print_played_sounds 1` logs events, and on PS4 also each replacement.
+
+Samples are read on first play and kept for the session. Miles plays from the buffer it was
+given, so nothing is freed, not even on reload (`ReloadModState` builds a new registry).
+
+**Two PS4-only problems found in testing:**
+- `std::regex` is unusable: the build has no exceptions, and libc++ aborts on a malformed
+  pattern. `regex_lite.h` is a small backtracking matcher for the ECMAScript subset these
+  patterns use. It is checked against `std::regex` on the host, rejects unsupported syntax, and
+  caps its steps.
+- A global `std::unordered_map` aborted on its first insert. This module runs no static
+  constructors, so the map was all zeroes, including a max load factor of 0. It is now
+  allocated at install time. (A zero-filled `std::string` or `std::vector` happens to be a
+  valid empty one, which is why other globals worked.)
+
+Verified: `menu_focus` replaced by two generated 16-bit tones in rotation (Miles returned
+success each time, no crash). Whether they are audible still needs someone listening.
+
+## Particle manifests (2026-09-29)
+
+PC combines `mod/particles/particles_manifest.txt` from enabled mods after the retail
+manifest. The PS4 runtime now does the same in load-priority order. `particle_manifest.h`
+parses a BOM, comments, quoted or unquoted root name and balanced braces without treating
+braces inside comments/strings as structure. It rejects an incomplete manifest instead of
+serving a truncated file.
+
+`runtime_particles.inl` reads the retail manifest through the original filesystem, appends
+each valid mod body, and writes `/data/northstar_ps4/particles/particles_manifest.txt`.
+OpenEx, ReadFile, Size and ReadFromCache all use the generated copy, and a mod reload clears
+the generation flag. One bad mod manifest is logged and skipped rather than hiding retail
+particles or the other mods.
+
+The parser/builder suite, the complete host profile suite and a full runtime-manifest PS4
+build pass. A live particle mod still needs to prove engine ingestion and visible effects.
+
+## STARPak ownership and the remaining RPAK boundary (2026-09-29)
+
+PC does not register a STARPak with the RPAK load call. It reads the NUL-separated stream
+paths at v7 header offset `0x58` (length at `0x38`) during mod discovery, then redirects a
+later low-level stream open to `<mod>/paks/<embedded path>`.
+
+The PS4 `rtech_game.prx` worker has the same split:
+
+- `+0x601a` checks an embedded name for `_hotswap.starpak`;
+- `+0x6717` builds `/app0/r2/<embedded path>`;
+- `+0x6773` is the only call to the module's file opener (`+0x0a90`) on that loop.
+
+The port now parses and validates those paths, rejects absolute/traversing references,
+records their owning mod and has an exact-preimage rel32 patch for `+0x6773`. If that patch
+cannot be installed, the RPAK hook refuses to install rather than loading a streamed archive
+without its data. Host tests use both malicious fixtures and the real
+`mp_weapon_shotgun_doublebarrel.rpak`; the real archive reports its expected one STARPak.
+
+The outer flag correction matters: `0x0100` is not a PS4 marker. Matching retail PC and PS4
+`camo_skin00_col.rpak` files both have v7 flags `0x0100`; it denotes the RTech-compressed
+payload. Northstar's generated mod archives are uncompressed and use `0x0000`. Platform
+information lives deeper in texture assets: LegionPlus identifies texture-header byte `8`
+as PS4 and unswizzles its 8-by-8 Morton blocks, while RePak emits PC-oriented linear texture
+data. The official LegionPlus 1.9.2 CLI successfully decoded and listed the same texture from
+both local retail PC and PS4 archives, confirming the comparison is of equivalent assets.
+
+One experimental build enabled the loader with the new redirect, but shadPS4 exited before
+eboot with `Invalid or corrupted deserialization container/shader cache`; another shadPS4
+process was already running, so it was left alone. No RPAK hook or game code ran. The installed
+PRX was immediately rebuilt/deployed with the loader disabled. A clean emulator boot is still
+needed before deciding whether the PS4 engine rejects PC texture headers directly or reaches
+rendering with bad layout. The safe gate remains off.
+

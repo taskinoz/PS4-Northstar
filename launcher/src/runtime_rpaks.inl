@@ -26,21 +26,24 @@
 // end: both call sites patch, both of Northstar.Custom's paks are dispatched
 // after `common.rpak` with valid handles, and the engine opens and reads
 // `mp_weapon_shotgun_doublebarrel.rpak` from the mod directory with no pak
-// error. What fails is the payload. Those archives are PC builds - `RPak`
-// version 7 but flags 0x0000 against retail's 0x0100 - carrying `txtr` and
-// `matl` assets in PC formats, and loading them wedges the boot: the engine
-// looks for `mp_weapon_shotgun_doublebarrel.starpak` at `/app0/r2/`, where a
-// mod's streamed data does not live, and the pak system then walks the address
-// space in `sceKernelAvailableDirectMemorySize` in 0x4000 steps and never
-// finishes. No playlist, no UI lifecycle, `UI VM probe timed out`.
+// error. The first experiment failed before asset compatibility was reached:
+// the engine looked for `mp_weapon_shotgun_doublebarrel.starpak` at
+// `/app0/r2/`, where a mod's streamed data does not live, and then wedged.
+// The code below now reads each v7 header's streamed paths and patches the
+// worker's sole stream-open call at `+0x6773`, redirecting it to the owning
+// mod's paks directory. That redirect is host-tested against the shipped pak;
+// its live boot test was blocked by shadPS4's corrupt shader-cache assertion.
 //
 // This is the opposite of how the VPK work turned out, where the shipped
-// archive held bytes identical to the PS4 originals. Turn this on once a mod
-// ships PS4-format paks, and resolve starpaks then too - PC registers them
-// separately rather than leaving them beside the rpak.
+// archive held bytes identical to the PS4 originals. PC mod textures use
+// linear blocks, while retail PS4 texture headers carry platform byte 8 and
+// Morton-swizzled blocks. Leave loading off until a clean boot reaches asset
+// creation and the required conversion/material differences are established.
 constexpr bool kModRpakLoadingEnabled = false;
 constexpr std::uintptr_t kRtechLoadPakVa = 0x76f0;
 constexpr std::uintptr_t kRtechLoadPakCallSites[] = {0x78c0, 0x7ed1};
+constexpr std::uintptr_t kRtechOpenFileVa = 0x0a90;
+constexpr std::uintptr_t kRtechStarpakOpenCallVa = 0x6773;
 constexpr std::int32_t kInvalidPakHandle = -1;
 // PC passes 7 for every mod pak it loads; the pak system is the same lineage
 // here, so the same value is used rather than echoing the engine's own flags,
@@ -48,7 +51,9 @@ constexpr std::int32_t kInvalidPakHandle = -1;
 constexpr std::int32_t kModRpakFlags = 7;
 
 using RtechLoadPakFn = std::int32_t (*)(const char*, void*, std::int32_t);
+using RtechOpenFileFn = int (*)(const char*, void*);
 RtechLoadPakFn g_originalLoadPak = nullptr;
+RtechOpenFileFn g_originalRtechOpenFile = nullptr;
 void* g_rpakAllocator = nullptr;
 bool g_modRpakHookReady = false;
 
@@ -60,10 +65,37 @@ struct RuntimeModRpak {
     std::int32_t handle;
 };
 std::vector<RuntimeModRpak> g_modRpaks;
+struct RuntimeModStarpak {
+    std::string embedded;
+    std::string request;
+};
+std::vector<RuntimeModStarpak> g_modStarpaks;
 std::atomic_flag g_loadingModRpaks = ATOMIC_FLAG_INIT;
+
+bool ReadRpakStarpaks(const std::string& path, std::vector<std::string>& references) {
+    references.clear();
+    FILE* file = std::fopen(path.c_str(), "rb");
+    if (!file) return false;
+    std::uint8_t header[0x58]{};
+    const bool headerRead = std::fread(header, 1, sizeof(header), file) == sizeof(header);
+    if (!headerRead || std::memcmp(header, "RPak", 4) != 0 || header[4] != 7) {
+        std::fclose(file);
+        return false;
+    }
+    const std::size_t referenceSize =
+        static_cast<std::size_t>(header[0x38]) |
+        (static_cast<std::size_t>(header[0x39]) << 8);
+    std::vector<std::uint8_t> bytes(sizeof(header) + referenceSize);
+    std::memcpy(bytes.data(), header, sizeof(header));
+    const bool bodyRead = referenceSize == 0 ||
+        std::fread(bytes.data() + sizeof(header), 1, referenceSize, file) == referenceSize;
+    std::fclose(file);
+    return bodyRead && ParseRpakStarpakReferences(bytes.data(), bytes.size(), references);
+}
 
 void DiscoverModRpaks() {
     g_modRpaks.clear();
+    g_modStarpaks.clear();
     static ModDiscovery mods;
     CollectModNames(mods);
     for (int i = 0; i < mods.count; ++i) {
@@ -106,9 +138,36 @@ void DiscoverModRpaks() {
                 entry.request.c_str(), entry.preload ? 1 : 0,
                 entry.after.empty() ? "(none)" : entry.after.c_str());
             g_modRpaks.push_back(std::move(entry));
+
+            std::vector<std::string> references;
+            const std::string rpakPath = directory + "/" + name;
+            if (!ReadRpakStarpaks(rpakPath, references)) {
+                LogFormat("[NorthstarPS4] mod rpak header refused: %s/%s\n",
+                    mods.names[i], name.c_str());
+                g_modRpaks.pop_back();
+                continue;
+            }
+            for (const auto& reference : references) {
+                RuntimeModStarpak stream;
+                stream.embedded = reference;
+                stream.request = directory + "/" + reference;
+                LogFormat("[NorthstarPS4] mod starpak registered: %s -> %s\n",
+                    stream.embedded.c_str(), stream.request.c_str());
+                g_modStarpaks.push_back(std::move(stream));
+            }
         }
     }
     LogFormat("[NorthstarPS4] mod rpaks discovered=%zu\n", g_modRpaks.size());
+}
+
+int ModOpenRtechStarpak(const char* path, void* sizeOut) noexcept {
+    for (const auto& stream : g_modStarpaks) {
+        if (!RpakStreamPathMatches(stream.embedded, path)) continue;
+        LogFormat("[NorthstarPS4] mod starpak redirect: %s -> %s\n",
+            path ? path : "(null)", stream.request.c_str());
+        return g_originalRtechOpenFile(stream.request.c_str(), sizeOut);
+    }
+    return g_originalRtechOpenFile(path, sizeOut);
 }
 
 // `requested` is null for the preload pass, which runs before the engine's own
@@ -200,6 +259,17 @@ void InstallModRpakHook(OrbisKernelModule rtechHandle) noexcept {
     constexpr std::uint8_t callPreimageA[5] = {0xe8, 0x2b, 0xfe, 0xff, 0xff};
     constexpr std::uint8_t callPreimageB[5] = {0xe8, 0x1a, 0xf8, 0xff, 0xff};
     g_originalLoadPak = reinterpret_cast<RtechLoadPakFn>(base + kRtechLoadPakVa);
+    if (!g_modStarpaks.empty()) {
+        constexpr std::uint8_t starpakOpenPreimage[5] = {0xe8, 0x18, 0xa3, 0xff, 0xff};
+        g_originalRtechOpenFile = reinterpret_cast<RtechOpenFileFn>(base + kRtechOpenFileVa);
+        if (!PatchRpakCallSite(base, span, kRtechStarpakOpenCallVa,
+                starpakOpenPreimage, reinterpret_cast<void*>(&ModOpenRtechStarpak))) {
+            g_originalLoadPak = nullptr;
+            g_originalRtechOpenFile = nullptr;
+            LogFormat("[NorthstarPS4] mod rpak hook refused: starpak redirect unavailable\n");
+            return;
+        }
+    }
     auto* const hook = reinterpret_cast<void*>(&ModLoadPakAsync);
     int patched = 0;
     if (PatchRpakCallSite(base, span, kRtechLoadPakCallSites[0], callPreimageA, hook)) ++patched;

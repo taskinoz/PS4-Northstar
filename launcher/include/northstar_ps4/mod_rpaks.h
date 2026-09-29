@@ -1,6 +1,7 @@
 #pragma once
 #include "json_text.h"
 #include "mod_catalog.h"
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -169,5 +170,57 @@ inline bool RpakNameMatches(const std::string& expected, const char* requested) 
     for (const char* p = requested; *p; ++p)
         if (*p == '/' || *p == '\\') base = p + 1;
     return expected == base;
+}
+
+// RPak v7 keeps its NUL-separated streamed-pak names immediately after the
+// 0x58-byte header. Northstar records these at discovery time because the
+// later stream open does not identify which RPak caused it.
+inline bool ParseRpakStarpakReferences(const void* bytes, std::size_t size,
+    std::vector<std::string>& references) {
+    references.clear();
+    if (!bytes || size < 0x58) return false;
+    const auto* data = static_cast<const std::uint8_t*>(bytes);
+    if (std::memcmp(data, "RPak", 4) != 0 || data[4] != 7) return false;
+    const std::size_t referenceSize =
+        static_cast<std::size_t>(data[0x38]) |
+        (static_cast<std::size_t>(data[0x39]) << 8);
+    if (referenceSize > size - 0x58) return false;
+    std::size_t begin = 0;
+    for (std::size_t i = 0; i < referenceSize; ++i) {
+        if (data[0x58 + i] != 0) continue;
+        if (i > begin) {
+            const std::string path(reinterpret_cast<const char*>(data + 0x58 + begin), i - begin);
+            // Stream paths are relative to r2. Refuse absolute paths and
+            // traversal before they can become a filesystem redirect.
+            if (path[0] == '/' || path[0] == '\\' || path.find(':') != std::string::npos ||
+                path.find("..") != std::string::npos) return false;
+            references.push_back(path);
+        }
+        begin = i + 1;
+    }
+    return begin == referenceSize;
+}
+
+inline std::string NormaliseRpakStreamPath(const char* path) {
+    std::string result;
+    if (!path) return result;
+    for (const char* p = path; *p; ++p) {
+        char c = *p == '\\' ? '/' : *p;
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        result += c;
+    }
+    constexpr const char* appPrefix = "/app0/r2/";
+    constexpr const char* r2Prefix = "r2/";
+    if (result.compare(0, std::strlen(appPrefix), appPrefix) == 0)
+        result.erase(0, std::strlen(appPrefix));
+    else if (result.compare(0, std::strlen(r2Prefix), r2Prefix) == 0)
+        result.erase(0, std::strlen(r2Prefix));
+    while (!result.empty() && result[0] == '/') result.erase(0, 1);
+    return result;
+}
+
+inline bool RpakStreamPathMatches(const std::string& embedded, const char* requested) {
+    return !embedded.empty() && NormaliseRpakStreamPath(embedded.c_str()) ==
+        NormaliseRpakStreamPath(requested);
 }
 }  // namespace northstar::ps4::mods

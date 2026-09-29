@@ -23,9 +23,13 @@ if (Test-Path -LiteralPath $config -PathType Leaf) {
 $rpakArgs = @()
 if ($settings) {
     $rpakConfig = Join-Path $settings.northstarModsRoot 'Northstar.Custom\paks\rpak.json'
-    if (Test-Path -LiteralPath $rpakConfig -PathType Leaf) { $rpakArgs = @($rpakConfig) }
+    $rpakFile = Join-Path $settings.northstarModsRoot 'Northstar.Custom\paks\mp_weapon_shotgun_doublebarrel.rpak'
+    if (Test-Path -LiteralPath $rpakConfig -PathType Leaf) {
+        $rpakArgs = @($rpakConfig)
+        if (Test-Path -LiteralPath $rpakFile -PathType Leaf) { $rpakArgs += $rpakFile }
+    }
 }
-foreach ($suite in @('mod_catalog', 'json_text', 'keyvalues', 'rpaks', 'server_list', 'mod_download')) {
+foreach ($suite in @('mod_catalog', 'json_text', 'keyvalues', 'particle_manifest', 'rpaks', 'server_list', 'mod_download')) {
     $exe = Join-Path $testRoot ($suite + '.exe')
     & clang++.exe -std=c++17 -D_CRT_SECURE_NO_WARNINGS -I (Join-Path $repositoryRoot 'launcher\include') (Join-Path $repositoryRoot ('tests\' + $suite + '.cpp')) -o $exe
     if ($LASTEXITCODE) { throw "Host compilation failed: $suite" }

@@ -97,6 +97,29 @@ int main(int argc, char** argv) {
     assert(!RpakNameMatches("common.rpak", nullptr));
     assert(!RpakNameMatches("", "common.rpak"));
 
+    // --- embedded STARPak discovery and redirected-path matching -----------
+    std::string header(0x58, '\0');
+    std::memcpy(header.data(), "RPak", 4);
+    header[4] = 7;
+    const std::string streamNames("weapon.starpak\0nested/event.starpak\0", 37);
+    header[0x38] = static_cast<char>(streamNames.size());
+    header += streamNames;
+    std::vector<std::string> references;
+    assert(ParseRpakStarpakReferences(header.data(), header.size(), references));
+    assert(references.size() == 2);
+    assert(references[0] == "weapon.starpak");
+    assert(references[1] == "nested/event.starpak");
+    assert(RpakStreamPathMatches(references[0], "/app0/r2/weapon.starpak"));
+    assert(RpakStreamPathMatches(references[1], "r2\\nested\\EVENT.STARPAK"));
+    assert(!RpakStreamPathMatches(references[0], "/app0/r2/other.starpak"));
+
+    std::string traversal = header.substr(0, 0x58);
+    const std::string bad("../outside.starpak\0", 19);
+    traversal[0x38] = static_cast<char>(bad.size());
+    traversal += bad;
+    assert(!ParseRpakStarpakReferences(traversal.data(), traversal.size(), references));
+    assert(!ParseRpakStarpakReferences("bad", 3, references));
+
     std::puts("rpak config tests passed.");
 
     // --- the real shipped config, when this test is given it ----------------
@@ -119,5 +142,15 @@ int main(int argc, char** argv) {
         }
     }
     std::puts("rpak live-config check passed: both shipped paks postload after common.rpak.");
+    if (argc >= 3) {
+        const std::string livePak = ReadFile(argv[2]);
+        if (livePak.empty() || !ParseRpakStarpakReferences(
+                livePak.data(), livePak.size(), references) || references.empty()) {
+            std::fprintf(stderr, "live-rpak check: could not read stream references from %s\n", argv[2]);
+            return 1;
+        }
+        std::printf("rpak live-stream check passed: %zu reference(s), first=%s\n",
+            references.size(), references[0].c_str());
+    }
     return 0;
 }

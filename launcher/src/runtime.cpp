@@ -15,6 +15,7 @@
 #include "northstar_ps4/host_options.h"
 #include "northstar_ps4/mod_dependencies.h"
 #include "northstar_ps4/audio_override.h"
+#include "northstar_ps4/particle_manifest.h"
 #include "northstar_ps4/pdata_convert.h"
 #include "northstar_ps4/server_list.h"
 #include "northstar_ps4/mod_archive.h"
@@ -1811,6 +1812,7 @@ std::size_t NormalizeRequestedPath(const char* in, char* out, std::size_t capaci
 
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 bool IsKeyValuePatched(const char* normalized) noexcept;  // runtime_keyvalues.inl
+bool ParticleManifestPath(const char* normalized) noexcept;  // runtime_particles.inl
 #endif
 
 bool ModReadFromCache(void* self, const char* fileName, void* result) noexcept {
@@ -1818,6 +1820,10 @@ bool ModReadFromCache(void* self, const char* fileName, void* result) noexcept {
     if (NormalizeRequestedPath(fileName, normalized, sizeof(normalized))) {
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
         if (!std::strcmp(normalized, "cfg/server/persistent_player_data_version_929.pdef")) return false;
+        if (ParticleManifestPath(normalized)) {
+            LogFormat("[NorthstarPS4] bypass cached particles manifest\n");
+            return false;
+        }
         // A KeyValues patch lives in the mod's keyvalues/ folder, not its
         // search path, so the check below misses it and the cache would hand
         // back the vanilla file without ever reaching the merge in OpenEx.
@@ -2116,6 +2122,7 @@ bool BuildRuntimeManifest(void* self) noexcept {
 }
 
 #include "runtime_keyvalues.inl"
+#include "runtime_particles.inl"
 #endif
 
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
@@ -2125,7 +2132,12 @@ bool BuildRuntimeManifest(void* self) noexcept {
 std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noexcept {
     char normalized[256]{};
     const char* patched = nullptr;
-    if (kKeyValuesMergeEnabled && NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
+    NormalizeRequestedPath(fileName, normalized, sizeof(normalized));
+    if (ParticleManifestPath(normalized)) {
+        std::uint64_t size = 0;
+        if (ParticleManifestSize(self, size)) return size;
+    }
+    if (kKeyValuesMergeEnabled && normalized[0] &&
         (patched = CanonicalKeyValuePath(normalized)) != nullptr) {
         std::uint64_t size = 0;
         if (KeyValuesServedSize(self, patched, size)) {
@@ -2192,6 +2204,7 @@ bool PathIdIsGame(const char* pathID) noexcept {
 bool RewrittenByOpenEx(const char* normalized) noexcept {
     if (!std::strcmp(normalized, "scripts/vscripts/scripts.rson")) return true;
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    if (ParticleManifestPath(normalized)) return true;
     if (kKeyValuesMergeEnabled && IsKeyValuePatched(normalized)) return true;
 #endif
     return false;
@@ -2201,6 +2214,15 @@ bool ModReadFile(void* self, const char* fileName, const char* pathID, void* buf
     int maxBytes, int startingByte, void* alloc) noexcept {
     char normalized[256]{};
     if (PathIdIsGame(pathID) && NormalizeRequestedPath(fileName, normalized, sizeof(normalized))) {
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+        if (ParticleManifestPath(normalized) && ParticleManifestReady(self)) {
+            if (g_originalFsReadFile(self, kParticleManifestOutput, pathID, buffer,
+                    maxBytes, startingByte, alloc)) {
+                LogFormat("[NorthstarPS4] particles manifest read: %s\n", kParticleManifestOutput);
+                return true;
+            }
+        }
+#endif
         if (RewrittenByOpenEx(normalized)) {
             LogFormat("[NorthstarPS4] ReadFile of rewritten file left stock: %s\n", normalized);
         } else {
@@ -2243,6 +2265,14 @@ void* ModOpenEx(void* self, const char* fileName, const char* mode,
     }
 #endif
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    if (readOnly && NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
+        ParticleManifestPath(normalized) && ParticleManifestReady(self)) {
+        void* handle = g_originalFsOpenEx(self, kParticleManifestOutput, mode, flags, pathID, resolved);
+        if (handle) {
+            LogFormat("[NorthstarPS4] particles manifest served\n");
+            return handle;
+        }
+    }
     // The persistence definition needs no special case: Northstar.PS4 ships a
     // pre-generated 929 file (PC 231 plus the console's black market; see
     // scripts/pdef/build_ps4_pdef.py) and the ordinary mod overlay below
