@@ -520,10 +520,9 @@ bool TakeRemotePdata(std::uint64_t uid, std::string& pdata) noexcept {
 
 // PC: MasterServerManager::WritePlayerPersistentData, POST
 // /accounts/write_persistence?id=<uid>&serverId=<id> with the pdata as a
-// multipart file. Off unless ns_ps4_write_remote_persistence is 1: the PS4
-// layout has been checked against 231 byte for byte, but writes change real
-// players' Northstar accounts, so they wait for in-game confirmation that
-// installed saves read correctly. When off, what would be written is logged.
+// multipart file. On by default, as on PC, since a PC player's save was seen to
+// round-trip (docs/TECHNICAL-NOTES.md); +ns_ps4_write_remote_persistence 0 in
+// ns_startup_args.txt turns it off, and then what would be written is logged.
 struct PdataWrite {
     std::uint64_t uid;
     std::string pdata;
@@ -558,7 +557,7 @@ void* WritePdataWorker(void* argument) {
 }
 
 void WriteRemotePdata(std::uint64_t uid, const std::string& pdata, const char* reason) noexcept {
-    if (!ConVarInt(g_writeRemotePersistence, 0)) {
+    if (!ConVarInt(g_writeRemotePersistence, 1)) {
         LogFormat("[NorthstarPS4] pdata for uid %llu (%s, %zu bytes) not written: ns_ps4_write_remote_persistence is 0\n",
             static_cast<unsigned long long>(uid), reason, pdata.size());
         return;
@@ -775,7 +774,7 @@ void InstallAtlasServer(std::uintptr_t engineBase, std::size_t engineSize) noexc
         "to impersonate Atlas)");
     if (g_modConVarCvar && g_modConVarFindVar) g_hostPort = g_modConVarFindVar(g_modConVarCvar, "hostport");
     alignas(16) static std::uint8_t writeStorage[0x90]{};
-    g_writeRemotePersistence = RegisterConVar(writeStorage, "ns_ps4_write_remote_persistence", "0",
+    g_writeRemotePersistence = RegisterConVar(writeStorage, "ns_ps4_write_remote_persistence", "1",
         "Whether this PS4 host writes Atlas-authenticated players' pdata back to Atlas");
     g_takeRemotePdata = TakeRemotePdata;
     g_writeRemotePdata = WriteRemotePdata;

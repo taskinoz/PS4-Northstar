@@ -4589,9 +4589,9 @@ pdata as a multipart `file.pdata`):
   VM's init).
 - **`NSIsWritingPlayerPersistence`** reports writes in flight.
 
-Writes are **off** until installed saves have been seen to read correctly in game:
-`ns_ps4_write_remote_persistence` (default 0) gates them, and while it is off the host logs
-what it would have written.
+Writes are gated by `ns_ps4_write_remote_persistence`. It was 0 until the test below, and
+is 1 (on, as PC) from 2026-09-29. `+ns_ps4_write_remote_persistence 0` in
+`ns_startup_args.txt` turns writes off, and then the host logs what it would have written.
 
 **Tested:**
 - **The detour.** The host's own disconnect goes through it and hosting resumes.
@@ -4615,5 +4615,6 @@ what it would have written.
   - On PC the player's end-of-match summary showed the PS4-hosted match with its merits
     and credits applied (Skirmish on Forwardbase Kodai, 1 kill, victory). That summary is
     read from the saved pdata.
-- **The default stays 0** until more sessions have gone through. PC writes always.
+- **The default is now 1**, as PC writes always. `+ns_ps4_write_remote_persistence 0`
+  turns writes off.
 
