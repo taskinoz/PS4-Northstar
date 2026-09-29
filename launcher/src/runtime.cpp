@@ -17,6 +17,7 @@
 #include "northstar_ps4/audio_override.h"
 #include "northstar_ps4/particle_manifest.h"
 #include "northstar_ps4/datatable_csv.h"
+#include "northstar_ps4/localisation_language.h"
 #include "northstar_ps4/pdata_convert.h"
 #include "northstar_ps4/server_list.h"
 #include "northstar_ps4/mod_archive.h"
@@ -26,6 +27,7 @@
 #include <orbis/Net.h>
 #include <orbis/Ssl.h>
 #include <orbis/Http.h>
+#include <orbis/SystemService.h>
 #include <cstring>
 #include <cctype>
 #include <cstdarg>

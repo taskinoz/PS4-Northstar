@@ -29,7 +29,7 @@ if ($settings) {
         if (Test-Path -LiteralPath $rpakFile -PathType Leaf) { $rpakArgs += $rpakFile }
     }
 }
-foreach ($suite in @('mod_catalog', 'json_text', 'keyvalues', 'particle_manifest', 'datatable_csv', 'rpaks', 'server_list', 'mod_download')) {
+foreach ($suite in @('mod_catalog', 'json_text', 'keyvalues', 'particle_manifest', 'datatable_csv', 'localisation_language', 'rpaks', 'server_list', 'mod_download')) {
     $exe = Join-Path $testRoot ($suite + '.exe')
     & clang++.exe -std=c++17 -D_CRT_SECURE_NO_WARNINGS -I (Join-Path $repositoryRoot 'launcher\include') (Join-Path $repositoryRoot ('tests\' + $suite + '.cpp')) -o $exe
     if ($LASTEXITCODE) { throw "Host compilation failed: $suite" }

@@ -4853,6 +4853,25 @@ from a custom CSV. The SERVER transcript is
 from the installed profile after the test. The portable parser suite and complete host
 profile suite cover malformed inputs and the runtime build.
 
+## PS4 system-language localisation (2026-09-30)
+
+The PS4 `CLocalise::AddFile` does not expand a mod path's `%language%` token. The runtime
+now reads `ORBIS_SYSTEM_SERVICE_PARAM_ID_LANG` through `sceSystemServiceParamGetInt`, maps
+the languages for which Titanfall/Northstar commonly ship suffixes (`japanese`, `english`,
+`french`, `spanish`, `mspanish`, `german`, `italian`, `portuguese`, `russian`, `polish` and
+`tchinese`), and uses English for unsupported system languages. It checks the enabled mod
+overlay before adding a non-English path; a mod that lacks that translation gets its English
+file rather than silently losing all of its tokens.
+
+The portable mapping suite covers both English variants, Canadian French, Brazilian
+Portuguese, Latin-American Spanish, Traditional Chinese and unsupported-language fallback.
+Live validation on shadPS4 `2b5666b3` returned system language ID 1 (`english`) with result
+0, loaded Northstar.Client, Northstar.Custom, Northstar.DirectConnect and Northstar.PS4's
+English files, then completed the UI lifecycle. The experimental PRX was SHA256
+`6e7eca7d29d205b71de784eb20ff32e95d1345a0f33bc4841ae13094989165c9`; transcript
+`work/stage2/iterations/20260930-085714/shad-new-lines.log`. A non-English emulator setting
+still needs visual acceptance; only its mapping and missing-file fallback are host-tested.
+
 ## STARPak ownership and the remaining RPAK boundary (2026-09-29)
 
 PC does not register a STARPak with the RPAK load call. It reads the NUL-separated stream

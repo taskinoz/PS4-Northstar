@@ -30,6 +30,17 @@ LocaliseAddFileFn g_localiseAddFile = nullptr;  // set by ProbeLocaliseInterface
 std::uintptr_t g_localiseThis = 0;
 std::vector<std::string> g_localisationAdded;   // files handed to AddFile, once each
 
+const char* SystemLocalisationLanguage() noexcept {
+    static const char* selected = nullptr;
+    if (selected) return selected;
+    std::int32_t systemLanguage = ORBIS_SYSTEM_PARAM_LANG_ENGLISH_US;
+    const int result = sceSystemServiceParamGetInt(ORBIS_SYSTEM_SERVICE_PARAM_ID_LANG, &systemLanguage);
+    selected = result == 0 ? LocalisationLanguageForSystem(systemLanguage) : "english";
+    LogFormat("[NorthstarPS4] system localisation language id=%d name=%s result=0x%x\n",
+        systemLanguage, selected, result);
+    return selected;
+}
+
 // Adds the Localisation files of every enabled mod that have not been added
 // yet. Main thread (or the module tracker at boot) only.
 void AddModLocalisationFiles(std::int32_t& total, std::int32_t& loaded) noexcept {
@@ -55,11 +66,19 @@ void AddModLocalisationFiles(std::int32_t& total, std::int32_t& loaded) noexcept
             // The PS4 AddFile does not expand %language%: given the token it only
             // probes the stock resource folders and returns true without opening
             // anything, so every mod-only token stayed unresolved. With the name
-            // spelled out it loads through the mod overlay. English is what PC
-            // falls back to; picking the system language is not done yet.
+            // spelled out it loads through the mod overlay. Use the PS4 system
+            // language when that file exists and PC's English fallback otherwise.
             std::string resolved = mod.localisationFiles[f];
             const std::size_t token = resolved.find("%language%");
-            if (token != std::string::npos) resolved.replace(token, 10, "english");
+            if (token != std::string::npos) {
+                const char* language = SystemLocalisationLanguage();
+                resolved.replace(token, 10, language);
+                char found[512];
+                if (std::strcmp(language, "english") && !ResolveModFile(resolved.c_str(), found, sizeof(found))) {
+                    resolved = mod.localisationFiles[f];
+                    resolved.replace(token, 10, "english");
+                }
+            }
             if (std::find(g_localisationAdded.begin(), g_localisationAdded.end(), resolved) != g_localisationAdded.end())
                 continue;
             const bool ok = g_localiseAddFile(reinterpret_cast<void*>(g_localiseThis), resolved.c_str(), nullptr, false);
