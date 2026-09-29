@@ -38,6 +38,13 @@ int main() {
     CHECK(error.find("newline") != std::string::npos);
     CHECK(!ParseDatatableCsv("", table, error));
 
+    DatatableVector vector{};
+    CHECK(ParseDatatableVector("<1.5,-2,3.25>", vector));
+    CHECK(vector.x == 1.5f && vector.y == -2.0f && vector.z == 3.25f);
+    CHECK(!ParseDatatableVector("1,2,3", vector));
+    CHECK(!ParseDatatableVector("<1,2>", vector));
+    CHECK(!ParseDatatableVector("<1,2,3>tail", vector));
+
     std::puts("datatable_csv tests passed");
     return 0;
 }

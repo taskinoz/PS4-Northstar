@@ -4823,16 +4823,18 @@ registered, then resolves `datatable/*.rpak` names to enabled mods' correspondin
 `scripts/datatable/*.csv` files. The PS4 port now intercepts only client executable call
 sites whose decoded rel32 target is the verified native registrar. The registrar preimage
 and every call target are checked before mutation; calls for unrelated engine functions
-remain unchanged. This covers the UI and CLIENT VMs while retaining each original builtin
-as the fallback when no enabled mod supplies a CSV. SERVER registration is not intercepted
-yet.
+remain unchanged. The same exact-target interception is installed in `server.prx` before
+its VM initializes. Client and server originals are retained separately as the fallback
+when no enabled mod supplies a CSV.
 
 `datatable_csv.h` parses UTF-8 BOMs, CRLF, quoted commas, doubled quotes and empty cells,
 and rejects NULs, unterminated rows/quotes and unexpected text after a closing quote. The
 runtime caches the highest-priority resolved mod file, clears that cache on mod reload and
 supports row/column counts, string/asset/int/float/bool scalar accessors, exact row searches
-and PC-compatible integer/float comparison searches. Vector-valued cells are explicitly
-reported as unsupported instead of returning invented data.
+and PC-compatible integer/float comparison searches. Vector cells use PC Northstar's
+`<x,y,z>` text form. The return value packs the three IEEE-754 components in the Squirrel
+object exactly like PS4's stock `GetDataTableVector` at client+0x77e6a0; exact vector row
+matching is supported too.
 
 Live validation used shadPS4 `2b5666b3` and experimental PRX SHA256
 `48398ffa878b2c778c1747b6fe221047a883a77975d0e219d400e1ce88b68c17`. Normal startup loaded
@@ -4842,8 +4844,14 @@ Northstar.CustomServers tables including `titan_properties`, `xp_per_player_leve
 `20|burnmeter_maphack|125|0.700|1`, exercising row count, column lookup, row matching and
 all scalar accessors. The boot transcript is
 `work/stage2/iterations/20260930-013544/shad-new-lines.log`; the later command and CSV-load
-lines are in that session's appended shadPS4 log. The portable parser suite and complete
-host profile suite cover malformed inputs and the runtime build.
+lines are in that session's appended shadPS4 log. A later isolated fixture live-verified
+vector access and matching in UI (`1.500|-2.000|3.250|1`) and SERVER. The SERVER module had
+582 exact calls to its registrar patched; its After callback printed the same vector and row
+from a custom CSV. The SERVER transcript is
+`work/stage2/iterations/20260930-085038/shad-new-lines.log`, using experimental PRX SHA256
+`7b69ace327002969af68f70dae4dc0dabcdfb6e91961e3423cf04a6b8b2a7430`. The fixture was removed
+from the installed profile after the test. The portable parser suite and complete host
+profile suite cover malformed inputs and the runtime build.
 
 ## STARPak ownership and the remaining RPAK boundary (2026-09-29)
 

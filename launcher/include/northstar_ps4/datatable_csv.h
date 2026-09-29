@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <cerrno>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -24,6 +26,26 @@ struct DatatableCsv {
         return &values[static_cast<std::size_t>(column)];
     }
 };
+
+struct DatatableVector { float x, y, z; };
+
+inline bool ParseDatatableVector(const std::string& text, DatatableVector& out) noexcept {
+    const char* cursor = text.c_str();
+    if (*cursor++ != '<') return false;
+    float values[3]{};
+    for (int component = 0; component < 3; ++component) {
+        char* end = nullptr;
+        errno = 0;
+        values[component] = std::strtof(cursor, &end);
+        if (errno || end == cursor) return false;
+        cursor = end;
+        if (component < 2) {
+            if (*cursor++ != ',') return false;
+        } else if (*cursor++ != '>' || *cursor != '\0') return false;
+    }
+    out = {values[0], values[1], values[2]};
+    return true;
+}
 
 // Northstar's disk datatables are ordinary CSV files. Newlines inside quoted
 // fields are rejected to match the PC loader; commas, CRLF, empty fields and

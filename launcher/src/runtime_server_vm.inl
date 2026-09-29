@@ -258,6 +258,12 @@ bool InstallRuntimeServerVm(OrbisKernelModule serverHandle) noexcept {
             return false;
         }
     }
+    if (!uiapi::InstallServerDatatableRegistrarHook(g_runtimeServerBase,
+            g_runtimeServerSpan, kServerRegisterSquirrelFuncVa)) {
+        LogFormat("[NorthstarPS4] SERVER datatable registrar hook refused\n");
+        g_runtimeServerBase = 0;
+        return false;
+    }
 
     const std::uintptr_t calls[] = {kServerVmInitCallVa, kServerMapSpawnCallVa};
     const std::uintptr_t targets[] = {reinterpret_cast<std::uintptr_t>(&RuntimeServerVmInit),

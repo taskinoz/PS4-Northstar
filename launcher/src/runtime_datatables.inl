@@ -13,7 +13,12 @@ std::vector<CachedDatatable> datatableCache;
 std::atomic_flag datatableLock = ATOMIC_FLAG_INIT;
 
 using DatatableNative = int (*)(void*);
-struct DatatableOverride { const char* name; DatatableNative replacement; DatatableNative original; };
+struct DatatableOverride {
+    const char* name;
+    DatatableNative replacement;
+    DatatableNative clientOriginal;
+    DatatableNative serverOriginal;
+};
 
 int GetDataTableCsv(void* vm);
 int DataTableColumn(void* vm);
@@ -24,36 +29,39 @@ int DataTableInt(void* vm);
 int DataTableFloat(void* vm);
 int DataTableBool(void* vm);
 int DataTableVector(void* vm);
-enum class DatatableMatch { String, Asset, Int, Float, GreaterInt, LessInt, GreaterFloat, LessFloat };
+enum class DatatableMatch { String, Asset, Int, Float, Vector, GreaterInt, LessInt, GreaterFloat, LessFloat };
 template<DatatableMatch mode> int DataTableFind(void* vm);
 
 DatatableOverride datatableOverrides[] = {
-    {"GetDataTable", GetDataTableCsv, nullptr},
-    {"GetDataTableColumnByName", DataTableColumn, nullptr},
-    {"GetDatatableRowCount", DataTableRows, nullptr},
-    {"GetDataTableString", DataTableString, nullptr},
-    {"GetDataTableAsset", DataTableAsset, nullptr},
-    {"GetDataTableInt", DataTableInt, nullptr},
-    {"GetDataTableFloat", DataTableFloat, nullptr},
-    {"GetDataTableBool", DataTableBool, nullptr},
-    {"GetDataTableVector", DataTableVector, nullptr},
-    {"GetDataTableRowMatchingStringValue", DataTableFind<DatatableMatch::String>, nullptr},
-    {"GetDataTableRowMatchingAssetValue", DataTableFind<DatatableMatch::Asset>, nullptr},
-    {"GetDataTableRowMatchingIntValue", DataTableFind<DatatableMatch::Int>, nullptr},
-    {"GetDataTableRowMatchingFloatValue", DataTableFind<DatatableMatch::Float>, nullptr},
-    {"GetDataTableRowGreaterThanOrEqualToIntValue", DataTableFind<DatatableMatch::GreaterInt>, nullptr},
-    {"GetDataTableRowLessThanOrEqualToIntValue", DataTableFind<DatatableMatch::LessInt>, nullptr},
-    {"GetDataTableRowGreaterThanOrEqualToFloatValue", DataTableFind<DatatableMatch::GreaterFloat>, nullptr},
-    {"GetDataTableRowLessThanOrEqualToFloatValue", DataTableFind<DatatableMatch::LessFloat>, nullptr},
+    {"GetDataTable", GetDataTableCsv, nullptr, nullptr},
+    {"GetDataTableColumnByName", DataTableColumn, nullptr, nullptr},
+    {"GetDatatableRowCount", DataTableRows, nullptr, nullptr},
+    {"GetDataTableString", DataTableString, nullptr, nullptr},
+    {"GetDataTableAsset", DataTableAsset, nullptr, nullptr},
+    {"GetDataTableInt", DataTableInt, nullptr, nullptr},
+    {"GetDataTableFloat", DataTableFloat, nullptr, nullptr},
+    {"GetDataTableBool", DataTableBool, nullptr, nullptr},
+    {"GetDataTableVector", DataTableVector, nullptr, nullptr},
+    {"GetDataTableRowMatchingStringValue", DataTableFind<DatatableMatch::String>, nullptr, nullptr},
+    {"GetDataTableRowMatchingAssetValue", DataTableFind<DatatableMatch::Asset>, nullptr, nullptr},
+    {"GetDataTableRowMatchingIntValue", DataTableFind<DatatableMatch::Int>, nullptr, nullptr},
+    {"GetDataTableRowMatchingFloatValue", DataTableFind<DatatableMatch::Float>, nullptr, nullptr},
+    {"GetDataTableRowMatchingVectorValue", DataTableFind<DatatableMatch::Vector>, nullptr, nullptr},
+    {"GetDataTableRowGreaterThanOrEqualToIntValue", DataTableFind<DatatableMatch::GreaterInt>, nullptr, nullptr},
+    {"GetDataTableRowLessThanOrEqualToIntValue", DataTableFind<DatatableMatch::LessInt>, nullptr, nullptr},
+    {"GetDataTableRowGreaterThanOrEqualToFloatValue", DataTableFind<DatatableMatch::GreaterFloat>, nullptr, nullptr},
+    {"GetDataTableRowLessThanOrEqualToFloatValue", DataTableFind<DatatableMatch::LessFloat>, nullptr, nullptr},
 };
 
-DatatableNative OriginalDatatable(const char* name) {
+void* datatableServerVm = nullptr;
+DatatableNative OriginalDatatable(const char* name, void* vm) {
     for (const auto& entry : datatableOverrides)
-        if (!std::strcmp(entry.name, name)) return entry.original;
+        if (!std::strcmp(entry.name, name))
+            return vm == datatableServerVm ? entry.serverOriginal : entry.clientOriginal;
     return nullptr;
 }
 int CallOriginalDatatable(void* vm, const char* name) {
-    auto original = OriginalDatatable(name);
+    auto original = OriginalDatatable(name, vm);
     return original ? original(vm) : Error(vm, "Original datatable native was not captured");
 }
 bool IsCustomDatatableArg(void* vm, int index = 1) {
@@ -70,21 +78,67 @@ bool IsCustomDatatableArg(void* vm, int index = 1) {
 // it into the VM.
 using ClientRegistrar = void (*)(void*, void*, void*, int, int);
 ClientRegistrar originalClientRegistrar = nullptr;
+ClientRegistrar originalServerRegistrar = nullptr;
 bool datatableRegistrarHooked = false;
+bool datatableServerRegistrarHooked = false;
 
 void DatatableClientRegistrar(void* owner, void* rawRecord, void* unknown, int a, int b) {
+    // A later UI/CLIENT VM can reuse the address of a destroyed SERVER VM.
+    // Registration identifies that reuse before any script can call a builtin.
+    void* vm = owner ? *reinterpret_cast<void**>(static_cast<char*>(owner) + 8) : nullptr;
+    if (vm && vm == datatableServerVm) datatableServerVm = nullptr;
     auto* record = static_cast<std::uint8_t*>(rawRecord);
     const char* name = record ? *reinterpret_cast<const char**>(record) : nullptr;
     if (name) for (auto& entry : datatableOverrides) {
         if (std::strcmp(name, entry.name)) continue;
         auto& function = *reinterpret_cast<DatatableNative*>(record + 0x60);
-        if (!entry.original) entry.original = function;
+        if (!entry.clientOriginal) entry.clientOriginal = function;
         function = entry.replacement;
         LogFormat("[NorthstarPS4] datatable native replaced: %s original=%p\n",
-            name, reinterpret_cast<void*>(entry.original));
+            name, reinterpret_cast<void*>(entry.clientOriginal));
         break;
     }
     originalClientRegistrar(owner, rawRecord, unknown, a, b);
+}
+
+void DatatableServerRegistrar(void* owner, void* rawRecord, void* unknown, int a, int b) {
+    datatableServerVm = owner ? *reinterpret_cast<void**>(static_cast<char*>(owner) + 8) : nullptr;
+    auto* record = static_cast<std::uint8_t*>(rawRecord);
+    const char* name = record ? *reinterpret_cast<const char**>(record) : nullptr;
+    if (name) for (auto& entry : datatableOverrides) {
+        if (std::strcmp(name, entry.name)) continue;
+        auto& function = *reinterpret_cast<DatatableNative*>(record + 0x60);
+        if (!entry.serverOriginal) entry.serverOriginal = function;
+        function = entry.replacement;
+        LogFormat("[NorthstarPS4] SERVER datatable native replaced: %s original=%p\n",
+            name, reinterpret_cast<void*>(entry.serverOriginal));
+        break;
+    }
+    originalServerRegistrar(owner, rawRecord, unknown, a, b);
+}
+
+bool PatchDatatableRegistrarCalls(std::uintptr_t base, std::size_t span,
+    std::uintptr_t registrarVa, std::uintptr_t replacement, std::size_t& patched) noexcept {
+    patched = 0;
+    for (std::uintptr_t va = 0; va + 5 <= span; ++va) {
+        auto* call = reinterpret_cast<std::uint8_t*>(base + va);
+        if (*call != 0xe8) continue;
+        std::int32_t displacement;
+        std::memcpy(&displacement, call + 1, sizeof(displacement));
+        const std::uintptr_t target = reinterpret_cast<std::uintptr_t>(call + 5) + displacement;
+        if (target != base + registrarVa) continue;
+        const std::int64_t relative = static_cast<std::int64_t>(replacement) -
+            static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(call + 5));
+        if (relative < INT32_MIN || relative > INT32_MAX) return false;
+        void* page = reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(call) & ~std::uintptr_t(0x3fff));
+        if (sceKernelMprotect(page, 0x4000, 7) != 0) return false;
+        const auto newDisplacement = static_cast<std::int32_t>(relative);
+        std::memcpy(call + 1, &newDisplacement, sizeof(newDisplacement));
+        if (sceKernelMprotect(page, 0x4000, 5) != 0) return false;
+        ++patched;
+        va += 4;
+    }
+    return patched != 0;
 }
 
 bool InstallClientDatatableRegistrarHook() noexcept {
@@ -103,31 +157,24 @@ bool InstallClientDatatableRegistrarHook() noexcept {
     // GetDataTable itself is registered at client+0x312c6b, outside the block
     // that holds RunUIScript. Scan only the validated executable PT_LOAD and
     // rewrite calls whose decoded target is exactly the registrar.
-    constexpr std::uintptr_t beginVa = 0;
     const std::uintptr_t endVa = std::min<std::uintptr_t>(g_runtimeClientSpan, 0x9dcc14);
     const std::uintptr_t replacement = reinterpret_cast<std::uintptr_t>(&DatatableClientRegistrar);
     std::size_t patched = 0;
-    for (std::uintptr_t va = beginVa; va + 5 <= endVa; ++va) {
-        auto* call = reinterpret_cast<std::uint8_t*>(g_runtimeClientBase + va);
-        if (*call != 0xe8) continue;
-        std::int32_t displacement;
-        std::memcpy(&displacement, call + 1, sizeof(displacement));
-        const std::uintptr_t target = reinterpret_cast<std::uintptr_t>(call + 5) + displacement;
-        if (target != g_runtimeClientBase + kClientRegisterSquirrelFuncVa) continue;
-        const std::int64_t relative = static_cast<std::int64_t>(replacement) -
-            static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(call + 5));
-        if (relative < INT32_MIN || relative > INT32_MAX) return false;
-        void* page = reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(call) & ~std::uintptr_t(0x3fff));
-        if (sceKernelMprotect(page, 0x4000, 7) != 0) return false;
-        const auto newDisplacement = static_cast<std::int32_t>(relative);
-        std::memcpy(call + 1, &newDisplacement, sizeof(newDisplacement));
-        if (sceKernelMprotect(page, 0x4000, 5) != 0) return false;
-        ++patched;
-        va += 4;
-    }
-    datatableRegistrarHooked = patched != 0;
+    datatableRegistrarHooked = PatchDatatableRegistrarCalls(g_runtimeClientBase, endVa,
+        kClientRegisterSquirrelFuncVa, replacement, patched);
     LogFormat("[NorthstarPS4] datatable registrar calls patched=%zu\n", patched);
     return datatableRegistrarHooked;
+}
+
+bool InstallServerDatatableRegistrarHook(std::uintptr_t base, std::size_t span,
+    std::uintptr_t registrarVa) noexcept {
+    if (datatableServerRegistrarHooked) return true;
+    originalServerRegistrar = reinterpret_cast<ClientRegistrar>(base + registrarVa);
+    std::size_t patched = 0;
+    datatableServerRegistrarHooked = PatchDatatableRegistrarCalls(base, span, registrarVa,
+        reinterpret_cast<std::uintptr_t>(&DatatableServerRegistrar), patched);
+    LogFormat("[NorthstarPS4] SERVER datatable registrar calls patched=%zu\n", patched);
+    return datatableServerRegistrarHooked;
 }
 
 struct DatatableGuard {
@@ -315,6 +362,7 @@ template<DatatableMatch mode> int DataTableFind(void* vm) {
     constexpr const char* names[] = {
         "GetDataTableRowMatchingStringValue", "GetDataTableRowMatchingAssetValue",
         "GetDataTableRowMatchingIntValue", "GetDataTableRowMatchingFloatValue",
+        "GetDataTableRowMatchingVectorValue",
         "GetDataTableRowGreaterThanOrEqualToIntValue", "GetDataTableRowLessThanOrEqualToIntValue",
         "GetDataTableRowGreaterThanOrEqualToFloatValue", "GetDataTableRowLessThanOrEqualToFloatValue",
     };
@@ -326,6 +374,7 @@ template<DatatableMatch mode> int DataTableFind(void* vm) {
     const char* text = nullptr;
     int integer = 0;
     float number = 0;
+    DatatableVector vector{};
     if constexpr (mode == DatatableMatch::String) text = TextArg(vm, 3);
     if constexpr (mode == DatatableMatch::Asset) text = AssetOrStringArg(vm, 3);
     if constexpr (mode == DatatableMatch::Int || mode == DatatableMatch::GreaterInt || mode == DatatableMatch::LessInt) {
@@ -334,6 +383,13 @@ template<DatatableMatch mode> int DataTableFind(void* vm) {
     }
     if constexpr (mode == DatatableMatch::Float || mode == DatatableMatch::GreaterFloat || mode == DatatableMatch::LessFloat)
         number = NumberArg(vm, 3);
+    if constexpr (mode == DatatableMatch::Vector) {
+        const auto& value = Arg(vm, 3);
+        if (static_cast<std::uint32_t>(value.tag) != 0x40000) return Error(vm, "Datatable search value must be a vector");
+        std::uint32_t bits[] = {static_cast<std::uint32_t>(value.tag >> 32),
+            static_cast<std::uint32_t>(value.value), static_cast<std::uint32_t>(value.value >> 32)};
+        std::memcpy(&vector, bits, sizeof(vector));
+    }
     if constexpr (mode == DatatableMatch::String || mode == DatatableMatch::Asset)
         if (!text) return Error(vm, "Datatable search value has the wrong type");
     for (std::size_t row = 0; row < table->table.rows.size(); ++row) {
@@ -343,6 +399,10 @@ template<DatatableMatch mode> int DataTableFind(void* vm) {
         if constexpr (mode == DatatableMatch::String || mode == DatatableMatch::Asset) match = *cell == text;
         else if constexpr (mode == DatatableMatch::Int) { int value; match = ParseIntCell(*cell, value) && value == integer; }
         else if constexpr (mode == DatatableMatch::Float) { float value; match = ParseFloatCell(*cell, value) && value == number; }
+        else if constexpr (mode == DatatableMatch::Vector) {
+            DatatableVector value;
+            match = ParseDatatableVector(*cell, value) && value.x == vector.x && value.y == vector.y && value.z == vector.z;
+        }
         else if constexpr (mode == DatatableMatch::GreaterInt) { int value; match = ParseIntCell(*cell, value) && integer >= value; }
         else if constexpr (mode == DatatableMatch::LessInt) { int value; match = ParseIntCell(*cell, value) && integer <= value; }
         else if constexpr (mode == DatatableMatch::GreaterFloat) { float value; match = ParseFloatCell(*cell, value) && number >= value; }
@@ -355,5 +415,13 @@ template<DatatableMatch mode> int DataTableFind(void* vm) {
 
 int DataTableVector(void* vm) {
     if (!IsCustomDatatableArg(vm)) return CallOriginalDatatable(vm, "GetDataTableVector");
-    return Error(vm, "Custom CSV vector datatable cells are not implemented on PS4 yet");
+    DatatableGuard guard;
+    auto* table = TableArgLocked(vm, 1, "GetDataTableVector expects a PS4 CSV datatable");
+    if (!table) return -1;
+    const auto* cell = DatatableCell(vm, table);
+    DatatableVector value{};
+    if (!cell || !ParseDatatableVector(*cell, value))
+        return cell ? Error(vm, "Datatable cell is not a <x,y,z> vector") : -1;
+    Vector(vm, value.x, value.y, value.z);
+    return 1;
 }

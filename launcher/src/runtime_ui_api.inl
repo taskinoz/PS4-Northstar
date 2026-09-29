@@ -19,6 +19,14 @@ void PushPrimitive(void* vm, std::uint64_t tag, std::uint64_t value) {
 }
 void Boolean(void* vm, bool value) { PushPrimitive(vm, 0x1000008, value); }
 void Integer(void* vm, int value) { PushPrimitive(vm, 0x5000002, static_cast<std::uint32_t>(value)); }
+void Vector(void* vm, float x, float y, float z) {
+    std::uint32_t xb, yb, zb;
+    std::memcpy(&xb, &x, sizeof(x));
+    std::memcpy(&yb, &y, sizeof(y));
+    std::memcpy(&zb, &z, sizeof(z));
+    PushPrimitive(vm, 0x40000ull | (static_cast<std::uint64_t>(xb) << 32),
+        static_cast<std::uint64_t>(yb) | (static_cast<std::uint64_t>(zb) << 32));
+}
 void String(void* vm, const char* value) { At<void (*)(void*, const char*, int)>(0x682e00)(vm, value, -1); }
 void Asset(void* vm, const char* value) { At<void (*)(void*, const char*, int)>(0x682f40)(vm, value, -1); }
 void Array(void* vm) { At<void (*)(void*, int)>(0x683330)(vm, 0); }

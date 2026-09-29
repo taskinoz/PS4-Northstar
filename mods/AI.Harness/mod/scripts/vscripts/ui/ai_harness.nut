@@ -174,6 +174,16 @@ void function AIHarness_Poll()
                         GetDataTableFloat( dataTable, row, GetDataTableColumnByName( dataTable, "activationCost" ) ),
                         selectable ? 1 : 0 )
                 }
+                // Development-only fixture action for vector return packing and
+                // exact vector row matching. The fixture is not in release mods.
+                else if ( action == "datatablevector" )
+                {
+                    var dataTable = GetDataTable( $"datatable/ps4_vector_fixture.rpak" )
+                    int column = GetDataTableColumnByName( dataTable, "origin" )
+                    vector value = GetDataTableVector( dataTable, 1, column )
+                    int row = GetDataTableRowMatchingVectorValue( dataTable, column, value )
+                    json = format( "%.3f|%.3f|%.3f|%d", value.x, value.y, value.z, row )
+                }
                 // Resolves a localisation token; the text comes back in the json field.
                 else if ( action == "localize" )
                     json = Localize( NSAIHarnessField( raw, "command" ) )

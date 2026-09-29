@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('status','launch','console','menu','back','json','cvar','playlistvar','datatable','localize','join','download')][string] $Action = 'status',
+    [ValidateSet('status','launch','console','menu','back','json','cvar','playlistvar','datatable','datatablevector','localize','join','download')][string] $Action = 'status',
     [string] $Command,
     [string] $Menu,
     [string] $Mailbox = (Join-Path $env:APPDATA 'shadPS4\data\northstar_ps4\ai_harness'),
