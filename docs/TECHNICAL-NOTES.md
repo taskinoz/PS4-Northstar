@@ -5234,3 +5234,10 @@ log likewise contains no `[NorthstarPS4] console command:` event; the repeated u
 commands shown there are rejected by the callback dispatcher. The observed cross-machine lobby
 control remains attributable to duplicate-UID local-player misclassification pending the retest.
 
+The user repeated the same-account PC departure with experimental PRX SHA256
+`c825f89aa8f54c6fef60c5a8e41132202f089c562b7251ed6100e5cf9e10a575` and confirmed the
+problem is fixed. The PC no longer makes the PS4 host follow it back to multiplayer, and the
+subsequent Private Match transition no longer pulls that departed PC back into the lobby. This
+closes the duplicate-account local-player ownership regression; wrong-password refusal remains
+a separate browser authentication test.
+
