@@ -30,6 +30,7 @@ From the repository in PowerShell:
 ./scripts/Send-AIHarnessCommand.ps1 -Action datatablevector # requires the development vector fixture
 ./scripts/Send-AIHarnessCommand.ps1 -Action localize -Command '#A_BUTTON_SELECT'
 ./scripts/Send-AIHarnessCommand.ps1 -Action http -Command 'https://example.com/' -TimeoutSeconds 90
+./scripts/Send-AIHarnessCommand.ps1 -Action httpretire -Command 'http://127.0.0.1:18765/' -QueueOnly
 # Mod auto-download without a server: fetch the verified list, download and install
 # (Northstar's own dialogs), enable, ReloadMods. Replies with the mod's state.
 ./scripts/Send-AIHarnessCommand.ps1 -Action download -Command 'lexi.lexire125|1.0.7' -TimeoutSeconds 180
@@ -44,6 +45,12 @@ From the repository in PowerShell:
 `launch` follows Northstar's local authentication sequence, completes local authentication, then queues `setplaylist tdm` and `map mp_lobby`. Authentication failure is returned as an error. A successful reply says **queued**, not that the map loaded successfully. Check the fresh session log for script errors and actual lobby readiness. `status` confirms the UI polling thread is responding and now reports `connected`, `lobby`, `level`, `playlist` and `privateMatch` from game state (the last two only while connected). `cvar` returns a convar's value, `playlistvar` reads an effective playlist variable from `<playlist>|<name>|<fallback>`, `datatable` checks disk-CSV row count, column lookup, row search and scalar accessors, `datatablevector` checks vector access and matching when its development fixture is installed, and `localize` resolves a token; each result is in the reply's `json` field. These do not prove that every initialization callback succeeded; also inspect the current session for script errors.
 
 `json` passes `-Command` through `DecodeJSON(text, true)` and `EncodeJSON` and returns the result in the reply's `json` field, to test the JSON natives in the UI VM. Member order follows the Squirrel table, not the input. `http` starts `NSHttpGet`, waits for its deferred success or failure callback, and returns `success|status|bodyLength` or `failure|code|message`; it verifies that the native host-frame queue drain delivers a real callback without the former script polling bridge.
+
+`httpretire` is the destructive-generation acceptance action. Point it at a deliberately
+delayed endpoint and use `-QueueOnly`: it starts the request, runs the normal `ReloadMods()`
+path and resets the UI VM. When the endpoint eventually responds, the runtime must log
+`dropped async result for retired context=2` and must not run the callback in the replacement
+VM. Local endpoints also require `-allowlocalhttp` in `ns_startup_args.txt`.
 
 `download` and `join` run Northstar's own download helpers (`FetchVerifiedModsManifesto`, `DownloadMod` and the error dialog) and its `ReloadMods()`, so the dialogs appear as they would from the server browser. Both reply before the queued `uiscript_reset` runs, and the harness is ready again once the UI VM rebuilds. `join` needs a current Atlas identity and refuses password-protected servers. The reply says **queued**: check the log for the connect's outcome.
 

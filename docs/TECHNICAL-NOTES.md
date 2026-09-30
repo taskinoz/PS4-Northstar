@@ -5129,3 +5129,27 @@ global log lines 4096419-4101022 before completing its lifecycle. No new excepti
 The temporary callback was removed, the deployed Custom RPAK manifest restored, and the test
 profile resynchronized after validation.
 
+## Deterministic late async-result rejection (2026-09-30)
+
+The earlier generation-cancellation checks used public endpoints that completed before their
+requesting VM was destroyed. AI.Harness now has an `httpretire` action that starts a request and
+immediately runs the normal `ReloadMods()`/`uiscript_reset` path. The reusable
+`Start-DelayedHttpFixture.ps1` endpoint holds its response for a chosen interval, making the
+worker/teardown order deterministic instead of dependent on internet timing.
+
+Live validation used release v0.2.11-alpha's PRX SHA256
+`e607ffef4b6bd4a4aa642c267cec82e582869bf81856cacec2cffe40d7cc5121`, shadPS4
+`4cbd23ef`, a loopback endpoint delayed by 12 seconds, and the temporary startup option
+`-allowlocalhttp`. The request was queued at global line 4261562, the old UI lifecycle was
+cleared at 4261654, and the worker logged `dropped async result for retired context=2
+generation=1` at 4262553. The replacement UI lifecycle then completed at 4262621. No callback
+was delivered to the replacement VM. `ns_startup_args.txt` was restored to
+`-allowdupeaccounts` after the test.
+
+The first launch attempt failed in shadPS4's cache deserializer before game code because the
+previous forced shutdown had left a 64-byte `profile.bin`. It was moved recoverably to
+`work/cache-backups/20260930-1616-async-retire/profile.bin.corrupt`; the retry rebuilt the cache
+and reached the test. The retry's early boot transcript is
+`work/stage2/iterations/20260930-161716/shad-new-lines.log`; the retirement evidence is in the
+same appended shadPS4 log.
+

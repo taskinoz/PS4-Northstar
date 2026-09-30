@@ -221,6 +221,19 @@ void function AIHarness_Poll()
                         throw "HTTP callback timed out"
                     json = file.httpResult
                 }
+                // Starts a request and immediately rebuilds the UI VM. A delayed
+                // endpoint must finish against the retired generation and be
+                // dropped natively rather than call either the old or new VM.
+                else if ( action == "httpretire" )
+                {
+                    file.httpComplete = false
+                    file.httpResult = ""
+                    if ( !NSHttpGet( NSAIHarnessField( raw, "command" ), {},
+                            AIHarness_HttpSuccess, AIHarness_HttpFailure ) )
+                        throw "HTTP request was not started"
+                    result = "queued"
+                    ReloadMods()
+                }
                 // Joins the first listed server whose name contains the command
                 // text, downloading and enabling its required mods the way the
                 // server browser does (OnServerSelected_Threaded, ConnectToServer).
