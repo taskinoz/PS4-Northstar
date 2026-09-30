@@ -358,10 +358,12 @@ int PlayerClientArg(void* vm, int index) {
     return entityIndex - 1;
 }
 
-// PC: `!strcmp(g_pLocalPlayerUserID, client.m_UID)`. The local user id here is
-// the imported Atlas uid, which the connect packet carries. Without an
-// imported identity there is no uid to compare, and the listen server's own
-// client (#0) is the local player.
+// PC compares the platform UID, but PS4 deliberately supports a PC and the
+// console using the same imported Atlas identity. A UID comparison therefore
+// misclassifies that remote PC as the listen host: its LeaveMatch ends the
+// match for everyone instead of disconnecting only that client. PS4 has no
+// dedicated-server mode, and the listen host owns client slot zero, so use
+// actual connection ownership rather than account identity.
 int ServerIsLocalPlayer(void* vm) {
     const int client = PlayerClientArg(vm, 1);
     if (client < 0) {
@@ -369,8 +371,7 @@ int ServerIsLocalPlayer(void* vm) {
         Boolean(vm, false);
         return 1;
     }
-    const char* uid = g_clientUid ? g_clientUid(client) : nullptr;
-    Boolean(vm, g_atlasUid[0] && uid ? std::strcmp(g_atlasUid, uid) == 0 : client == 0);
+    Boolean(vm, client == 0);
     return 1;
 }
 

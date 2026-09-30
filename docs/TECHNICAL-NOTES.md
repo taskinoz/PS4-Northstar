@@ -5194,3 +5194,24 @@ the Custom RPAK manifest temporarily disabled reached the menu and verified anno
 The manifest was restored after the test. This isolated startup failure is not counted as an
 announcement failure.
 
+## Duplicate-account client leaving a PS4 listen server (2026-09-30)
+
+The password challenge is now accepted end to end: the user changed the PS4 host password in
+Host Options and joined it from PC with that password. The PC and PS4 used the same exported
+Atlas identity, as permitted by `ns_allow_duplicate_accounts`.
+
+When the PC selected Leave, the PS4 followed it back to the multiplayer lobby. Entering Private
+Match again on PS4 then pulled the PC into that lobby. These are two symptoms of one ownership
+error. `NSIsPlayerLocalPlayer` compared each connected client's UID to the imported Atlas UID;
+with a duplicate account, both the listen host and remote PC matched. Northstar.CustomServers'
+`ClientCommandCallback_LeaveMatch` therefore took its local-player branch for the PC and called
+`GameRules_EndMatch`, returning the entire server to `mp_lobby` without disconnecting the PC.
+That still-connected PC naturally followed the host's subsequent private-lobby state.
+
+PS4 has no dedicated-server mode in this port, and its listen host owns client slot zero.
+`NSIsPlayerLocalPlayer` now resolves the entity to its validated engine client index and returns
+true only for slot zero. UID remains the player's account identity but no longer determines
+connection ownership. The remaining acceptance test is to repeat the same-account PC Leave
+action: the server should run the remote-player persistence/leave path, disconnect only the PC,
+and leave the PS4 host in its private lobby.
+
