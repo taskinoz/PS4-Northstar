@@ -5033,3 +5033,40 @@ which also exercised rebinding on new VM generations. The successful boot transc
 An earlier launch in `work/stage2/iterations/20260930-105025` faulted in shadPS4 JIT code before
 any VM initialized, so it is recorded separately rather than attributed to this change.
 
+## VM destruction and async-generation cancellation (2026-09-30)
+
+NorthstarLauncher revision `f698c8a90b9d3d6d1740eda57101db7011d051d2` destroys a context's
+message buffer with its Squirrel VM and drains the active buffers from
+`CHostState::FrameUpdate` (`engine/hoststate.cpp`). The PS4 HTTP queue previously belonged only
+to a context number, so a worker that finished after teardown could enqueue into that context's
+replacement VM.
+
+Each UI, CLIENT and SERVER VM now starts a new async generation. Teardown increments the same
+generation and clears its queue while holding the queue lock; worker completion takes that lock
+and enqueues only if the generation captured when the request started is still current. This
+closes both sides of the race: a result queued before teardown is cleared, and one finishing
+after teardown is rejected. Safe-I/O results remain keyed to the requesting VM pointer and are
+dropped at the same teardown sites.
+
+SERVER teardown now has PC callback parity too. Normalized disassembly matched client.prx's
+68-instruction release function at 0x6787a0 exactly to server.prx 0x629e80. All three direct
+SERVER release calls are gated and redirected before the engine frees the VM: 0x1b60dd,
+0x1b644b and 0x70d022. The hook dispatches enabled mods' ordered `ServerCallback.Destroy`
+functions, removes the print sink, retires async work, drops safe-I/O results, unbinds the
+module-local helpers and clears lifecycle ownership before calling the untouched release.
+
+Live validation used shadPS4 `4cbd23ef` and experimental PRX SHA256
+`79c1caa365f12411c36dd2f9e995ccdb9dd76d70ee098855fa9cebf65c555bc4`. A temporary SERVER
+fixture initialized in `mp_lobby`, printed its Destroy callback before lifecycle state was
+cleared, then initialized again in `mp_forwardbase_kodai`; repeated lobby/map transitions did
+the same without a fresh fatal or guest exception. The successful boot transcript is
+`work/stage2/iterations/20260930-142754/shad-new-lines.log`; the later lifecycle evidence is in
+that boot's appended shadPS4 log (fixture Init at line 3532036, Destroy at 3542432, state clear
+at 3542434 and replacement Init at 3556748). The fixture was removed afterward.
+
+Two attempted delayed-request acceptance checks were inconclusive because the public endpoints
+returned immediately (200 and 404) before the old VM was destroyed. The locked generation
+implementation is present, but its late-worker rejection log still needs a deterministic local
+delayed endpoint test. The native frame hook also remains open: the current script `WaitFrame`
+loop already runs callbacks on each VM's thread, but is not yet the PC host-state hook.
+

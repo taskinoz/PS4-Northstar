@@ -173,6 +173,8 @@ void RuntimeUiDestroy(void* owner) noexcept {
         // addresses the allocator may hand back for a later VM.
         if (void* vm = *reinterpret_cast<void**>(static_cast<char*>(owner) + 8))
             RemoveScriptPrint(*reinterpret_cast<void**>(static_cast<char*>(vm) + 0x50));
+        uiapi::ResetAsyncCalls(state == &g_runtimeUiLifecycle ? uiapi::kCtxUi : uiapi::kCtxClient,
+            "VM destroyed");
         uiapi::UnbindSquirrelHelpers(owner);
         uiapi::DropPendingLoads(owner);
         state->owner = nullptr;

@@ -209,6 +209,7 @@ int ScriptLocalHttpAllowed(void* vm);
 int RunAsyncCallsUi(void* vm);
 int RunAsyncCallsClient(void* vm);
 int RunAsyncCallsServer(void* vm);
+void ResetAsyncCalls(int context, const char* reason);
 // Defined in runtime_atlas_server.inl: the hosted server's Atlas presence.
 int UpdateServerPresence(void* vm);
 int IsClientAtlasAuthenticated(void* vm);

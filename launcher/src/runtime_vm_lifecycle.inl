@@ -10,6 +10,7 @@ bool RuntimeVmInit(void* owner, int context, float time) noexcept {
     LogFormat("[NorthstarPS4] VM initialized context=%d owner=%p result=%d\n", context, owner, result);
     VmLifecycle* state = RuntimeLifecycleFor(context);
     if (!state) return result;
+    uiapi::ResetAsyncCalls(context, "VM created");
     uiapi::BindSquirrelHelpers(owner, context, g_runtimeClientBase);
     state->owner = owner;
     state->started = false;

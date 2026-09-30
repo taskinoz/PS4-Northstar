@@ -41,6 +41,7 @@ constexpr std::uint32_t kSceHttpsFlagCnCheck = 0x04;
 
 struct ScriptHttpRequest {
     int context = 0;
+    std::uint64_t generation = 0;
     int handle = 0;
     int method = 0;
     std::string url;
@@ -62,15 +63,41 @@ struct AsyncMessage {
 
 std::atomic_flag g_asyncLock = ATOMIC_FLAG_INIT;
 std::vector<AsyncMessage> g_asyncQueues[3];  // UI, CLIENT, SERVER
+std::uint64_t g_asyncGenerations[3]{};
 std::atomic<int> g_lastHttpHandle{0};
 std::atomic<int> g_scriptHttpTemplate{-1};
 
 int AsyncQueueIndex(int context) { return context == kCtxUi ? 0 : context == kCtxClient ? 1 : 2; }
 
-void QueueAsyncMessage(int context, AsyncMessage message) {
+std::uint64_t CurrentAsyncGeneration(int context) {
     while (g_asyncLock.test_and_set(std::memory_order_acquire)) {}
-    g_asyncQueues[AsyncQueueIndex(context)].push_back(std::move(message));
+    const std::uint64_t generation = g_asyncGenerations[AsyncQueueIndex(context)];
     g_asyncLock.clear(std::memory_order_release);
+    return generation;
+}
+
+void ResetAsyncCalls(int context, const char* reason) {
+    const int index = AsyncQueueIndex(context);
+    while (g_asyncLock.test_and_set(std::memory_order_acquire)) {}
+    const std::size_t dropped = g_asyncQueues[index].size();
+    g_asyncQueues[index].clear();
+    ++g_asyncGenerations[index];
+    g_asyncLock.clear(std::memory_order_release);
+    if (dropped)
+        LogFormat("[NorthstarPS4] dropped %zu queued async calls for context=%d (%s)\n",
+            dropped, context, reason);
+}
+
+bool QueueAsyncMessage(int context, std::uint64_t generation, AsyncMessage message) {
+    const int index = AsyncQueueIndex(context);
+    while (g_asyncLock.test_and_set(std::memory_order_acquire)) {}
+    const bool current = g_asyncGenerations[index] == generation;
+    if (current) g_asyncQueues[index].push_back(std::move(message));
+    g_asyncLock.clear(std::memory_order_release);
+    if (!current)
+        LogFormat("[NorthstarPS4] dropped async result for retired context=%d generation=%llu\n",
+            context, static_cast<unsigned long long>(generation));
+    return current;
 }
 
 // PC reads these once, early, so a mod cannot change them later.
@@ -92,7 +119,7 @@ void QueueHttpFailure(const ScriptHttpRequest& request, int code, const char* me
     failure.handle = request.handle;
     failure.code = code;
     failure.text = message;
-    QueueAsyncMessage(request.context, std::move(failure));
+    QueueAsyncMessage(request.context, request.generation, std::move(failure));
 }
 
 // PC's IsHttpDestinationHostAllowed: an IPv4 destination outside the private
@@ -259,7 +286,7 @@ void RunScriptHttpRequest(ScriptHttpRequest& request) {
     success.code = status;
     success.text = std::move(body);
     success.headers = std::move(headers);
-    QueueAsyncMessage(request.context, std::move(success));
+    QueueAsyncMessage(request.context, request.generation, std::move(success));
 }
 
 void* ScriptHttpWorker(void* argument) {
@@ -315,6 +342,7 @@ int MakeScriptHttpRequest(void* vm, int context) {
     }
     auto* request = new ScriptHttpRequest;
     request->context = context;
+    request->generation = CurrentAsyncGeneration(context);
     request->handle = ++g_lastHttpHandle;
     request->method = static_cast<std::int32_t>(Arg(vm, 1).value);
     request->url = url;

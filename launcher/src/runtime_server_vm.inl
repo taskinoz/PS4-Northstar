@@ -162,6 +162,7 @@ bool RegisterServerNatives(void* owner) noexcept {
 // EndUpdateCachedLoadouts signal uninitialized before player connections.
 constexpr std::uintptr_t kServerMapSpawnCallVa = 0x70cd64;
 constexpr std::uintptr_t kServerInitCallbackVa = 0x62b1b0;
+constexpr std::uintptr_t kServerVmReleaseVa = 0x629e80;
 std::vector<ScriptCallback> g_runtimeServerCallbackList;
 VmLifecycle g_runtimeServerLifecycle{"SERVER", "ServerCallback", nullptr, false, &g_runtimeServerCallbackList};
 
@@ -194,6 +195,7 @@ bool RuntimeServerVmInit(void* owner, int context, float time) noexcept {
     // Only the SERVER context comes through server.prx, but the argument is
     // checked rather than assumed.
     if (context != 0 || !result || !owner) return result;
+    uiapi::ResetAsyncCalls(context, "VM created");
     uiapi::BindSquirrelHelpers(owner, context, g_runtimeServerBase);
     // PC writes remote players' pdata when they reconnect for the next map;
     // here the slots (and their saves) carry over, so write them now.
@@ -227,6 +229,29 @@ bool RuntimeServerVmInit(void* owner, int context, float time) noexcept {
     return result;
 }
 
+void RuntimeServerDestroy(void* owner) noexcept {
+    auto& state = g_runtimeServerLifecycle;
+    if (owner && owner == state.owner) {
+        if (state.started) {
+            auto call = reinterpret_cast<bool (*)(void*, const char*)>(g_runtimeServerBase + kServerInitCallbackVa);
+            for (const auto& entry : *state.callbacks) if (!entry.destroy.empty()) {
+                LogFormat("[NorthstarPS4] SERVER Destroy: %s\n", entry.destroy.c_str());
+                if (!call(owner, entry.destroy.c_str()))
+                    LogFormat("[NorthstarPS4] SERVER Destroy callback not found: %s\n", entry.destroy.c_str());
+            }
+        }
+        if (void* vm = *reinterpret_cast<void**>(static_cast<char*>(owner) + 8))
+            RemoveScriptPrint(*reinterpret_cast<void**>(static_cast<char*>(vm) + 0x50));
+        uiapi::ResetAsyncCalls(uiapi::kCtxServer, "VM destroyed");
+        uiapi::UnbindSquirrelHelpers(owner);
+        uiapi::DropPendingLoads(owner);
+        state.owner = nullptr;
+        state.started = false;
+        LogFormat("[NorthstarPS4] SERVER VM lifecycle state cleared\n");
+    }
+    reinterpret_cast<void (*)(void*)>(g_runtimeServerBase + kServerVmReleaseVa)(owner);
+}
+
 bool InstallRuntimeServerVm(OrbisKernelModule serverHandle) noexcept {
     if (g_runtimeServerVmHooked) return true;
     OrbisKernelModuleInfo info{};
@@ -245,6 +270,10 @@ bool InstallRuntimeServerVm(OrbisKernelModule serverHandle) noexcept {
         {0x70cd56, "\x48\x8b\x3d\xa3\x7e\x6f\x00\x48\x8d\x35\x06\x31\x18\x00", 14},
         {kServerVmInitCallVa, "\xe8\x10\x2f\x00\x00", 5},
         {kServerVmInitVa, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x81\xec\xa8\x00\x00\x00", 20},
+        {kServerVmReleaseVa, "\x55\x48\x89\xe5\x41\x57\x41\x56\x53\x50\x49\x89\xff", 13},
+        {0x1b60dd, "\xe8\x9e\x3d\x47\x00", 5},
+        {0x1b644b, "\xe8\x30\x3a\x47\x00", 5},
+        {0x70d022, "\xe8\x59\xce\xf1\xff", 5},
         {kServerInternVa, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x83\xec\x18", 17},
         {kServerInsertVa, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x83\xec", 16},
         {0x634320, "\x55\x48\x89\xe5\x41\x57\x41\x56\x53\x50\x48\x89\xfb", 13},
@@ -274,28 +303,33 @@ bool InstallRuntimeServerVm(OrbisKernelModule serverHandle) noexcept {
         return false;
     }
 
-    const std::uintptr_t calls[] = {kServerVmInitCallVa, kServerMapSpawnCallVa};
+    const std::uintptr_t calls[] = {kServerVmInitCallVa, kServerMapSpawnCallVa,
+                                    0x1b60dd, 0x1b644b, 0x70d022};
     const std::uintptr_t targets[] = {reinterpret_cast<std::uintptr_t>(&RuntimeServerVmInit),
-                                     reinterpret_cast<std::uintptr_t>(&RuntimeServerMapSpawn)};
-    std::int32_t offsets[2]; void* pages[2];
-    for (int i = 0; i < 2; ++i) {
+                                     reinterpret_cast<std::uintptr_t>(&RuntimeServerMapSpawn),
+                                     reinterpret_cast<std::uintptr_t>(&RuntimeServerDestroy),
+                                     reinterpret_cast<std::uintptr_t>(&RuntimeServerDestroy),
+                                     reinterpret_cast<std::uintptr_t>(&RuntimeServerDestroy)};
+    constexpr int kHookCount = sizeof(calls) / sizeof(calls[0]);
+    std::int32_t offsets[kHookCount]; void* pages[kHookCount];
+    for (int i = 0; i < kHookCount; ++i) {
         const auto call = g_runtimeServerBase + calls[i];
         const auto relative = static_cast<std::int64_t>(targets[i]) - static_cast<std::int64_t>(call + 5);
         if (relative < -2147483648LL || relative > 2147483647LL) return false;
         offsets[i] = static_cast<std::int32_t>(relative);
         pages[i] = reinterpret_cast<void*>(call & ~std::uintptr_t(0x3fff));
     }
-    // Acquire both code pages before writing either hook; avoid partial install.
-    for (int i = 0; i < 2; ++i) if (sceKernelMprotect(pages[i], 0x4000, 7) != 0) {
+    // Acquire every code page before writing any hook; avoid partial install.
+    for (int i = 0; i < kHookCount; ++i) if (sceKernelMprotect(pages[i], 0x4000, 7) != 0) {
         for (int j = 0; j < i; ++j) sceKernelMprotect(pages[j], 0x4000, 5);
         return false;
     }
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < kHookCount; ++i)
         std::memcpy(reinterpret_cast<void*>(g_runtimeServerBase + calls[i] + 1), &offsets[i], 4);
     int protection = 0;
     for (auto page : pages) protection |= sceKernelMprotect(page, 0x4000, 5);
     g_runtimeServerVmHooked = true;
-    LogFormat("[NorthstarPS4] SERVER VM init and MapSpawn hooks installed base=%p protection=%d\n",
+    LogFormat("[NorthstarPS4] SERVER VM init, MapSpawn and destroy hooks installed base=%p protection=%d\n",
         reinterpret_cast<void*>(g_runtimeServerBase), protection);
     return protection == 0;
 }
