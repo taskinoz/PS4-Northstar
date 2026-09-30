@@ -2200,6 +2200,7 @@ std::uint64_t ModSecondarySize(void* self, const char* fileName, const char* pat
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 // After the HTTP transport (the Atlas template) and runtime_concommands.inl.
 #include "runtime_bans.inl"
+#include "runtime_string_commands.inl"
 #include "runtime_atlas_server.inl"
 #endif
 

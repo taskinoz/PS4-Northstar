@@ -23,6 +23,20 @@ void function PS4ChatHud_Init()
 // be a script error, and those end the match for this client.
 void function PS4ChatHud_Setup()
 {
+	// The HUD can be rebuilt during a match (it was, on entering spectator),
+	// which leaves an old handle invalid; calling Show on it is a script error
+	// that ends the match. Look the panel up again whenever that happens.
+	while ( true )
+	{
+		if ( !PS4ChatHud_Run() )
+			return
+		WaitFrame()
+	}
+}
+
+// False when the panel never appears.
+bool function PS4ChatHud_Run()
+{
 	local chat = null
 	for ( int frame = 0; frame < 1800 && chat == null; frame++ )
 	{
@@ -38,7 +52,7 @@ void function PS4ChatHud_Setup()
 	if ( chat == null )
 	{
 		printt( "[PS4 chat] IngameTextChat never appeared; in-match chat will not be shown" )
-		return
+		return false
 	}
 
 	// Untyped, like cl_main_hud.nut: Hud and its elements are untyped objects.
@@ -46,14 +60,30 @@ void function PS4ChatHud_Setup()
 	local resMultiplier = screenSize[1] / 1080.0
 	int width = 630
 	int height = 225
-	chat.SetSize( width * resMultiplier, height * resMultiplier )
+	try
+	{
+		chat.SetSize( width * resMultiplier, height * resMultiplier )
+	}
+	catch ( error )
+	{
+		return true
+	}
 
 	while ( true )
 	{
-		if ( clGlobal.isMenuOpen )
-			chat.Hide()
-		else
-			chat.Show()
+		try
+		{
+			if ( clGlobal.isMenuOpen )
+				chat.Hide()
+			else
+				chat.Show()
+		}
+		catch ( error )
+		{
+			printt( "[PS4 chat] IngameTextChat was rebuilt; looking it up again" )
+			return true
+		}
 		WaitFrame()
 	}
+	unreachable
 }
