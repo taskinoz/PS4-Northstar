@@ -2059,16 +2059,12 @@ bool BuildRuntimeManifest(void* self) noexcept {
         std::size_t size = 0;
         static ModInfo info;
         if (!ReadFileIntoBuffer(metadataPath, json, sizeof(json), size) || !ParseModMetadata(json, info)) return false;
-        if (info.initScript[0]) {
-            // RuntimeVmInit compiles each mod's InitScript directly at VM
-            // creation for every context it hooks, so the manifest must only
-            // declare the contexts it does not hook. Declaring a hooked context
-            // here compiles the InitScript twice in that VM, and the second pass
-            // fails ("Redefinition of enumeration ..."). SERVER's initializer
-            // hook (runtime_server_vm.inl) sets up constants, natives and
-            // callbacks but does not compile InitScripts, so SERVER keeps them
-            // here.
-            initBlocks += g_runtimeVmInitHooked ? "When: \"SERVER\"\nScripts:\n[\n" : "When: \"SERVER || CLIENT || UI\"\nScripts:\n[\n";
+        if (info.initScript[0] && !g_runtimeVmInitHooked) {
+            // The client and delayed server VM-init hooks compile every mod's
+            // InitScript directly in all three contexts. Keep the manifest
+            // fallback only when that runtime lifecycle is unavailable;
+            // otherwise the second compile is a fatal type redefinition.
+            initBlocks += "When: \"SERVER || CLIENT || UI\"\nScripts:\n[\n";
             initBlocks += info.initScript;
             initBlocks += "\n]\n";
         }

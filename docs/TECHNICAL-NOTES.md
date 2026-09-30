@@ -4525,9 +4525,6 @@ placeholder data, and nothing is written back.
   - They played a fastball match on mp_lf_uma and returned to the lobby. Chat worked both
     ways, and the server script logged their real UIDs.
   - Their pdata is not installed yet (G02).
-  - One reported a disconnect in fastball naming `ServerCallback_HideHudForFPHackAnim`
-    (Northstar.Custom's sh_3psequence_to_1p_hacks.gnut). This was later confirmed to come
-    from that player's mod set, not the PS4 host port, and is not an active investigation.
   - `net_debug_atlas_packet 1` logs each request in full, including the player's IP address
     and token, as PC does. Leave it off outside debugging.
 
@@ -5018,10 +5015,15 @@ from the owning VM. The matched client -> server offsets are `sq_throwerror` 0x6
 0x634320, `sq_pushstring` 0x682e00 -> 0x6346c0, `sq_pushasset` 0x682f40 -> 0x634800,
 `sq_newtable` 0x683230 -> 0x634af0, `sq_newarray` 0x683330 -> 0x634bf0,
 `sq_arrayappend` 0x6835e0 -> 0x634ea0, `sq_newstruct` 0x684970 -> 0x636230,
-`sq_sealstructslot` 0x684b00 -> 0x6363c0, function lookup 0x685cf0 -> 0x6374d0,
+function lookup 0x685cf0 -> 0x6374d0,
 object push 0x6875f0 -> 0x638ce0 and `sq_call` 0x6876c0 -> 0x638db0. The runtime gates
 both modules' helper preimages before installing natives and binds each VM to its owning
 module when that VM is initialized.
+
+Later typed-struct testing corrected one entry in that initial profile: server+0x6363c0 is
+the function following the operation represented by client+0x684b00, not a SERVER
+`sq_sealstructslot`. Retail server natives inline the retain/copy/release sequence instead;
+the runtime now does the same. See the SERVER typed-native entry below.
 
 Live validation used shadPS4 `2b5666b3` and experimental PRX SHA256
 `92962323efdb38cbc14bf5269375f40f42bb5e5a7ac0386964aa1e78ee537c36`. An isolated fixture
@@ -5096,4 +5098,34 @@ callback runs. Live validation on shadPS4 `4cbd23ef` used PRX SHA256
 The first launch attempt failed before game code because shadPS4 rejected another corrupt
 64-byte shader-cache `profile.bin`. It was moved recoverably to
 `work/cache-backups/20260930-1452/profile.bin.corrupt`; the retry rebuilt it and succeeded.
+
+## SERVER early InitScripts and typed-native second pass (2026-09-30)
+
+PC declares mod-owned Squirrel types from each enabled mod's `InitScript` before it registers
+natives whose signatures name those types. The PS4 SERVER path previously left InitScripts in
+the generated manifest and skipped those natives permanently. server.prx+0x629ad0 is the exact
+module-local counterpart of client.prx+0x6783f0's compile-file wrapper; its 17-byte prologue is
+now gated with the rest of the SERVER profile. Each new SERVER VM now performs this order:
+constants, untyped natives, enabled mods' InitScripts in priority order, optional
+`InitScriptCallback`, the typed-native pass, then the existing ordered lifecycle callbacks.
+When VM lifecycle hooks are installed, the runtime manifest no longer declares InitScripts in
+any context, preventing a second compile and fatal type redefinitions.
+
+The typed test exposed an earlier ABI profiling error. server.prx+0x6363c0 is not the SERVER
+equivalent of client.prx's `sq_sealstructslot`; server retail natives inline that operation.
+Calling 0x6363c0 crashed when the first struct result was built. SERVER `Seal` now mirrors the
+retail sequence: locate the 16-byte field from the struct base slot, retain the new referenced
+object, release the old field, copy it, pop and release the stack-owned reference, and reset the
+popped slot. The incorrect helper gate and mapping were removed.
+
+Live validation on shadPS4 `4cbd23ef` used experimental PRX SHA256
+`e607ffef4b6bd4a4aa642c267cec82e582869bf81856cacec2cffe40d7cc5121` and a temporary
+AI.Harness SERVER callback. In the lobby, the VM compiled Northstar.Client's InitScript,
+registered three deferred typed natives, and successfully called `NSGetModInstallState`,
+`NSGetModInformation` and `NSGetModsInformation`; the returned `ModInstallState` and
+`array<ModInfo>` values were read by typed script code. After `map mp_forwardbase_kodai`, the
+replacement SERVER VM repeated the compile and three-native pass and printed the same values at
+global log lines 4096419-4101022 before completing its lifecycle. No new exception followed.
+The temporary callback was removed, the deployed Custom RPAK manifest restored, and the test
+profile resynchronized after validation.
 

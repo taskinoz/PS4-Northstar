@@ -31,7 +31,9 @@ std::uintptr_t SquirrelHelperVa(void* vm, std::uintptr_t clientVa) noexcept {
         case 0x683330: return 0x634bf0; // sq_newarray
         case 0x6835e0: return 0x634ea0; // sq_arrayappend
         case 0x684970: return 0x636230; // sq_newstruct
-        case 0x684b00: return 0x6363c0; // sq_sealstructslot
+        // server.prx has no callable sq_sealstructslot counterpart. Its retail
+        // natives inline the operation; Seal reproduces that path below.
+        case 0x684b00: return 0;
         case 0x685cf0: return 0x6374d0; // FindFunction
         case 0x6875f0: return 0x638ce0; // PushObject
         case 0x6876c0: return 0x638db0; // sq_call
@@ -76,7 +78,42 @@ void Asset(void* vm, const char* value) { At<void (*)(void*, const char*, int)>(
 void Array(void* vm) { At<void (*)(void*, int)>(vm, 0x683330)(vm, 0); }
 void Append(void* vm) { At<int (*)(void*, int)>(vm, 0x6835e0)(vm, -2); }
 void Struct(void* vm, int fields) { At<void (*)(void*, int)>(vm, 0x684970)(vm, fields); }
-void Seal(void* vm, int slot) { At<void (*)(void*, int)>(vm, 0x684b00)(vm, slot); }
+void ReleaseObject(Object& object) {
+    if (!(object.tag & 0x08000000) || !object.value) return;
+    auto pointer = reinterpret_cast<void*>(object.value);
+    auto refs = reinterpret_cast<std::uint32_t*>(static_cast<char*>(pointer) + 8);
+    if (--*refs == 0) {
+        auto table = *reinterpret_cast<std::uintptr_t**>(pointer);
+        reinterpret_cast<void (*)(void*)>(table[2])(pointer);
+    }
+}
+void Seal(void* vm, int slot) {
+    if (SquirrelHelperBase(vm) == g_runtimeClientBase) {
+        At<void (*)(void*, int)>(vm, 0x684b00)(vm, slot);
+        return;
+    }
+    // server.prx inlines this sequence after sq_newstruct rather than emitting
+    // the client module's helper. The stack holds [struct, value]. The upper
+    // tag word is the struct's base-slot offset; each field is a 16-byte
+    // SQObject beginning at +0x38. Retain before replacing and release the
+    // popped stack copy, leaving one reference owned by the struct field.
+    auto bytes = static_cast<char*>(vm);
+    auto& top = *reinterpret_cast<std::uint32_t*>(bytes + 0x68);
+    auto stack = *reinterpret_cast<Object**>(bytes + 0x70);
+    if (top < 2) return;
+    Object& structure = stack[top - 2];
+    Object& value = stack[top - 1];
+    const auto baseSlot = static_cast<std::int32_t>(structure.tag >> 32);
+    auto field = reinterpret_cast<Object*>(structure.value + 0x38 +
+        static_cast<std::int64_t>(baseSlot + slot) * sizeof(Object));
+    if ((value.tag & 0x08000000) && value.value)
+        ++*reinterpret_cast<std::uint32_t*>(value.value + 8);
+    ReleaseObject(*field);
+    *field = value;
+    --top;
+    ReleaseObject(stack[top]);
+    stack[top] = {0x1000001, 0};
+}
 int Error(void* vm, const char* message) { At<int (*)(void*, const char*)>(vm, 0x682a60)(vm, message); return -1; }
 const Object& Arg(void* vm, int index) { return (*reinterpret_cast<Object**>(static_cast<char*>(vm) + 0x48))[index]; }
 const char* TextArg(void* vm, int index) {

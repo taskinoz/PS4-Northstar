@@ -96,6 +96,10 @@ bool RegisterServerConstants(void* owner) noexcept {
 // this file: the client function's 17-byte prologue `55 48 89 e5 41 57 41 56
 // 41 55 41 54 53 48 83 ec 68` matched exactly one address in server.prx.
 constexpr std::uintptr_t kServerRegisterSquirrelFuncVa = 0x62b740;
+// server.prx counterpart of client.prx's 0x6783f0 compilefile wrapper. The
+// bodies are instruction-for-instruction equivalents apart from module-local
+// RIP displacements.
+constexpr std::uintptr_t kServerCompileFileVa = 0x629ad0;
 
 // server.prx's copy of the Squirrel `print` native and the instruction inside
 // it that loads SQSharedState::_printfunc. Found by scanning for the sink
@@ -112,7 +116,7 @@ constexpr std::uintptr_t kServerScriptPrintSinkVa = 0x691194;
 // the copy in the module that owns the VM. Several helpers reach module-local
 // allocator/global slots even though they take the VM as their first argument,
 // so calling client.prx's copies for a SERVER VM is not safe parity.
-bool RegisterServerNatives(void* owner) noexcept {
+bool RegisterServerNatives(void* owner, bool deferred = false) noexcept {
     const std::uint8_t prologue[] = {
         0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
         0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x83, 0xec, 0x68,
@@ -131,19 +135,18 @@ bool RegisterServerNatives(void* owner) noexcept {
     auto registrar = reinterpret_cast<void (*)(void*, void*, void*, int, int)>(
         g_runtimeServerBase + kServerRegisterSquirrelFuncVa);
 
-    std::size_t i = 0, registered = 0, skipped = 0;
+    std::size_t i = 0, registered = 0;
     for (const auto& r : uiapi::registrations) {
         auto record = records[i++];
         if (!(r.contexts & uiapi::kCtxServer)) continue;
-        // Same restriction the client path has: a native whose signature names
-        // a Northstar struct cannot be registered before that struct has been
-        // declared, and there is no second registration pass yet.
-        if (std::strstr(r.returns, "ModInfo") || std::strstr(r.returns, "ServerInfo") ||
-            std::strstr(r.returns, "AuthResult") || std::strstr(r.returns, "ModInstallState")) {
-            LogFormat("[NorthstarPS4] SERVER native deferred (needs script type): %s\n", r.name);
-            ++skipped;
-            continue;
-        }
+        // PS4 resolves an unknown return type to `var` rather than repairing
+        // the signature after the struct is declared. Match the client path:
+        // untyped natives before InitScripts, typed natives immediately after.
+        const bool needsTypes = std::strstr(r.returns, "ModInfo") ||
+            std::strstr(r.returns, "ServerInfo") ||
+            std::strstr(r.returns, "AuthResult") ||
+            std::strstr(r.returns, "ModInstallState");
+        if (needsTypes != deferred) continue;
         *reinterpret_cast<const char**>(record) = r.name;
         *reinterpret_cast<const char**>(record + 8) = r.name;
         *reinterpret_cast<const char**>(record + 0x10) = "Northstar PS4 runtime";
@@ -153,7 +156,8 @@ bool RegisterServerNatives(void* owner) noexcept {
         registrar(owner, record, nullptr, 1, 0);
         ++registered;
     }
-    LogFormat("[NorthstarPS4] SERVER natives registered count=%zu deferred=%zu\n", registered, skipped);
+    LogFormat("[NorthstarPS4] SERVER natives registered deferred=%d count=%zu\n",
+        deferred ? 1 : 0, registered);
     return true;
 }
 
@@ -222,6 +226,44 @@ bool RuntimeServerVmInit(void* owner, int context, float time) noexcept {
     // constants in place, and the constants are what the earliest scripts need.
     if (!RegisterServerNatives(owner))
         LogFormat("[NorthstarPS4] SERVER VM native registration failed\n");
+    // PC compiles every enabled mod InitScript from this VM-init hook. SERVER
+    // formerly left them in scripts.rson, which made their types unavailable
+    // for a correctly typed native-registration pass before ordinary scripts
+    // compiled. Compile them here, in mod priority order, just like UI/CLIENT.
+    static ModDiscovery mods;
+    static char json[kModJsonBufferSize];
+    std::memset(&mods, 0, sizeof(mods));
+    CollectModNames(mods);
+    using Compile = bool (*)(void*, const char*, const char*, int);
+    auto compile = reinterpret_cast<Compile>(g_runtimeServerBase + kServerCompileFileVa);
+    auto callback = reinterpret_cast<bool (*)(void*, const char*)>(
+        g_runtimeServerBase + kServerInitCallbackVa);
+    for (int i = 0; i < mods.count; ++i) {
+        char metadata[256]; std::size_t size = 0;
+        std::snprintf(metadata, sizeof(metadata), "%s/mod.json", mods.dirs[i]);
+        ModInfo mod{};
+        if (!ReadFileIntoBuffer(metadata, json, kModJsonBufferSize, size) ||
+            !ParseModMetadata(json, mod)) return false;
+        if (!mod.initScript[0]) continue;
+        char normalized[256], path[320];
+        if (!NormalizeRequestedPath(mod.initScript, normalized, sizeof(normalized))) return false;
+        std::snprintf(path, sizeof(path), "scripts/vscripts/%s", normalized);
+        const char* name = std::strrchr(normalized, '/');
+        name = name ? name + 1 : normalized;
+        if (!compile(owner, path, name, 0) || !compile(owner, path, name, 1)) {
+            LogFormat("[NorthstarPS4] SERVER InitScript compilation failed: %s\n", path);
+            return false;
+        }
+        LogFormat("[NorthstarPS4] SERVER InitScript compiled at VM creation: %s\n", path);
+        if (mod.initScriptCallback[0] && !callback(owner, mod.initScriptCallback))
+            LogFormat("[NorthstarPS4] SERVER InitScriptCallback not found: %s\n",
+                mod.initScriptCallback);
+    }
+    if (!RegisterServerNatives(owner, true)) {
+        LogFormat("[NorthstarPS4] SERVER deferred native registration failed\n");
+        return false;
+    }
+    LogFormat("[NorthstarPS4] SERVER VM native initialization complete\n");
     // Retried on every SERVER VM creation until it succeeds: the persistence
     // interface may not be constructed yet the first time through.
     InstallRuntimePersistence();
@@ -270,6 +312,7 @@ bool InstallRuntimeServerVm(OrbisKernelModule serverHandle) noexcept {
         {0x70cd56, "\x48\x8b\x3d\xa3\x7e\x6f\x00\x48\x8d\x35\x06\x31\x18\x00", 14},
         {kServerVmInitCallVa, "\xe8\x10\x2f\x00\x00", 5},
         {kServerVmInitVa, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x81\xec\xa8\x00\x00\x00", 20},
+        {kServerCompileFileVa, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x83\xe4\xe0", 17},
         {kServerVmReleaseVa, "\x55\x48\x89\xe5\x41\x57\x41\x56\x53\x50\x49\x89\xff", 13},
         {0x1b60dd, "\xe8\x9e\x3d\x47\x00", 5},
         {0x1b644b, "\xe8\x30\x3a\x47\x00", 5},
@@ -283,7 +326,6 @@ bool InstallRuntimeServerVm(OrbisKernelModule serverHandle) noexcept {
         {0x634bf0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x54\x53", 11},
         {0x634ea0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x54\x53\x48\x83\xec\x10", 15},
         {0x636230, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x50", 14},
-        {0x6363c0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x50", 14},
         {0x6374d0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x83\xec\x68", 17},
         {0x638ce0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x53\x50\x41\x89\xf0\x49\x89\xd7\x44\x89\xc3\x81\xe3\x00\x00\x00", 24},
         {0x638db0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x83\xec\x18", 17},
