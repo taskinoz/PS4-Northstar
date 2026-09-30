@@ -15,6 +15,7 @@
 #include "northstar_ps4/host_options.h"
 #include "northstar_ps4/mod_dependencies.h"
 #include "northstar_ps4/audio_override.h"
+#include "northstar_ps4/mod_concommands.h"
 #include "northstar_ps4/particle_manifest.h"
 #include "northstar_ps4/datatable_csv.h"
 #include "northstar_ps4/localisation_language.h"
@@ -2187,6 +2188,9 @@ std::uint64_t ModSecondarySize(void* self, const char* fileName, const char* pat
 #include "runtime_audio.inl"
 #endif
 #include "runtime_server_vm.inl"
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+#include "runtime_mod_concommands.inl"
+#endif
 #include "runtime_console.inl"
 #include "runtime_http.inl"
 #include "runtime_http_script.inl"

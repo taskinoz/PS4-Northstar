@@ -48,6 +48,8 @@ static_assert(offsetof(CCommandView, argv) == 0x410, "CCommand layout");
 using ConCommandCallbackFn = void (*)(const CCommandView*);
 using ConCommandConstructorFn = void (*)(void*, const char*, ConCommandCallbackFn, const char*, int, void*);
 using SetCurrentPlaylistFn = bool (*)(const char*);
+// Kept for mod ConCommands (runtime_mod_concommands.inl), which register later.
+ConCommandConstructorFn g_conCommandConstruct = nullptr;
 using SetPlaylistVarOverrideFn = void (*)(const char*, const char*);
 
 SetCurrentPlaylistFn g_setCurrentPlaylist = nullptr;
@@ -484,6 +486,7 @@ __attribute__((naked)) void ConnectUidPick() {
 // Defined in runtime_atlas_server.inl.
 void InstallAtlasServer(std::uintptr_t engineBase, std::size_t engineSize) noexcept;
 void RegisterAudioConVars() noexcept; // runtime_audio.inl
+void RegisterModConCommands() noexcept; // runtime_mod_concommands.inl
 
 void InstallConnectUid(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
     constexpr std::uint8_t pickBytes[] = {0xf6, 0x05, 0xec, 0x00, 0x8c, 0x01, 0x10, 0x48, 0x8d, 0x1d, 0x3d, 0x75, 0x1f,
@@ -575,6 +578,7 @@ void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize
         return;
     }
     auto construct = reinterpret_cast<ConCommandConstructorFn>(engineBase + kConCommandConstructorVa);
+    g_conCommandConstruct = construct;
 
     struct Definition { const char* name; ConCommandCallbackFn callback; const char* help; int flags; };
     static const Definition definitions[] = {
@@ -611,6 +615,7 @@ void RegisterNativeConCommands(std::uintptr_t engineBase, std::size_t engineSize
     InstallHostOptions(engineBase, engineSize);
     InstallConnectUid(engineBase, engineSize);
     RegisterAudioConVars();
+    RegisterModConCommands();
     InstallAtlasServer(engineBase, engineSize);
     AllowTextChat();
 }
