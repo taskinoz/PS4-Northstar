@@ -20,6 +20,7 @@
 #include "northstar_ps4/localisation_language.h"
 #include "northstar_ps4/pdef_diff.h"
 #include "northstar_ps4/pdata_convert.h"
+#include "northstar_ps4/persistence_owner.h"
 #include "northstar_ps4/server_list.h"
 #include "northstar_ps4/main_menu_promos.h"
 #include "northstar_ps4/mod_archive.h"
@@ -1887,7 +1888,7 @@ bool (*g_clientPrint)(int client, const char* message) noexcept = nullptr;
 // Set by runtime_atlas_server.inl: moves out the pdata Atlas sent for a player
 // who connected with its token (false when there is none), and writes a
 // player's pdata back to Atlas. Used by runtime_persistence.inl.
-bool (*g_takeRemotePdata)(std::uint64_t uid, std::string& pdata) noexcept = nullptr;
+bool (*g_takeRemotePdata)(int client, std::uint64_t uid, std::string& pdata) noexcept = nullptr;
 void (*g_writeRemotePdata)(std::uint64_t uid, const std::string& pdata, const char* reason) noexcept = nullptr;
 // Set by runtime_atlas_server.inl: whether a pdata write is in flight
 // (NSIsWritingPlayerPersistence).

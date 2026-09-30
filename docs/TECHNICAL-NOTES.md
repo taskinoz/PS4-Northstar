@@ -5241,3 +5241,31 @@ subsequent Private Match transition no longer pulls that departed PC back into t
 closes the duplicate-account local-player ownership regression; wrong-password refusal remains
 a separate browser authentication test.
 
+## Duplicate-account persistence ownership (2026-09-30)
+
+The same accepted session exposed a second UID-versus-connection ownership error. For both PC
+joins, Atlas supplied a 56,306-byte save for the remote connection, but the connect-time search
+selected client #0 because it returned the first slot whose connect UID matched. The PS4 host and
+PC intentionally used the same exported Atlas identity, so client #0 matched before the newly
+created client #1. The log then showed client #0 installed as `READY_REMOTE` at signon 8 and
+client #1 falling back to `READY_INSECURE` (lines 4872106/4872431 and
+5046495-5046501/5046866). This could overwrite the host buffer with the PC connection's fetched
+save and denied the remote connection its authenticated persistence.
+
+Authentication records now retain their connection scope. `auth_with_self` records may install
+only into the listen host's slot zero; records created by Atlas `/server/connect` may install only
+into slots above zero. Among several remote slots with the same UID, an unowned matching slot is
+chosen before an already-owned slot, while the second pass still supports a connect retry. The
+late-install queue carries the same scope and receives the actual client index, so it cannot move
+a remote record into slot zero merely because the UID matches.
+
+`northstar_ps4/persistence_owner.h` keeps that policy independent of engine memory and
+`tests/persistence_owner.cpp` covers a slot-zero host plus two same-UID remote clients, retry,
+fake-player and missing-account cases. The complete Northstar profile suite (including this new
+test) and Stage 2 engine-profile suite pass. Supported experimental PRX SHA256
+`0b4d1a7d9cd6966ad835d967eaf6c37ecad75352cf3934eb95a081c663f3a928` was deployed with a
+recoverable backup. It reached `UI lifecycle completed` at log line 5087122 with no later fatal
+marker before the smoke test was stopped. Live acceptance still requires another same-account PC
+join: the expected marker is client #1 installed from Atlas at connect as `READY_REMOTE`
+(`remote`), with no new remote installation into client #0.
+

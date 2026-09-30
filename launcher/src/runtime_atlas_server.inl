@@ -34,8 +34,10 @@
 // uid and, in serverfilter, that token. When they match an accepted "connect",
 // the client is Atlas-authenticated, as PC's CheckAuthentication decides, and
 // Northstar.PS4's host options let it stay with ns_auth_allow_insecure 0.
-// Its pdata is not installed: PC and PS4 lay persistence out differently
-// (G02), so it plays with placeholder data like an insecure player.
+// The record retains its pdata and whether it came from the host's self-auth
+// or Atlas's remote-connect path. That ownership scope is carried through the
+// connect and late-install paths, so duplicate-account clients cannot take the
+// listen host's slot merely because both slots have the same uid.
 //
 // Included after runtime_concommands.inl and runtime_http.inl.
 
@@ -74,6 +76,13 @@ struct AuthRecord {
     std::uint64_t uid = 0;
     std::string username;
     std::string pdata;
+    bool hostConnection = false;
+};
+
+struct PendingPdata {
+    std::uint64_t uid = 0;
+    bool hostConnection = false;
+    std::string pdata;
 };
 
 // Everything below is shared between the game threads and the reporter and
@@ -102,7 +111,7 @@ std::vector<std::uint64_t> g_authenticatedUids;
 std::atomic<bool> g_reporterStarted{false};
 // Pdata for players whose connect request carried their Atlas token, until the
 // slot is ready for it (runtime_persistence.inl takes it).
-std::vector<std::pair<std::uint64_t, std::string>> g_pendingPdata;
+std::vector<PendingPdata> g_pendingPdata;
 std::atomic<int> g_writesInFlight{0};
 
 std::uint64_t NowUs() { return sceKernelGetProcessTime(); }
@@ -442,7 +451,7 @@ void* ProcessSigreq1(void* argument) {
         static_cast<unsigned long long>(uid), username.c_str(), pdata.size());
     {
         Lock lock;
-        g_records.push_back({token, uid, username, pdata});
+        g_records.push_back({token, uid, username, pdata, false});
         // Only the most recent records keep their pdata.
         if (g_records.size() > kMaxRecords) g_records.erase(g_records.begin());
         if (g_records.size() > kMaxPdataRecords) {
@@ -501,7 +510,8 @@ void HandleAtlasPacket(const std::uint8_t* data, std::size_t size) {
 // request, before the engine sees it.
 // Returns the uid and pdata of a request whose token matched, for the install
 // once the engine has made the slot.
-bool NoteConnectRequest(const std::uint8_t* data, std::size_t size, std::uint64_t& matchedUid, std::string& matchedPdata) {
+bool NoteConnectRequest(const std::uint8_t* data, std::size_t size, std::uint64_t& matchedUid,
+    std::string& matchedPdata, bool& hostConnection) {
     atlas::ConnectRequest request;
     const bool parsed = atlas::ParseConnectRequest(data, size, request);
     if (ConVarInt(g_debugAtlasPacket, 0))
@@ -513,6 +523,7 @@ bool NoteConnectRequest(const std::uint8_t* data, std::size_t size, std::uint64_
         if (record.uid == request.uid && !record.token.empty() && request.HasString(record.token)) {
             matchedUid = request.uid;
             matchedPdata = record.pdata;
+            hostConnection = record.hostConnection;
             bool known = false;
             for (auto uid : g_authenticatedUids)
                 if (uid == request.uid) known = true;
@@ -528,14 +539,14 @@ bool NoteConnectRequest(const std::uint8_t* data, std::size_t size, std::uint64_
 
 // When the slot could not be found at connect, the pdata waits for the slot's
 // first persistence check instead (TakeRemotePdata).
-void KeepPendingPdata(std::uint64_t uid, std::string pdata) {
+void KeepPendingPdata(std::uint64_t uid, bool hostConnection, std::string pdata) {
     Lock lock;
     for (auto& pending : g_pendingPdata)
-        if (pending.first == uid) {
-            pending.second = std::move(pdata);
+        if (pending.uid == uid && pending.hostConnection == hostConnection) {
+            pending.pdata = std::move(pdata);
             return;
         }
-    g_pendingPdata.emplace_back(uid, std::move(pdata));
+    g_pendingPdata.push_back({uid, hostConnection, std::move(pdata)});
     if (g_pendingPdata.size() > kMaxPdataRecords) g_pendingPdata.erase(g_pendingPdata.begin());
 }
 
@@ -544,15 +555,15 @@ void KeepPendingPdata(std::uint64_t uid, std::string pdata) {
 // save.
 void AddSelfAuthRecord(std::uint64_t uid, const std::string& token, const std::string& pdata) noexcept {
     Lock lock;
-    g_records.push_back({token, uid, "self", pdata});
+    g_records.push_back({token, uid, "self", pdata, true});
     if (g_records.size() > kMaxRecords) g_records.erase(g_records.begin());
 }
 
-bool TakeRemotePdata(std::uint64_t uid, std::string& pdata) noexcept {
+bool TakeRemotePdata(int client, std::uint64_t uid, std::string& pdata) noexcept {
     Lock lock;
     for (auto it = g_pendingPdata.begin(); it != g_pendingPdata.end(); ++it) {
-        if (it->first == uid) {
-            pdata = std::move(it->second);
+        if (it->uid == uid && persistence::ScopeMatchesClient(it->hostConnection, client)) {
+            pdata = std::move(it->pdata);
             g_pendingPdata.erase(it);
             return true;
         }
@@ -633,10 +644,12 @@ bool RuntimeConnectionlessPacket(void* self, void* packet) noexcept {
         if (data[4] == 'A') {
             std::uint64_t uid = 0;
             std::string pdata;
-            const bool matched = NoteConnectRequest(data, static_cast<std::size_t>(size), uid, pdata);
+            bool hostConnection = false;
+            const bool matched = NoteConnectRequest(data, static_cast<std::size_t>(size), uid, pdata, hostConnection);
             const bool result = g_originalConnectionless(self, packet);
             // PC: AuthenticatePlayer in CBaseClient::Connect, before signon.
-            if (matched && !InstallRemoteSaveAtConnect(uid, pdata)) KeepPendingPdata(uid, std::move(pdata));
+            if (matched && !InstallRemoteSaveAtConnect(uid, pdata, hostConnection))
+                KeepPendingPdata(uid, hostConnection, std::move(pdata));
             return result;
         }
     }
