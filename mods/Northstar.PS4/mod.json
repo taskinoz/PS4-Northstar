@@ -46,6 +46,13 @@
       "ServerCallback": {
         "After": "PS4ServerPresence_Init"
       }
+    },
+    {
+      "Path": "ui/ps4_text_entry_keyboard.nut",
+      "RunOn": "UI",
+      "UICallback": {
+        "After": "PS4TextEntryKeyboard_Init"
+      }
     }
   ],
   "Localisation": [
