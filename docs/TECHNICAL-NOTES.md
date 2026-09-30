@@ -5269,3 +5269,28 @@ marker before the smoke test was stopped. Live acceptance still requires another
 join: the expected marker is client #1 installed from Atlas at connect as `READY_REMOTE`
 (`remote`), with no new remote installation into client #0.
 
+## Four-VM SERVER lifecycle acceptance (2026-09-30)
+
+The remaining G03 transition run used experimental PRX
+`0b4d1a7d9cd6966ad835d967eaf6c37ecad75352cf3934eb95a081c663f3a928` and the harness to
+load `mp_lobby`, `mp_forwardbase_kodai`, `mp_colony02`, then `mp_lobby` again. The exported
+Atlas identity had expired, so normal `launch` reported `Local authentication timed out`; the
+test deliberately used the harness's explicit local `map` command instead. This validates VM
+lifecycle and map replacement only, not authentication.
+
+The fresh-session range begins with the first SERVER VM at log line 5188280. Its compact
+sequence is:
+
+- initialize 5188280, lifecycle complete 5192971, teardown clear 5201819;
+- initialize 5211548, lifecycle complete 5216401, teardown clear 5231109;
+- initialize 5257018, lifecycle complete 5261410, teardown clear 5272601; and
+- initialize 5272751, lifecycle complete 5275256.
+
+The final VM remained live until the emulator was stopped, so three clears for four VMs is the
+expected count. In that range there are four `SERVER Before: Progression_Init` and four
+`SERVER After: PS4HostOptions_Init` markers—one representative callback from each phase per
+VM—and four distinct owner addresses. There are zero `SCRIPT ERROR`, `FatalError` or
+`Unhandled Exception` markers. Harness status confirmed each destination level before the
+next transition. This completes the G03 multi-transition acceptance; later native argument and
+return-shape coverage remains G06 work.
+
