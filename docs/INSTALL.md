@@ -19,7 +19,8 @@ A PRX being present, or mod folders being discovered, does not prove scripts exe
   `gh run download 36164450310 -R shadps4-emu/shadPS4 -n shadps4-win64-sdl-2026-09-25-2b5666b`
   (https://github.com/shadps4-emu/shadPS4/actions/runs/36164450310 has the Linux and macOS builds too). In the Qt launcher, put `shadPS4.exe` in its own folder under `%APPDATA%\shadPS4QtLauncher\versions` and add it to `versions.json` (or run it directly).
   - Builds before `ca89b01` (2026-09-23), including v0.18.0, crash whenever you leave a loaded map (after a match, map to map, or joining a server from the lobby).
-  - Builds from `c6fa48c7` (#5110, 2026-09-25) on, including the 2026-09-26 pre-releases, draw matches black apart from the HUD. Use `2b5666b3` until that is fixed upstream.
+  - Builds from `c6fa48c7` (#5110, 2026-09-25) up to the fix in `f6cd16e8` (#5133, 2026-09-28), including the 2026-09-26 pre-releases, draw matches black apart from the HUD.
+  - Newer builds with that fix (nightly `4cbd23ef`, prerelease `94e21778`) have played lobbies, hosted matches and remote servers in testing. `2b5666b3` stays the recommendation until they have had longer play. Pipeline caches are not shared between builds: move `%APPDATA%\shadPS4\cache\CUSA04013` aside when switching.
 - Recommended per-game settings for CUSA04013: `pipeline_cache_enabled: true` (avoids shader-compile stalls that time out remote matches; a cache made by an older shadPS4 build is ignored by `ca89b01`, so delete or rename `%APPDATA%\shadPS4\cache\CUSA04013` after upgrading), `copy_gpu_buffers: false`, and log filter `*:Info Lib.Http:Warning` (shadPS4 otherwise writes the Atlas player token into its log with every request URL).
 - PowerShell and the LLVM/OpenOrbis tools listed in [tools/README.md](../tools/README.md) to build from source.
 

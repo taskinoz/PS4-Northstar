@@ -2870,20 +2870,22 @@ load on this port.
 Three things had to be right, and two of them were only found by checking the
 real files rather than reasoning about the format.
 
-**The engine reads a served file short if it is larger than the original.**
+**The engine reads a served file short unless both Size interfaces are hooked.**
 The first working merge produced a 372,535-byte playlist and died with
 `FatalError: KeyValues Error: Error reading token in file playlists`. Byte
 360,403 of the merged file - exactly the original's length - lands mid-value
 inside `LocalizedStrings/lang/Tokens/PL_amped_tacticals_desc`, which is the
-breadcrumb the error printed. Hooking `Size(fileName, pathID)` (primary
-filesystem vtable slot 135, `filesystem_stdio.prx` + `0xde20`) did **not** fix
-it: the hook installs and is never called for this file, so the size comes from
-somewhere still unidentified. The merged file is therefore written without
-indentation, which costs nothing and saves about 24 KB, and
-`BuildKeyValuesPatch` refuses to serve any merge larger than its original,
-falling back to vanilla rather than producing a fatal error. All nine patched
-files fit with room to spare; `Test-NorthstarProfile.ps1` merges each one for
-real and fails if that stops being true.
+breadcrumb the error printed. The first fix hooked `Size(fileName, pathID)` on
+primary filesystem vtable slot 135 (`filesystem_stdio.prx` + `0xde20`), but the
+playlist loader uses secondary interface slot 7. That entry is a direct
+`this -= 8; jmp 0xde20` thunk at `+0xe1e0`, so it bypasses the primary vtable.
+The runtime now copies and hooks that secondary slot too, adjusts its `this`
+pointer back to the primary object and returns the generated file's cached
+serialised length. Caching matters: the platform libc `stat` layout reported a
+348,560-byte file as 681 bytes in this module. Generated merges may therefore
+be larger than retail without being truncated. They remain unindented to save
+about 24 KB of startup I/O, and `Test-NorthstarProfile.ps1` parses and validates
+every real merged file rather than imposing the obsolete size limit.
 
 **Escape sequences must pass through untouched.** The playlist holds 2,525
 `\n` and 138 `\"` inside localised strings. Decoding them on parse and not
@@ -5345,4 +5347,30 @@ revision, mod metadata and enabled state, enabled-settings hash, runtime persist
 and first error per VM. It archives the preceding and current logs with Atlas token/password JSON
 and query parameters redacted. One complete repeated transition should still be captured through
 this upgraded recorder to close G01 acceptance.
+
+## Oversized KeyValues merge verified; documentation reconciled (2026-10-01)
+
+The secondary `Size` hook (`filesystem_stdio.prx` +0xe1e0, see the KeyValues section) was
+checked with a merge larger than retail. A throwaway mod added 701 variables to the playlist
+`defaults`: `keyvalues built playlists_v2.txt patches=3 original=360403 merged=390589`, and
+`keyvalues size playlists_v2.txt = 390589`. The harness `playlistvar` action read the last
+added variable (`4242`), one in the middle, vanilla `tdm` `scorelimit` (75) and Northstar's
+`fw` `max_players` (16). Earlier merges were all smaller than their originals, so this is the
+first live proof that the size cap is gone. Run on shadPS4 `94e21778`, whose pipeline cache the
+user now uses. Launching `2b5666b3` against that cache fails at start with
+`serdes.h:111 Read: Assertion Failed!`, so test sessions should launch the build that made the
+current cache.
+
+Documentation reconciled against the code:
+- GOALS' "Current state" and "Known limits" said mod RPaks were off and untested in game. That
+  was out of date: the loader runs in normal builds (`kModRpakLoadingEnabled = true`), and only
+  profile copies converted with `-ConvertRpaksForPs4` are loaded. A PC-layout pak is refused at
+  runtime. The deployed test profile still had PC-layout Northstar.Custom paks, so they were being
+  refused until it was converted.
+- INSTALL, GOALS and the build manifest text said to stay on `2b5666b3` "until #5124 is fixed
+  upstream". It was fixed by #5133 (`f6cd16e8`), and `4cbd23ef`/`94e21778` have run real
+  sessions. `2b5666b3` stays documented until longer play (G25), and the text now says why.
+- Older dated sections here (for example "rpaks are disabled" in the 2026-09-27 custom map
+  section) are left as history. This file is chronological, and later entries correct earlier
+  ones.
 

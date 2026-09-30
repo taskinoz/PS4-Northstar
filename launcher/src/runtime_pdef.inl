@@ -10,6 +10,7 @@ constexpr std::size_t kRuntimePdiffReadLimit = 1024 * 1024;
 std::atomic_flag g_runtimePdefLock = ATOMIC_FLAG_INIT;
 bool g_runtimePdefAttempted = false;
 bool g_runtimePdefGenerated = false;
+std::size_t g_runtimePdefGeneratedSize = 0;
 
 bool RuntimePdefPath(const char* normalized) noexcept {
     return normalized && !std::strcmp(normalized, kRuntimePdefLogical);
@@ -100,6 +101,7 @@ bool BuildRuntimePdef() noexcept {
         LogFormat("[NorthstarPS4] pdef refused: atomic output write failed\n");
         return false;
     }
+    g_runtimePdefGeneratedSize = merged.size();
     LogFormat("[NorthstarPS4] pdef generated mods=%zu data=%zu file=%zu base=%s\n",
         applied, dataBytes, merged.size(), basePath.c_str());
     return true;
@@ -118,15 +120,14 @@ bool RuntimePdefReady() noexcept {
 
 bool RuntimePdefSize(std::uint64_t& size) noexcept {
     if (!RuntimePdefReady()) return false;
-    struct stat info{};
-    if (stat(kRuntimePdefOutput, &info) != 0 || info.st_size < 0) return false;
-    size = static_cast<std::uint64_t>(info.st_size);
-    return true;
+    size = static_cast<std::uint64_t>(g_runtimePdefGeneratedSize);
+    return size != 0;
 }
 
 void ResetRuntimePdef() noexcept {
     while (g_runtimePdefLock.test_and_set(std::memory_order_acquire)) sceKernelUsleep(100);
     g_runtimePdefAttempted = false;
     g_runtimePdefGenerated = false;
+    g_runtimePdefGeneratedSize = 0;
     g_runtimePdefLock.clear(std::memory_order_release);
 }

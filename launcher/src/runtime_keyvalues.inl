@@ -36,6 +36,7 @@ constexpr std::size_t kMaxKeyValueFileSize = 8 * 1024 * 1024;
 char g_keyValuePatchPaths[kMaxKeyValuePatches][kKeyValuePathCapacity]{};
 std::int32_t g_keyValuePatchCount = 0;
 char g_keyValueBuiltPaths[kMaxKeyValuePatches][kKeyValuePathCapacity]{};
+std::size_t g_keyValueBuiltSizes[kMaxKeyValuePatches]{};
 std::int32_t g_keyValueBuiltCount = 0;
 
 // `<mod directory>/keyvalues`
@@ -113,6 +114,16 @@ bool KeyValuesAlreadyBuilt(const char* normalized) noexcept {
     return false;
 }
 
+bool KeyValuesBuiltSize(const char* normalized, std::uint64_t& size) noexcept {
+    for (std::int32_t i = 0; i < g_keyValueBuiltCount; ++i) {
+        if (!std::strcmp(g_keyValueBuiltPaths[i], normalized)) {
+            size = static_cast<std::uint64_t>(g_keyValueBuiltSizes[i]);
+            return true;
+        }
+    }
+    return false;
+}
+
 // The merged file keeps the requested path under the generated root so two
 // patched files with the same leaf name in different directories cannot
 // collide.
@@ -172,20 +183,13 @@ bool ReadModKeyValues(const char* absolute, std::string& out) noexcept {
 
 bool BuildKeyValuesPatch(void* self, const char* normalized) noexcept;
 
-// The engine sizes its parse buffer with Size(fileName, pathID), which walks
-// its own search paths and never reaches the Open hook. Serving a file larger
-// than the one it measured therefore gets read short: the first attempt at
-// this died on `FatalError: KeyValues Error: Error reading token` at byte
-// 360403 of a 372535 byte playlist - exactly the original's length, mid-token
-// inside a localised description. So the size has to be answered here too.
+// The engine sizes its parse buffer with Size(fileName, pathID), so generated
+// files must report the exact length that Open will serve. Both filesystem
+// interfaces are hooked: the secondary one has a direct thunk that bypasses
+// the primary vtable.
 bool KeyValuesServedSize(void* self, const char* normalized, std::uint64_t& size) noexcept {
     if (!KeyValuesAlreadyBuilt(normalized) && !BuildKeyValuesPatch(self, normalized)) return false;
-    char outputPath[512];
-    if (!KeyValuesOutputPath(normalized, outputPath, sizeof(outputPath))) return false;
-    struct stat info{};
-    if (stat(outputPath, &info) != 0) return false;
-    size = static_cast<std::uint64_t>(info.st_size);
-    return true;
+    return KeyValuesBuiltSize(normalized, size);
 }
 
 bool BuildKeyValuesPatch(void* self, const char* normalized) noexcept {
@@ -222,9 +226,9 @@ bool BuildKeyValuesPatch(void* self, const char* normalized) noexcept {
     }
     if (applied == 0) return false;
 
-    // Written without indentation: the engine reads a served file short if it
-    // is longer than the one it measured, and dropping the tabs buys about
-    // 24 KB on the playlist - far more than the patches add.
+    // Keep generated files compact. Size is no longer constrained by the
+    // retail file, but avoiding tens of thousands of formatting bytes still
+    // reduces startup I/O and memory use.
     const std::string output = SerialiseKeyValues(merged, false);
     // A merge can only add to or replace within the original, so a result that
     // lost any of the original's keys means something went wrong. Refuse
@@ -234,15 +238,6 @@ bool BuildKeyValuesPatch(void* self, const char* normalized) noexcept {
     // half the original's size.)
     if (!KeyValuesKeepsKeys(original, merged)) {
         LogFormat("[NorthstarPS4] keyvalues refused %s: the merge lost keys of the original\n", normalized);
-        return false;
-    }
-    // The engine sizes its parse buffer from the original file and reads only
-    // that many bytes, so anything longer arrives truncated mid-token and is a
-    // FatalError, not a degraded file. Falling back to vanilla loses the patch
-    // but keeps the game bootable, and says so.
-    if (output.size() > originalText.size()) {
-        LogFormat("[NorthstarPS4] keyvalues refused %s: merged %zu bytes exceeds original %zu, would be read short\n",
-            normalized, output.size(), originalText.size());
         return false;
     }
     char outputPath[512];
@@ -262,8 +257,10 @@ bool BuildKeyValuesPatch(void* self, const char* normalized) noexcept {
         LogFormat("[NorthstarPS4] keyvalues write failed: %s\n", outputPath);
         return false;
     }
-    if (g_keyValueBuiltCount < static_cast<std::int32_t>(kMaxKeyValuePatches))
-        std::snprintf(g_keyValueBuiltPaths[g_keyValueBuiltCount++], kKeyValuePathCapacity, "%s", normalized);
+    if (g_keyValueBuiltCount < static_cast<std::int32_t>(kMaxKeyValuePatches)) {
+        std::snprintf(g_keyValueBuiltPaths[g_keyValueBuiltCount], kKeyValuePathCapacity, "%s", normalized);
+        g_keyValueBuiltSizes[g_keyValueBuiltCount++] = output.size();
+    }
     LogFormat("[NorthstarPS4] keyvalues built %s patches=%d original=%zu merged=%zu bytes\n",
         normalized, applied, originalText.size(), output.size());
     return true;

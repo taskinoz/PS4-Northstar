@@ -8,6 +8,7 @@ constexpr const char* kParticleManifestRelative = "particles/particles_manifest.
 constexpr const char* kParticleManifestOutput = "/data/northstar_ps4/particles/particles_manifest.txt";
 constexpr std::size_t kMaxParticleManifestSize = 2 * 1024 * 1024;
 bool g_particleManifestGenerated = false;
+std::size_t g_particleManifestGeneratedSize = 0;
 
 bool ParticleManifestPath(const char* normalized) noexcept {
     if (!normalized) return false;
@@ -68,6 +69,7 @@ bool BuildParticlesManifest(void* self) noexcept {
     if (!file) return false;
     bool ok = std::fwrite(output.data(), 1, output.size(), file) == output.size();
     if (std::fclose(file) != 0) ok = false;
+    g_particleManifestGeneratedSize = ok ? output.size() : 0;
     LogFormat("[NorthstarPS4] particles manifest built mods=%zu bytes=%zu success=%d\n",
         bodies.size(), output.size(), ok ? 1 : 0);
     return ok;
@@ -80,8 +82,6 @@ bool ParticleManifestReady(void* self) noexcept {
 
 bool ParticleManifestSize(void* self, std::uint64_t& size) noexcept {
     if (!ParticleManifestReady(self)) return false;
-    struct stat info{};
-    if (stat(kParticleManifestOutput, &info) != 0) return false;
-    size = static_cast<std::uint64_t>(info.st_size);
-    return true;
+    size = static_cast<std::uint64_t>(g_particleManifestGeneratedSize);
+    return size != 0;
 }

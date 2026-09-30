@@ -115,6 +115,7 @@ void ReloadModState() noexcept {
 
     CollectKeyValuePatches();
     g_particleManifestGenerated = false;
+    g_particleManifestGeneratedSize = 0;
     uiapi::ClearDatatableCache();
 
     // UI and CLIENT callbacks are read when their hooks are installed; SERVER

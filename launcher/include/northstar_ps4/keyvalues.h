@@ -205,9 +205,8 @@ inline void AppendKeyValuesQuoted(std::string& out, const std::string& text) {
     out.push_back('"');
 }
 
-// `indent` is off for generated files. Indentation is pure readability and it
-// costs about 24 KB on the playlist, which matters because the engine will not
-// read a served file that is larger than the one it measured.
+// `indent` is off for generated files. Indentation is pure readability and
+// costs about 24 KB on the playlist; compact output reduces startup I/O.
 inline void SerialiseKeyValueList(const KeyValueList& list, std::string& out, int indent, bool useIndent) {
     for (const KeyValue& entry : list) {
         if (useIndent) out.append(static_cast<std::size_t>(indent), '\t');

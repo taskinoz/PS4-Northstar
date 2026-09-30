@@ -38,11 +38,9 @@ static std::string ReadFile(const char* path) {
     return buffer.str();
 }
 
-// `--fit <original> <patch>...` merges one real file the way the runtime does
-// and reports whether the result still fits. The runtime refuses to serve a
-// merged file larger than the original (the engine reads it short), so a file
-// that does not fit is silently served as vanilla - worth knowing here rather
-// than from a desync mid-match.
+// `--fit <original> <patch>...` is retained as the profile script's historical
+// command name. It now validates the complete generated merge; the runtime's
+// Size hooks allow it to be larger than the retail file.
 static int FitCheck(int argc, char** argv) {
     const std::string originalText = ReadFile(argv[2]);
     if (originalText.empty()) {
@@ -72,12 +70,12 @@ static int FitCheck(int argc, char** argv) {
         std::fprintf(stderr, "fit check: merged %s does not parse back: %s\n", argv[2], error.c_str());
         return 1;
     }
-    // The runtime serves a merge only when it fits and kept every original key.
+    // A generated merge may grow, but it must keep every original key.
     const bool fits = compact.size() <= originalText.size();
     const bool kept = KeyValuesKeepsKeys(original, merged);
     std::printf("  %-44s original %7zu  merged %7zu  %s\n", argv[2], originalText.size(), compact.size(),
-        !fits ? "TOO LARGE, would be refused" : !kept ? "LOST KEYS, would be refused" : "fits");
-    return fits && kept ? 0 : 1;
+        !kept ? "LOST KEYS, would be refused" : fits ? "valid" : "valid, generated size required");
+    return kept ? 0 : 1;
 }
 
 int main(int argc, char** argv) {
@@ -179,6 +177,18 @@ int main(int argc, char** argv) {
     assert(!KeyValuesKeepsKeys(dupOriginal, KeyValueList{}));
     assert(KeyValuesKeepsKeys(Parse("root { f x [$PC] f y [$GAMECONSOLE] }"),
         Parse("root { f x [$PC] f z [$GAMECONSOLE] g 1 }")));
+
+    // Generated files are allowed to exceed the retail file. The filesystem
+    // Size hooks report this complete serialised length before the engine
+    // allocates its parse buffer.
+    const std::string smallBaseText = "root { keep 1 }";
+    KeyValueList growing = Parse(smallBaseText.c_str());
+    const std::string largePatchText = "root { added \"" + std::string(512, 'x') + "\" }";
+    MergeKeyValues(growing, Parse(largePatchText.c_str()));
+    const std::string grown = SerialiseKeyValues(growing, false);
+    assert(grown.size() > smallBaseText.size());
+    assert(KeyValuesKeepsKeys(Parse(smallBaseText.c_str()), growing));
+    assert(FindKeyValue(Parse(grown.c_str())[0].children, "added")->value.size() == 512);
 
     // A patch under another platform's conditional is added beside the
     // original instead of merging into it.
@@ -294,17 +304,9 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "live-file check: round trip changed the gamemode count\n");
         return 1;
     }
-    // The runtime serves the compact form, and the engine reads a served file
-    // short if it is longer than the original it measured, so this is a hard
-    // constraint rather than a nicety. If a future patch pushes it over, the
-    // runtime falls back to vanilla and the custom gamemodes quietly vanish -
-    // catch that here instead.
+    // The runtime serves the compact form and reports its exact generated size
+    // through both filesystem interfaces.
     const std::string compact = SerialiseKeyValues(merged, false);
-    if (compact.size() > originalText.size()) {
-        std::fprintf(stderr, "live-file check: compact merge %zu bytes exceeds original %zu, "
-            "the runtime would refuse to serve it\n", compact.size(), originalText.size());
-        return 1;
-    }
     KeyValueList compactRound = Parse(compact.c_str());
     const KeyValue* compactModes =
         FindKeyValue(FindKeyValue(compactRound, "playlists")->children, "Gamemodes");
@@ -313,7 +315,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     std::printf("KeyValues live-file check passed: gamemodes %zu -> %zu, lang blocks %zu, "
-        "indented %zu bytes, compact %zu of %zu allowed.\n",
+        "indented %zu bytes, compact %zu vs retail %zu.\n",
         modesBefore, gamemodes->children.size(), langsAfter, text.size(),
         compact.size(), originalText.size());
     return 0;

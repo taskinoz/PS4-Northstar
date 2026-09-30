@@ -2160,6 +2160,15 @@ std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noex
     }
     return g_originalFsSize(self, fileName, pathID);
 }
+
+// IBaseFileSystem is exposed at fs+8 as a secondary interface. Its Size thunk
+// adjusts `this` by -8 and jumps directly to the implementation at 0xde20;
+// it does not dispatch through primary slot 135. Most KeyValues callers use
+// this interface, so hook its slot as well or they still allocate for the
+// retail file and read a larger generated merge short.
+std::uint64_t ModSecondarySize(void* self, const char* fileName, const char* pathID) noexcept {
+    return ModSize(reinterpret_cast<char*>(self) - 8, fileName, pathID);
+}
 #endif
 
 #include "runtime_vpks.inl"
@@ -2404,7 +2413,8 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
     constexpr std::uint8_t openExPreimage[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0x58,0x02,0x00,0x00};
     constexpr std::uint8_t cachePreimage[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x53,0x48,0x81,0xec,0x28,0x02,0x00,0x00};
     // Size(fileName, pathID): secondary slot 7 is a `this -= 8` thunk straight
-    // into this same implementation, so the primary slot is the one to hook.
+    // into this implementation. Because it is a direct jump rather than a
+    // virtual dispatch, both interface slots must be replaced.
     constexpr std::uint8_t sizePreimage[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0xa8,0x01,0x00,0x00};
     const bool matches = reinterpret_cast<std::uintptr_t>(vtable) == base + 0x70eb0 &&
         reinterpret_cast<std::uintptr_t>(vtable2) == base + 0x713f0 &&
@@ -2446,21 +2456,39 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
         LogFormat("[NorthstarPS4] MountVPK hook installed archives=%zu\n", g_modVpks.size());
     } else LogFormat("[NorthstarPS4] MountVPK profile mismatch; mod VPK mounting disabled\n");
     *reinterpret_cast<void**>(fs) = g_primaryFsTable + 2;
-    // ReadFile lives only in the secondary table (fs+8): slot 14 points
-    // straight at the implementation, not at a thunk into the primary table,
-    // so it gets its own copied table. Gated separately; a mismatch leaves
-    // ReadFile stock and everything above in place.
+    // Size callers and ReadFile live on the secondary table (fs+8). Gate each
+    // replacement independently; an unknown entry remains stock while the
+    // other hook and everything above stay in place.
+    constexpr std::uint8_t secondarySizePreimage[] = {0x48,0x83,0xc7,0xf8,0xe9,0x37,0xfc,0xff,0xff};
     constexpr std::uint8_t readFilePreimage[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xec,0x18,0x49,0x89,0xcf,0x48,0x89,0xfb,0x4c,0x89,0x4d,0xc8,0x49,0x89,0xd1,0x49,0x89};
-    if (reinterpret_cast<std::uintptr_t>(vtable2[14]) == base + 0xc3d0 &&
-        ValidateEnginePreimage(base, fsInfo.segmentInfo[0].size, 0xc3d0, readFilePreimage, sizeof(readFilePreimage))) {
+    const bool secondarySizeMatches =
+        reinterpret_cast<std::uintptr_t>(vtable2[7]) == base + 0xe1e0 &&
+        ValidateEnginePreimage(base, fsInfo.segmentInfo[0].size, 0xe1e0,
+            secondarySizePreimage, sizeof(secondarySizePreimage));
+    const bool readFileMatches =
+        reinterpret_cast<std::uintptr_t>(vtable2[14]) == base + 0xc3d0 &&
+        ValidateEnginePreimage(base, fsInfo.segmentInfo[0].size, 0xc3d0,
+            readFilePreimage, sizeof(readFilePreimage));
+    if (secondarySizeMatches || readFileMatches) {
         // Offset-to-top and RTTI come across with the table, as for the primary.
         for (std::size_t i = 0; i < kSecondaryFsTableSlots + 2; ++i)
             g_secondaryFsTable[i] = reinterpret_cast<std::uintptr_t>(vtable2[static_cast<std::ptrdiff_t>(i) - 2]);
-        g_originalFsReadFile = reinterpret_cast<FsReadFileFn>(vtable2[14]);
-        g_secondaryFsTable[14 + 2] = reinterpret_cast<std::uintptr_t>(&ModReadFile);
+        if (secondarySizeMatches) {
+            g_secondaryFsTable[7 + 2] = reinterpret_cast<std::uintptr_t>(&ModSecondarySize);
+            LogFormat("[NorthstarPS4] secondary Size hook installed\n");
+        } else {
+            LogFormat("[NorthstarPS4] secondary Size profile mismatch; generated files may be read short\n");
+        }
+        if (readFileMatches) {
+            g_originalFsReadFile = reinterpret_cast<FsReadFileFn>(vtable2[14]);
+            g_secondaryFsTable[14 + 2] = reinterpret_cast<std::uintptr_t>(&ModReadFile);
+            LogFormat("[NorthstarPS4] ReadFile hook installed\n");
+        } else {
+            LogFormat("[NorthstarPS4] ReadFile profile mismatch; whole-file reads bypass mods\n");
+        }
         *reinterpret_cast<void**>(reinterpret_cast<std::uintptr_t>(fs) + 8) = g_secondaryFsTable + 2;
-        LogFormat("[NorthstarPS4] ReadFile hook installed\n");
     } else {
+        LogFormat("[NorthstarPS4] secondary Size profile mismatch; generated files may be read short\n");
         LogFormat("[NorthstarPS4] ReadFile profile mismatch; whole-file reads bypass mods\n");
     }
     g_fsHookInstalled = true;

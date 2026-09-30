@@ -38,10 +38,9 @@ foreach ($suite in @('mod_catalog', 'json_text', 'keyvalues', 'particle_manifest
     if ($LASTEXITCODE) { throw "Host compilation failed: $suite" }
     if ($suite -eq 'keyvalues') { & $exe @liveArgs } elseif ($suite -eq 'pdef_diff') { & $exe @pdefArgs } elseif ($suite -eq 'rpaks') { & $exe @rpakArgs } else { & $exe }
     if ($LASTEXITCODE) { throw "Host tests failed: $suite" }
-    # Every other KeyValues file a shipped mod patches, merged for real. The
-    # runtime refuses to serve a merge larger than the original because the
-    # engine reads it short, so a file that stops fitting silently reverts to
-    # vanilla - this turns that into a test failure instead.
+    # Every other KeyValues file a shipped mod patches, merged and reparsed for
+    # real. Generated files may be larger than retail because both filesystem
+    # Size interfaces report the complete merged length.
     if ($suite -eq 'keyvalues' -and $liveArgs.Count -eq 3) {
         $vpkFor = [ordered]@{
             'resource/fontfiletable.txt'                  = 'frontend'
@@ -66,7 +65,7 @@ foreach ($suite in @('mod_catalog', 'json_text', 'keyvalues', 'particle_manifest
             }
             if ($patches.Count -eq 0) { continue }
             & $exe --fit $original @patches
-            if ($LASTEXITCODE) { throw "KeyValues merge no longer fits: $relative" }
+            if ($LASTEXITCODE) { throw "KeyValues merge is invalid: $relative" }
         }
     }
 }
