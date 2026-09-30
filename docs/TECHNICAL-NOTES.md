@@ -5215,3 +5215,22 @@ connection ownership. The remaining acceptance test is to repeat the same-accoun
 action: the server should run the remote-player persistence/leave path, disconnect only the PC,
 and leave the PS4 host in its private lobby.
 
+The follow-up command-path audit found no generic remote-to-local console bridge:
+
+- client-to-server command strings enter `CodeCallback_ClientCommand`, which invokes only names
+  registered through `AddClientCommandCallback`; unknown names return false rather than reaching
+  the engine command buffer;
+- server-to-client string commands dispatch only callbacks registered through
+  `AddServerToClientStringCommandCallback`;
+- the PS4-only `NSPS4_ClientCommand` UI helper is called by native code only with either a
+  validated `connect <IPv4>:<port>` string or the fixed `map mp_lobby` string;
+- `ExecuteEngineCommand` and the file-backed console drain are compile-time disabled; and
+- `ns_start_reauth_and_leave_to_lobby` is deliberately `FCVAR_SERVER_CAN_EXECUTE`, matching the
+  Northstar flow where a server tells that specific departing client to build its local lobby.
+
+Thus a server can issue the intended leave command to its client, as on PC Northstar, but the
+port adds no path for another client to execute arbitrary ConCommands on the PS4 host. The live
+log likewise contains no `[NorthstarPS4] console command:` event; the repeated unknown client
+commands shown there are rejected by the callback dispatcher. The observed cross-machine lobby
+control remains attributable to duplicate-UID local-player misclassification pending the retest.
+

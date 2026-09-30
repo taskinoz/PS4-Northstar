@@ -14,7 +14,7 @@ Emulator: shadPS4 nightly **`2b5666b3`** is the build to test on. Builds before 
 
 Status vocabulary: **Verified** = named acceptance scenario passed with evidence; **Partial** = useful implementation but incomplete behavior or validation; **Adapter** = registered fallback/stub; **Missing** = not implemented; **Investigating** = concrete failure being traced. Emulator and hardware results are separate; nothing here is verified on PS4 hardware.
 
-## Current state (2026-09-30, release v0.2.11-alpha plus later commits)
+## Current state (2026-09-30, release v0.2.12-alpha plus later commits)
 
 Verified on shadPS4 (details and build hashes in TECHNICAL-NOTES):
 
