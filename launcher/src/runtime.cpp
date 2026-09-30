@@ -860,36 +860,42 @@ using ModFindVarFn = void* (*)(void*, const char*);
 using ModConVarConstructorFn = void (*)(
     void*, const char*, const char*, int, const char*, void*);
 
-void RegisterModConVars(const ModInfo& mod, std::int32_t& poolIndex,
+// Each registered ConVar keeps its object and strings for the rest of the
+// session: the engine's cvar list points at them. They used to share a fixed
+// pool of 32 slots across all mods, and the core Northstar mods already fill 30
+// of those, so a settings mod such as S2.SpeedometerV2 (8 ConVars) silently lost
+// most of its variables and its scripts then failed to find them. `count`
+// counts registrations.
+struct ModConVarStorage {
+    alignas(16) std::uint8_t object[0x90];
+    char name[64];
+    char value[64];
+    char help[128];
+};
+
+void RegisterModConVars(const ModInfo& mod, std::int32_t& count,
     void* cvar, ModFindVarFn findVar,
     ModConVarConstructorFn constructor) noexcept {
-    alignas(16) static std::uint8_t objects[kMaxModConVars][0x90]{};
-    static char names[kMaxModConVars][64]{};
-    static char defaults[kMaxModConVars][64]{};
-    static char help[kMaxModConVars][128]{};
-    for (std::int32_t i = 0; i < mod.conVarCount &&
-        poolIndex < static_cast<std::int32_t>(kMaxModConVars); ++i) {
+    for (std::int32_t i = 0; i < mod.conVarCount; ++i) {
         const ModConVarInfo& info = mod.conVars[i];
-        const std::int32_t slot = poolIndex;
-        std::strncpy(names[slot], info.name, sizeof(names[0]) - 1);
-        names[slot][sizeof(names[0]) - 1] = '\0';
-        std::strncpy(defaults[slot], info.defaultValue,
-            sizeof(defaults[0]) - 1);
-        defaults[slot][sizeof(defaults[0]) - 1] = '\0';
-        std::snprintf(help[slot], sizeof(help[0]),
-            "Northstar PS4 mod convar (%s)", mod.name);
-        void* registered = findVar(cvar, names[slot]);
         // Already there: a stock convar, or this mod's from before a reload.
-        // PC keeps those too (ModManager::LoadMods), and the slot stays free.
-        if (registered != nullptr) continue;
-        constructor(objects[slot], names[slot], defaults[slot], 0,
-            help[slot], nullptr);
-        registered = findVar(cvar, names[slot]);
+        // PC keeps those too (ModManager::LoadMods).
+        if (findVar(cvar, info.name) != nullptr) continue;
+        auto* storage = new (std::nothrow) ModConVarStorage();
+        if (!storage) {
+            LogFormat("[NorthstarPS4] mod convar %s not registered: out of memory\n", info.name);
+            return;
+        }
+        std::strncpy(storage->name, info.name, sizeof(storage->name) - 1);
+        std::strncpy(storage->value, info.defaultValue, sizeof(storage->value) - 1);
+        std::snprintf(storage->help, sizeof(storage->help), "Northstar PS4 mod convar (%s)", mod.name);
+        constructor(storage->object, storage->name, storage->value, 0, storage->help, nullptr);
+        void* registered = findVar(cvar, storage->name);
         LogFormat(
             "[NorthstarPS4] mod convar name=%s default=%s flags=%s result=%p success=%d\n",
-            names[slot], defaults[slot], info.flags, registered,
-            registered == objects[slot] ? 1 : 0);
-        ++poolIndex;
+            storage->name, storage->value, info.flags, registered,
+            registered == storage->object ? 1 : 0);
+        ++count;
     }
 }
 

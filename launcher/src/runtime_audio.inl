@@ -54,17 +54,21 @@ unsigned g_random = 0x2545f491;
 void ListWavFiles(const std::string& directory, std::vector<std::string>& out) {
     DIR* dir = opendir(directory.c_str());
     if (!dir) return;
-    std::vector<std::string> subdirectories;
+    // PC walks with recursive_directory_iterator, which on NTFS yields each
+    // folder's entries in name order, files and folders interleaved. readdir
+    // order differs under shadPS4, so sort to get PC's sequence.
+    std::vector<std::string> entries;
     while (dirent* entry = readdir(dir)) {
         const std::string name = entry->d_name;
-        if (name == "." || name == "..") continue;
-        const std::string path = directory + "/" + name;
-        if (IsDirectory(path.c_str())) subdirectories.push_back(path);
-        else if (name.size() > 4 && name.compare(name.size() - 4, 4, ".wav") == 0) out.push_back(path);
+        if (name != "." && name != "..") entries.push_back(name);
     }
     closedir(dir);
-    std::sort(subdirectories.begin(), subdirectories.end());
-    for (const auto& subdirectory : subdirectories) ListWavFiles(subdirectory, out);
+    std::sort(entries.begin(), entries.end());
+    for (const auto& name : entries) {
+        const std::string path = directory + "/" + name;
+        if (IsDirectory(path.c_str())) ListWavFiles(path, out);
+        else if (name.size() > 4 && name.compare(name.size() - 4, 4, ".wav") == 0) out.push_back(path);
+    }
 }
 
 // PC ModManager: every enabled mod's audio/*.json, in load order.
