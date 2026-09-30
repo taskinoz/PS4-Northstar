@@ -18,6 +18,7 @@
 #include "northstar_ps4/particle_manifest.h"
 #include "northstar_ps4/datatable_csv.h"
 #include "northstar_ps4/localisation_language.h"
+#include "northstar_ps4/pdef_diff.h"
 #include "northstar_ps4/pdata_convert.h"
 #include "northstar_ps4/server_list.h"
 #include "northstar_ps4/mod_archive.h"
@@ -2127,6 +2128,7 @@ bool BuildRuntimeManifest(void* self) noexcept {
 
 #include "runtime_keyvalues.inl"
 #include "runtime_particles.inl"
+#include "runtime_pdef.inl"
 #endif
 
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
@@ -2137,6 +2139,11 @@ std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noex
     char normalized[256]{};
     const char* patched = nullptr;
     NormalizeRequestedPath(fileName, normalized, sizeof(normalized));
+    if (RuntimePdefPath(normalized)) {
+        std::uint64_t size = 0;
+        if (RuntimePdefSize(size)) return size;
+        return 0;
+    }
     if (ParticleManifestPath(normalized)) {
         std::uint64_t size = 0;
         if (ParticleManifestSize(self, size)) return size;
@@ -2208,6 +2215,7 @@ bool PathIdIsGame(const char* pathID) noexcept {
 bool RewrittenByOpenEx(const char* normalized) noexcept {
     if (!std::strcmp(normalized, "scripts/vscripts/scripts.rson")) return true;
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    if (RuntimePdefPath(normalized)) return true;
     if (ParticleManifestPath(normalized)) return true;
     if (kKeyValuesMergeEnabled && IsKeyValuePatched(normalized)) return true;
 #endif
@@ -2219,6 +2227,15 @@ bool ModReadFile(void* self, const char* fileName, const char* pathID, void* buf
     char normalized[256]{};
     if (PathIdIsGame(pathID) && NormalizeRequestedPath(fileName, normalized, sizeof(normalized))) {
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+        if (RuntimePdefPath(normalized)) {
+            if (RuntimePdefReady() && g_originalFsReadFile(self, kRuntimePdefOutput, pathID,
+                    buffer, maxBytes, startingByte, alloc)) {
+                LogFormat("[NorthstarPS4] generated pdef read: %s\n", kRuntimePdefOutput);
+                return true;
+            }
+            LogFormat("[NorthstarPS4] generated pdef ReadFile refused\n");
+            return false;
+        }
         if (ParticleManifestPath(normalized) && ParticleManifestReady(self)) {
             if (g_originalFsReadFile(self, kParticleManifestOutput, pathID, buffer,
                     maxBytes, startingByte, alloc)) {
@@ -2259,6 +2276,16 @@ void* ModOpenEx(void* self, const char* fileName, const char* mode,
     if (trace) LogFormat("[NorthstarPS4] OpenEx requested=%s pathID=%s\n", fileName, pathID ? pathID : "(null)");
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     if (readOnly && NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
+        RuntimePdefPath(normalized)) {
+        if (!RuntimePdefReady()) {
+            LogFormat("[NorthstarPS4] generated pdef open refused\n");
+            return nullptr;
+        }
+        void* handle = g_originalFsOpenEx(self, kRuntimePdefOutput, mode, flags, pathID, resolved);
+        LogFormat("[NorthstarPS4] generated pdef served handle=%p\n", handle);
+        return handle;
+    }
+    if (readOnly && NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
         std::strcmp(normalized, "scripts/vscripts/scripts.rson") == 0) {
         if (!g_runtimeManifestGenerated) g_runtimeManifestGenerated = BuildRuntimeManifest(self);
         if (g_runtimeManifestGenerated) {
@@ -2277,10 +2304,6 @@ void* ModOpenEx(void* self, const char* fileName, const char* mode,
             return handle;
         }
     }
-    // The persistence definition needs no special case: Northstar.PS4 ships a
-    // pre-generated 929 file (PC 231 plus the console's black market; see
-    // scripts/pdef/build_ps4_pdef.py) and the ordinary mod overlay below
-    // serves it, Northstar.PS4 having the highest LoadPriority.
     // KeyValues patches. A patched file is merged on its first request and the
     // single complete result is served in its place; later requests reuse it.
     // If the merge fails for any reason this falls through to the stock file,

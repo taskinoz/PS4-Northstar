@@ -29,11 +29,14 @@ if ($settings) {
         if (Test-Path -LiteralPath $rpakFile -PathType Leaf) { $rpakArgs += $rpakFile }
     }
 }
-foreach ($suite in @('mod_catalog', 'json_text', 'keyvalues', 'particle_manifest', 'datatable_csv', 'localisation_language', 'rpaks', 'server_list', 'mod_download')) {
+$pdefArgs = @()
+$pdefFile = Join-Path $repositoryRoot 'mods\Northstar.PS4\mod\cfg\server\persistent_player_data_version_929.pdef'
+if (Test-Path -LiteralPath $pdefFile -PathType Leaf) { $pdefArgs = @($pdefFile) }
+foreach ($suite in @('mod_catalog', 'json_text', 'keyvalues', 'particle_manifest', 'datatable_csv', 'localisation_language', 'pdef_diff', 'rpaks', 'server_list', 'mod_download')) {
     $exe = Join-Path $testRoot ($suite + '.exe')
     & clang++.exe -std=c++17 -D_CRT_SECURE_NO_WARNINGS -I (Join-Path $repositoryRoot 'launcher\include') (Join-Path $repositoryRoot ('tests\' + $suite + '.cpp')) -o $exe
     if ($LASTEXITCODE) { throw "Host compilation failed: $suite" }
-    if ($suite -eq 'keyvalues') { & $exe @liveArgs } elseif ($suite -eq 'rpaks') { & $exe @rpakArgs } else { & $exe }
+    if ($suite -eq 'keyvalues') { & $exe @liveArgs } elseif ($suite -eq 'pdef_diff') { & $exe @pdefArgs } elseif ($suite -eq 'rpaks') { & $exe @rpakArgs } else { & $exe }
     if ($LASTEXITCODE) { throw "Host tests failed: $suite" }
     # Every other KeyValues file a shipped mod patches, merged for real. The
     # runtime refuses to serve a merge larger than the original because the

@@ -105,6 +105,7 @@ void ReloadModState() noexcept {
     (void)previous;  // leaked on purpose, see ModOverlay
 
     g_runtimeManifestGenerated = false;
+    ResetRuntimePdef();
 
     // MountModVpks walks g_modVpks on the engine's reader thread, holding this
     // flag; a mount that finds it held skips mod archives for that one call.

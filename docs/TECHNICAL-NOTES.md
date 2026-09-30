@@ -4526,8 +4526,8 @@ placeholder data, and nothing is written back.
     ways, and the server script logged their real UIDs.
   - Their pdata is not installed yet (G02).
   - One reported a disconnect in fastball naming `ServerCallback_HideHudForFPHackAnim`
-    (Northstar.Custom's sh_3psequence_to_1p_hacks.gnut). It is not visible in the host log
-    and is under investigation.
+    (Northstar.Custom's sh_3psequence_to_1p_hacks.gnut). This was later confirmed to come
+    from that player's mod set, not the PS4 host port, and is not an active investigation.
   - `net_debug_atlas_packet 1` logs each request in full, including the player's IP address
     and token, as PC does. Leave it off outside debugging.
 
@@ -4984,4 +4984,28 @@ with its coloured light textures in `work/rpak-event-model.png`. The installed s
 restored by a converted profile sync. The double-barrel archive also loads cleanly, but its
 weapon definition points at a model absent from both the PC and PS4 game data, so it is not a
 valid visual test target.
+
+## Runtime mod persistence diffs (2026-09-30)
+
+PC Northstar's `mods/compiled/modpdef.cpp` starts with the stock persistence definition, walks
+enabled mods in load order, inserts each `$ENUM_ADD` block before its existing enum's
+`$ENUM_END`, then appends declarations after `$PROP_START`. The PS4 runtime now performs that
+merge against Northstar.PS4's PC-231-compatible 929 base and atomically serves the generated
+file from `/data/northstar_ps4`. Reload invalidates the generated copy so the next request uses
+the new enabled set.
+
+Unlike the permissive PC implementation, generation is refused with the offending mod name
+when a directive is malformed, an enum target is missing, the result cannot be parsed, the
+serialized data exceeds the game's 56,781-byte player buffer, or the text exceeds the 53,248-
+byte file limit. The game never falls through to a partly merged or stale definition after one
+of those failures. Host tests cover enum insertion, property appending, atomic failure and the
+real shipped base: 56,350 bytes of player data, increasing to 56,354 for a fixture integer.
+
+Live validation used shadPS4 `2b5666b3`, PRX SHA256
+`5acdf6c1e3d4d39be2855203165819c4d97aaa54c33e2295c0a5a99968fbfefe`, and an isolated
+temporary enabled mod containing `$PROP_START` plus `int ps4PdiffFixture`. The runtime logged
+`pdef generated mods=1 data=56354 file=33931`, served that file through `ReadFile`, and the
+SERVER VM reached `SERVER lifecycle completed result=1` without a script, PDEF, fatal or guest
+error. The fixture was removed after the test. Transcript:
+`work/stage2/iterations/20260930-103304/shad-new-lines.log`.
 
