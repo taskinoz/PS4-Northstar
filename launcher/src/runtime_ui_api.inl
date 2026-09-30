@@ -2,7 +2,51 @@
 // Addresses and preimages belong exclusively to the supported PS4 client.prx.
 namespace uiapi {
 struct Object { std::uint64_t tag, value; };
-template<typename Fn> Fn At(std::uintptr_t va) { return reinterpret_cast<Fn>(g_runtimeClientBase + va); }
+struct SquirrelHelperBinding { void* vm; std::uintptr_t base; };
+SquirrelHelperBinding g_squirrelHelperBindings[3]{};
+
+void BindSquirrelHelpers(void* owner, int context, std::uintptr_t base) noexcept {
+    if (!owner || context < 0 || context >= 3) return;
+    g_squirrelHelperBindings[context] = {
+        *reinterpret_cast<void**>(static_cast<char*>(owner) + 8), base};
+}
+void UnbindSquirrelHelpers(void* owner) noexcept {
+    if (!owner) return;
+    void* vm = *reinterpret_cast<void**>(static_cast<char*>(owner) + 8);
+    for (auto& binding : g_squirrelHelperBindings)
+        if (binding.vm == vm) binding = {};
+}
+std::uintptr_t SquirrelHelperBase(void* vm) noexcept {
+    for (const auto& binding : g_squirrelHelperBindings)
+        if (binding.vm == vm && binding.base) return binding.base;
+    return g_runtimeClientBase;
+}
+std::uintptr_t SquirrelHelperVa(void* vm, std::uintptr_t clientVa) noexcept {
+    if (SquirrelHelperBase(vm) == g_runtimeClientBase) return clientVa;
+    switch (clientVa) {
+        case 0x682a60: return 0x634320; // sq_throwerror
+        case 0x682e00: return 0x6346c0; // sq_pushstring
+        case 0x682f40: return 0x634800; // sq_pushasset
+        case 0x683230: return 0x634af0; // sq_newtable
+        case 0x683330: return 0x634bf0; // sq_newarray
+        case 0x6835e0: return 0x634ea0; // sq_arrayappend
+        case 0x684970: return 0x636230; // sq_newstruct
+        case 0x684b00: return 0x6363c0; // sq_sealstructslot
+        case 0x685cf0: return 0x6374d0; // FindFunction
+        case 0x6875f0: return 0x638ce0; // PushObject
+        case 0x6876c0: return 0x638db0; // sq_call
+        case 0x6a96a0: return 0x666600; // SQString::Create
+        case 0x6ab3e0: return 0x668470; // SQTable::NewSlot
+        default: return 0;
+    }
+}
+template<typename Fn> Fn At(void* vm, std::uintptr_t clientVa) {
+    const std::uintptr_t va = SquirrelHelperVa(vm, clientVa);
+    return va ? reinterpret_cast<Fn>(SquirrelHelperBase(vm) + va) : nullptr;
+}
+template<typename Fn> Fn AtClient(std::uintptr_t va) {
+    return reinterpret_cast<Fn>(g_runtimeClientBase + va);
+}
 void PushPrimitive(void* vm, std::uint64_t tag, std::uint64_t value) {
     auto bytes = static_cast<char*>(vm);
     auto& top = *reinterpret_cast<std::uint32_t*>(bytes + 0x68);
@@ -27,13 +71,13 @@ void Vector(void* vm, float x, float y, float z) {
     PushPrimitive(vm, 0x40000ull | (static_cast<std::uint64_t>(xb) << 32),
         static_cast<std::uint64_t>(yb) | (static_cast<std::uint64_t>(zb) << 32));
 }
-void String(void* vm, const char* value) { At<void (*)(void*, const char*, int)>(0x682e00)(vm, value, -1); }
-void Asset(void* vm, const char* value) { At<void (*)(void*, const char*, int)>(0x682f40)(vm, value, -1); }
-void Array(void* vm) { At<void (*)(void*, int)>(0x683330)(vm, 0); }
-void Append(void* vm) { At<int (*)(void*, int)>(0x6835e0)(vm, -2); }
-void Struct(void* vm, int fields) { At<void (*)(void*, int)>(0x684970)(vm, fields); }
-void Seal(void* vm, int slot) { At<void (*)(void*, int)>(0x684b00)(vm, slot); }
-int Error(void* vm, const char* message) { At<int (*)(void*, const char*)>(0x682a60)(vm, message); return -1; }
+void String(void* vm, const char* value) { At<void (*)(void*, const char*, int)>(vm, 0x682e00)(vm, value, -1); }
+void Asset(void* vm, const char* value) { At<void (*)(void*, const char*, int)>(vm, 0x682f40)(vm, value, -1); }
+void Array(void* vm) { At<void (*)(void*, int)>(vm, 0x683330)(vm, 0); }
+void Append(void* vm) { At<int (*)(void*, int)>(vm, 0x6835e0)(vm, -2); }
+void Struct(void* vm, int fields) { At<void (*)(void*, int)>(vm, 0x684970)(vm, fields); }
+void Seal(void* vm, int slot) { At<void (*)(void*, int)>(vm, 0x684b00)(vm, slot); }
+int Error(void* vm, const char* message) { At<int (*)(void*, const char*)>(vm, 0x682a60)(vm, message); return -1; }
 const Object& Arg(void* vm, int index) { return (*reinterpret_cast<Object**>(static_cast<char*>(vm) + 0x48))[index]; }
 const char* TextArg(void* vm, int index) {
     const auto& arg = Arg(vm, index);
@@ -612,6 +656,7 @@ bool RegisterRuntimeUiNatives(void* owner, int context, bool deferred = false) n
         {0x67a3c0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x83\xec\x68", 17},
         {0x68214b, "\xc7\x02\x08\x00\x00\x01\xc7\x44\x01\x04\x00\x00\x00\x00\x48\xc7\x44\x01\x08\x00\x00\x00\x00", 23},
         {0x682e00, "\x55\x48\x89\xe5\x41\x57\x41\x56\x53\x50", 10},
+        {0x682f40, "\x55\x48\x89\xe5\x41\x57\x41\x56\x53\x50", 10},
         {0x683330, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x54\x53", 11},
         {0x6835e0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x54\x53\x48\x83\xec\x10", 15},
         {0x684970, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x50", 14},
@@ -651,7 +696,7 @@ bool RegisterRuntimeUiNatives(void* owner, int context, bool deferred = false) n
         *reinterpret_cast<const char**>(record + 0x18) = r.returns;
         *reinterpret_cast<const char**>(record + 0x20) = r.args;
         *reinterpret_cast<const void**>(record + 0x60) = reinterpret_cast<const void*>(r.function);
-        uiapi::At<void (*)(void*, void*, void*, int, int)>(kClientRegisterSquirrelFuncVa)(owner, record, nullptr, 1, 0);
+        uiapi::AtClient<void (*)(void*, void*, void*, int, int)>(kClientRegisterSquirrelFuncVa)(owner, record, nullptr, 1, 0);
         LogFormat("[NorthstarPS4] runtime %s native registered: %s\n", label, r.name);
         ++registered;
     }

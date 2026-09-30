@@ -5009,3 +5009,27 @@ SERVER VM reached `SERVER lifecycle completed result=1` without a script, PDEF, 
 error. The fixture was removed after the test. Transcript:
 `work/stage2/iterations/20260930-103304/shad-new-lines.log`.
 
+## Per-module Squirrel helpers (2026-09-30)
+
+Squirrel helper implementations are not interchangeable across the game modules: they use
+module-local globals and allocators. UI and CLIENT continue to use the verified client.prx
+copies, while SERVER now dispatches through the corresponding server.prx functions selected
+from the owning VM. The matched client -> server offsets are `sq_throwerror` 0x682a60 ->
+0x634320, `sq_pushstring` 0x682e00 -> 0x6346c0, `sq_pushasset` 0x682f40 -> 0x634800,
+`sq_newtable` 0x683230 -> 0x634af0, `sq_newarray` 0x683330 -> 0x634bf0,
+`sq_arrayappend` 0x6835e0 -> 0x634ea0, `sq_newstruct` 0x684970 -> 0x636230,
+`sq_sealstructslot` 0x684b00 -> 0x6363c0, function lookup 0x685cf0 -> 0x6374d0,
+object push 0x6875f0 -> 0x638ce0 and `sq_call` 0x6876c0 -> 0x638db0. The runtime gates
+both modules' helper preimages before installing natives and binds each VM to its owning
+module when that VM is initialized.
+
+Live validation used shadPS4 `2b5666b3` and experimental PRX SHA256
+`92962323efdb38cbc14bf5269375f40f42bb5e5a7ac0386964aa1e78ee537c36`. An isolated fixture
+round-tripped nested JSON through `DecodeJSON` and `EncodeJSON` and printed
+`{"nested":{"value":2.5},"name":"ps4","items":[1,true,"ok"]}` from UI, SERVER and CLIENT.
+After a `map mp_forwardbase_kodai` transition the SERVER and CLIENT callbacks completed again,
+which also exercised rebinding on new VM generations. The successful boot transcript is
+`work/stage2/iterations/20260930-105108/shad-new-lines.log`; the temporary fixture was removed.
+An earlier launch in `work/stage2/iterations/20260930-105025` faulted in shadPS4 JIT code before
+any VM initialized, so it is recorded separately rather than attributed to this change.
+

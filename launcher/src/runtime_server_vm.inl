@@ -108,13 +108,10 @@ constexpr std::uintptr_t kServerScriptPrintSinkVa = 0x691194;
 // registration table so a native marked kCtxAll is defined identically in all
 // three contexts, and adds the SERVER-only entries the table now carries.
 //
-// The native bodies stay in client.prx, which is where this module's Squirrel
-// helpers are bound. That is safe because those helpers are either pure
-// pointer arithmetic on the VM that was passed in (argument reads, primitive
-// pushes) or Squirrel API calls that take the VM as their first argument - no
-// part of them reaches for a module-local VM. Only the registrar itself has to
-// be server.prx's, because it is the one that writes into server.prx's own
-// function table.
+// Native bodies live in this PRX, but every Squirrel API call is dispatched to
+// the copy in the module that owns the VM. Several helpers reach module-local
+// allocator/global slots even though they take the VM as their first argument,
+// so calling client.prx's copies for a SERVER VM is not safe parity.
 bool RegisterServerNatives(void* owner) noexcept {
     const std::uint8_t prologue[] = {
         0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
@@ -197,6 +194,7 @@ bool RuntimeServerVmInit(void* owner, int context, float time) noexcept {
     // Only the SERVER context comes through server.prx, but the argument is
     // checked rather than assumed.
     if (context != 0 || !result || !owner) return result;
+    uiapi::BindSquirrelHelpers(owner, context, g_runtimeServerBase);
     // PC writes remote players' pdata when they reconnect for the next map;
     // here the slots (and their saves) carry over, so write them now.
     WriteAllRemoteSaves("map change");
@@ -249,6 +247,17 @@ bool InstallRuntimeServerVm(OrbisKernelModule serverHandle) noexcept {
         {kServerVmInitVa, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x81\xec\xa8\x00\x00\x00", 20},
         {kServerInternVa, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x83\xec\x18", 17},
         {kServerInsertVa, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x83\xec", 16},
+        {0x634320, "\x55\x48\x89\xe5\x41\x57\x41\x56\x53\x50\x48\x89\xfb", 13},
+        {0x6346c0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x53\x50", 10},
+        {0x634800, "\x55\x48\x89\xe5\x41\x57\x41\x56\x53\x50", 10},
+        {0x634af0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x53\x50", 10},
+        {0x634bf0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x54\x53", 11},
+        {0x634ea0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x54\x53\x48\x83\xec\x10", 15},
+        {0x636230, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x50", 14},
+        {0x6363c0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x50", 14},
+        {0x6374d0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x83\xec\x68", 17},
+        {0x638ce0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x53\x50\x41\x89\xf0\x49\x89\xd7\x44\x89\xc3\x81\xe3\x00\x00\x00", 24},
+        {0x638db0, "\x55\x48\x89\xe5\x41\x57\x41\x56\x41\x55\x41\x54\x53\x48\x83\xec\x18", 17},
     };
     for (const auto& gate : gates) {
         if (!ValidateEnginePreimage(g_runtimeServerBase, g_runtimeServerSpan, gate.va,

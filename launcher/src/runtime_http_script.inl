@@ -346,11 +346,11 @@ int ScriptLocalHttpAllowed(void* vm) { Boolean(vm, LocalHttpAllowed()); return 1
 // Calls a global script function with an int, an int and one or two strings.
 bool CallAsyncHandler(void* vm, const char* name, const AsyncMessage& message) {
     Object function{};
-    if (At<int (*)(void*, const char*, void*, const char*)>(0x685cf0)(vm, name, &function, nullptr) < 0) {
+    if (At<int (*)(void*, const char*, void*, const char*)>(vm, 0x685cf0)(vm, name, &function, nullptr) < 0) {
         LogFormat("[NorthstarPS4] ProcessMessageBuffer was unable to find function with name '%s'. Is it global?\n", name);
         return false;
     }
-    auto push = At<void (*)(void*, std::uint64_t, void*)>(0x6875f0);
+    auto push = At<void (*)(void*, std::uint64_t, void*)>(vm, 0x6875f0);
     auto root = reinterpret_cast<const Object*>(static_cast<char*>(vm) + 0xb8);
     push(vm, function.tag, reinterpret_cast<void*>(function.value));
     push(vm, root->tag, reinterpret_cast<void*>(root->value));
@@ -362,7 +362,7 @@ bool CallAsyncHandler(void* vm, const char* name, const AsyncMessage& message) {
         String(vm, message.headers.c_str());
         arguments = 5;
     }
-    const int result = At<int (*)(void*, int, int, int)>(0x6876c0)(vm, arguments, 0, 1);
+    const int result = At<int (*)(void*, int, int, int)>(vm, 0x6876c0)(vm, arguments, 0, 1);
     Pop(vm, 1);
     return result >= 0;
 }

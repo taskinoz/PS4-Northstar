@@ -166,10 +166,10 @@ bool CallClientChatScript(int playerIndex, const char* text, bool isTeam, bool i
     void* vm = owner ? *reinterpret_cast<void**>(static_cast<char*>(owner) + 8) : nullptr;
     if (!vm) return false;
     Object function{};
-    if (At<int (*)(void*, const char*, void*, const char*)>(0x685cf0)(vm, "CHudChat_ProcessMessageStartThread",
+    if (At<int (*)(void*, const char*, void*, const char*)>(vm, 0x685cf0)(vm, "CHudChat_ProcessMessageStartThread",
             &function, nullptr) < 0)
         return false;
-    auto push = At<void (*)(void*, std::uint64_t, void*)>(0x6875f0);
+    auto push = At<void (*)(void*, std::uint64_t, void*)>(vm, 0x6875f0);
     auto root = reinterpret_cast<const Object*>(static_cast<char*>(vm) + 0xb8);
     push(vm, function.tag, reinterpret_cast<void*>(function.value));
     push(vm, root->tag, reinterpret_cast<void*>(root->value));
@@ -178,7 +178,7 @@ bool CallClientChatScript(int playerIndex, const char* text, bool isTeam, bool i
     Boolean(vm, isTeam);
     Boolean(vm, isDead);
     Integer(vm, type);
-    const int result = At<int (*)(void*, int, int, int)>(0x6876c0)(vm, 6, 0, 1);
+    const int result = At<int (*)(void*, int, int, int)>(vm, 0x6876c0)(vm, 6, 0, 1);
     Pop(vm, 1);
     return result >= 0;
 }

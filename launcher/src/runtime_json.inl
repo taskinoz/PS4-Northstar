@@ -18,7 +18,7 @@ constexpr std::uint64_t kSqAsset = 0x8000400;
 constexpr std::uint64_t kSqArray = 0x8000040;
 constexpr std::uint64_t kSqTable = 0xa000020;
 
-void NewTable(void* vm) { At<void (*)(void*)>(0x683230)(vm); }
+void NewTable(void* vm) { At<void (*)(void*)>(vm, 0x683230)(vm); }
 Object& Top(void* vm) {
     auto bytes = static_cast<char*>(vm);
     const auto top = *reinterpret_cast<std::uint32_t*>(bytes + 0x68);
@@ -52,13 +52,13 @@ bool TableStoreTop(void* vm, void* table, const char* key) {
     if (!shared || !table) return false;
     auto strings = *reinterpret_cast<void**>(static_cast<char*>(shared) + 0x4048);
     if (!strings) return false;
-    auto intern = At<void* (*)(void*, const char*, std::int32_t)>(0x6a96a0);
+    auto intern = At<void* (*)(void*, const char*, std::int32_t)>(vm, 0x6a96a0);
     void* keyString = intern(strings, key, -1);
     if (!keyString) return false;
     *reinterpret_cast<void**>(static_cast<char*>(keyString) + 0x18) = shared;
     ++*reinterpret_cast<std::uint32_t*>(static_cast<char*>(keyString) + 8);
     const Object keyObject{kSqString, reinterpret_cast<std::uint64_t>(keyString)};
-    At<bool (*)(void*, const void*, const void*)>(0x6ab3e0)(table, &keyObject, &Top(vm));
+    At<bool (*)(void*, const void*, const void*)>(vm, 0x6ab3e0)(table, &keyObject, &Top(vm));
     Pop(vm, 1);
     return true;
 }
