@@ -11,10 +11,10 @@
 // Here the request goes through sceHttp, as the port's other HTTP does
 // (runtime_http.inl); shadPS4 implements custom methods, request and response
 // headers, bodies and timeouts. The result is queued for the context that made
-// the request, and each VM runs its queue once a frame on its own thread:
-// Northstar.PS4's ps4_async_calls.nut calls NSPS4_RunAsyncCalls() from a
-// WaitFrame loop in the UI, CLIENT and SERVER VMs. The natives are registered
-// once per context so each knows its queue without identifying the VM.
+// the request. The verified CHostState frame call in engine.prx drains every
+// currently bound VM after the original frame update, matching PC's placement.
+// NSPS4_RunAsyncCalls remains registered as a diagnostic/compatibility native,
+// but Northstar.PS4 no longer runs a script polling loop.
 //
 // Launch options, from ns_startup_args.txt as on PC:
 //   -disablehttprequests  NSIsHttpEnabled() is false and requests return -1;
@@ -395,8 +395,8 @@ bool CallAsyncHandler(void* vm, const char* name, const AsyncMessage& message) {
     return result >= 0;
 }
 
-// NSPS4_RunAsyncCalls(): runs the calls queued for this context, on its VM's
-// thread (PC: SquirrelManager::ProcessMessageBuffer from the host frame).
+// Runs the calls queued for this context on the supplied VM. Normally invoked
+// by runtime_host_frame.inl (PC: ProcessMessageBuffer from the host frame).
 int RunAsyncCalls(void* vm, int context) {
     std::vector<AsyncMessage> pending;
     while (g_asyncLock.test_and_set(std::memory_order_acquire)) {}

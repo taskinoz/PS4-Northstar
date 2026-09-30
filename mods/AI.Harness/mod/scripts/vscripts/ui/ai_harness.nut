@@ -1,5 +1,10 @@
 global function AIHarness_Init
-struct { bool started = false } file
+struct
+{
+    bool started = false
+    bool httpComplete = false
+    string httpResult = ""
+} file
 
 // menu_ns_serverbrowser.nut's CORE_MODS, which is file-local there.
 const array<string> AI_HARNESS_CORE_MODS = [ "Northstar.Client", "Northstar.Coop", "Northstar.CustomServers", "Northstar.Custom" ]
@@ -10,6 +15,18 @@ bool function AIHarness_HasModVersion( string name, string version )
         if ( mod.version == version )
             return true
     return false
+}
+
+void function AIHarness_HttpSuccess( HttpRequestResponse response )
+{
+    file.httpResult = format( "success|%d|%d", response.statusCode, response.body.len() )
+    file.httpComplete = true
+}
+
+void function AIHarness_HttpFailure( HttpRequestFailure failure )
+{
+    file.httpResult = format( "failure|%d|%s", failure.errorCode, failure.errorMessage )
+    file.httpComplete = true
 }
 
 // The server browser's join, minus the list UI: authenticate, fetch the
@@ -187,6 +204,23 @@ void function AIHarness_Poll()
                 // Resolves a localisation token; the text comes back in the json field.
                 else if ( action == "localize" )
                     json = Localize( NSAIHarnessField( raw, "command" ) )
+                // Starts a real script HTTP request and waits for its deferred
+                // callback. This is the acceptance test for the native host-
+                // frame queue drain; no script polling bridge is involved.
+                else if ( action == "http" )
+                {
+                    file.httpComplete = false
+                    file.httpResult = ""
+                    if ( !NSHttpGet( NSAIHarnessField( raw, "command" ), {},
+                            AIHarness_HttpSuccess, AIHarness_HttpFailure ) )
+                        throw "HTTP request was not started"
+                    float deadline = Time() + 65.0
+                    while ( !file.httpComplete && Time() < deadline )
+                        WaitFrame()
+                    if ( !file.httpComplete )
+                        throw "HTTP callback timed out"
+                    json = file.httpResult
+                }
                 // Joins the first listed server whose name contains the command
                 // text, downloading and enabling its required mods the way the
                 // server browser does (OnServerSelected_Threaded, ConnectToServer).

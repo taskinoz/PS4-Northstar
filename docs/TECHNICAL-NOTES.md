@@ -4417,12 +4417,12 @@ drains per context. Here:
 2. `NSPS4_RunAsyncCalls()` runs that context's queue on the calling VM:
    `NSHandleSuccessfulHttpRequest( handle, status, body, headers )` or
    `NSHandleFailedHttpRequest( handle, code, message )`.
-3. Northstar.PS4's `ps4_async_calls.nut` calls it from a `WaitFrame` loop in the UI, CLIENT
-   and SERVER VMs, so the calls run once a frame on each VM's own thread.
+3. The native host-state frame hook calls it for every currently bound UI, CLIENT and SERVER
+   VM after the original frame update. The callbacks run on `MainThrd`, matching PC's drain
+   placement; Northstar.PS4's former `ps4_async_calls.nut` polling loop has been removed.
 
 The natives are registered once per context, so each knows its queue without having to
-identify the VM (a script thread has its own VM object). A native per-frame hook can
-replace the script loop later.
+identify the VM when called directly. The native frame path maps each bound VM explicitly.
 
 **Tested** with a throwaway mod making four requests in each VM, at UI init and again for
 CLIENT and SERVER after a map load:
@@ -5067,6 +5067,33 @@ at 3542434 and replacement Init at 3556748). The fixture was removed afterward.
 Two attempted delayed-request acceptance checks were inconclusive because the public endpoints
 returned immediately (200 and 404) before the old VM was destroyed. The locked generation
 implementation is present, but its late-worker rejection log still needs a deterministic local
-delayed endpoint test. The native frame hook also remains open: the current script `WaitFrame`
-loop already runs callbacks on each VM's thread, but is not yet the PC host-state hook.
+delayed endpoint test.
+
+## Native host-state frame drain (2026-09-30)
+
+PC Northstar hooks `CHostState::FrameUpdate` at engine.dll RVA 0x16db00 and drains UI, CLIENT
+and SERVER message buffers after the original update. PS4 Clang inlines the same state handlers
+into engine.prx 0x1334d0: it has the same eight-state dispatcher, the same 0.5/1.5 transition
+values, the same frame-time arguments and one direct frame-loop caller at 0x176151. Both the
+20-byte function prologue and five-byte caller are now in the supported engine profile. The
+runtime rewrites only that call, calls the untouched original first, then drains every bound VM.
+A build mismatch is refused before mutation.
+
+Northstar.PS4's `ps4_async_calls.nut` registration and file were removed. The opt-in AI harness
+now has an `http` acceptance action which starts `NSHttpGet` and cannot reply until its deferred
+callback runs. Live validation on shadPS4 `4cbd23ef` used PRX SHA256
+`c737197167529eb00a5daf04fbd8bb0fcc042d9477f4fdf7fcc88596633c202e`:
+
+- the hook installed at global log line 3676660;
+- native UI, SERVER and CLIENT drains ran on `MainThrd` at lines 3709978, 3745193 and 3746638;
+- `https://example.com/` returned `success|200|713`, and the harness callback completed at
+  line 3772255 without the polling script;
+- a subsequent transition reached `mp_forwardbase_kodai`; replacement SERVER and CLIENT
+  lifecycles completed at lines 3788553/3791679 and again at 3858805/3861925, with no fresh
+  fatal, guest exception or script error. The early boot transcript is
+  `work/stage2/iterations/20260930-145056/shad-new-lines.log`.
+
+The first launch attempt failed before game code because shadPS4 rejected another corrupt
+64-byte shader-cache `profile.bin`. It was moved recoverably to
+`work/cache-backups/20260930-1452/profile.bin.corrupt`; the retry rebuilt it and succeeded.
 

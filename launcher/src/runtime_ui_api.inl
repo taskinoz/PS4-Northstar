@@ -564,8 +564,8 @@ const Registration registrations[] = {
     {"NS_InternalMakeHttpRequest", "int", "int method, string baseUrl, table<string, array<string> > headers, table<string, array<string> > queryParams, string contentType, string body, int timeout, string userAgent", MakeScriptHttpRequestServer, kCtxServer},
     {"NSIsHttpEnabled", "bool", "", ScriptHttpEnabled, kCtxAll},
     {"NSIsLocalHttpAllowed", "bool", "", ScriptLocalHttpAllowed, kCtxAll},
-    // PS4-only: runs the context's queued script calls; Northstar.PS4 calls it
-    // once a frame in each VM (ps4_async_calls.nut).
+    // PS4-only diagnostic/compatibility entry point. Normal delivery now runs
+    // natively from the verified host-state frame call.
     {"NSPS4_RunAsyncCalls", "void", "", RunAsyncCallsUi, kCtxUi},
     {"NSPS4_RunAsyncCalls", "void", "", RunAsyncCallsClient, kCtxClient},
     {"NSPS4_RunAsyncCalls", "void", "", RunAsyncCallsServer, kCtxServer},

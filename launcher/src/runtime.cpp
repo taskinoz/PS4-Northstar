@@ -2174,6 +2174,7 @@ std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noex
 #include "runtime_console.inl"
 #include "runtime_http.inl"
 #include "runtime_http_script.inl"
+#include "runtime_host_frame.inl"
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 // After the HTTP transport (the Atlas template) and runtime_concommands.inl.
 #include "runtime_atlas_server.inl"
@@ -2687,6 +2688,7 @@ void* ModuleTracker(void*) noexcept {
     g_runtimeClientBase = clientBase;
     g_runtimeClientSpan = clientSpan;
     InstallRuntimeVmInit();
+    InstallRuntimeHostFrame(engineBase, engineSize);
     InstallClientChat(clientBase, clientSpan);
     InstallCustomAudio(clientBase, clientSpan);
 #endif

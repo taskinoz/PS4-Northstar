@@ -8,7 +8,9 @@
     "conVarConstructorWithCallback": { "virtualAddress": "0x205450", "preimage": "554889e54883ec10c5f857c0488d052d" },
     "conVarConstructorCore": { "virtualAddress": "0x205db0", "preimage": "554889e54157415641554154534883ec" },
     "conCommandBaseConstructor": { "virtualAddress": "0x204e60", "preimage": "4889f84c8d1d96f51a004d85c9488d3d" },
-    "engineCvarRegistrationThunk": { "virtualAddress": "0x2df1c0", "preimage": "554889e54156534889f04989fe488d3d" }
+    "engineCvarRegistrationThunk": { "virtualAddress": "0x2df1c0", "preimage": "554889e54156534889f04989fe488d3d" },
+    "hostStateFrameUpdate": { "virtualAddress": "0x1334d0", "preimage": "554889e54157415641554154534881ecd8010000" },
+    "hostStateFrameUpdateCall": { "virtualAddress": "0x176151", "preimage": "e87ad3fbff" }
   },
   "interfaces": {
     "engineCvar": "VEngineCvar007", "findVarSlot": 16, "registerCommandBaseSlotCandidate": 31
