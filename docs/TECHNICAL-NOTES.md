@@ -5294,3 +5294,20 @@ VM—and four distinct owner addresses. There are zero `SCRIPT ERROR`, `FatalErr
 next transition. This completes the G03 multi-transition acceptance; later native argument and
 return-shape coverage remains G06 work.
 
+## Same-account remote persistence accepted live (2026-09-30)
+
+After refreshing the exported Atlas identity, the user connected the same-account PC to the PS4
+host with experimental PRX
+`0b4d1a7d9cd6966ad835d967eaf6c37ecad75352cf3934eb95a081c663f3a928`.
+The remote connection's 56,306-byte save installed into client #1 at signon 2 and was explicitly
+logged as `READY_REMOTE, remote` at lines 5391759 and 5391762. There was no remote installation
+into client #0. Client #0 had already followed its separate insecure host path at line 5357476,
+so account identity no longer collapsed the two connection owners.
+
+The repeated connect first disconnected an unchanged client #1 save, then reinstalled it into
+the same remote slot. Leaving invoked the correct client #1 early-write path at line 5393347 and
+the final disconnect path at 5393961; both reported the save unchanged and correctly skipped an
+Atlas POST. No script, fatal or unhandled-exception marker appears in the fresh-session range.
+This accepts the same-account ownership fix and independently proves early leave targets the
+remote save. A changed-save early leave and an Atlas-unreachable write remain G05 tests.
+
