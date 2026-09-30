@@ -16,6 +16,8 @@
 #include "northstar_ps4/mod_dependencies.h"
 #include "northstar_ps4/audio_override.h"
 #include "northstar_ps4/mod_concommands.h"
+#include "northstar_ps4/banlist.h"
+#include <ctime>
 #include "northstar_ps4/particle_manifest.h"
 #include "northstar_ps4/datatable_csv.h"
 #include "northstar_ps4/localisation_language.h"
@@ -2197,6 +2199,7 @@ std::uint64_t ModSecondarySize(void* self, const char* fileName, const char* pat
 #include "runtime_host_frame.inl"
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 // After the HTTP transport (the Atlas template) and runtime_concommands.inl.
+#include "runtime_bans.inl"
 #include "runtime_atlas_server.inl"
 #endif
 

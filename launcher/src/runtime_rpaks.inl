@@ -107,21 +107,20 @@ bool ReadRpakTexturePlatforms(const std::string& path, RpakTexturePlatforms& pla
     platforms = {};
     FILE* file = std::fopen(path.c_str(), "rb");
     if (!file) return false;
-    constexpr long kInspectionLimit = 64L * 1024L * 1024L;
     if (std::fseek(file, 0, SEEK_END) != 0) {
         std::fclose(file);
         return false;
     }
     const long length = std::ftell(file);
-    if (length < 0 || length > kInspectionLimit || std::fseek(file, 0, SEEK_SET) != 0) {
-        std::fclose(file);
-        return false;
-    }
-    std::vector<std::uint8_t> bytes(static_cast<std::size_t>(length));
-    const bool read = bytes.empty() ||
-        std::fread(bytes.data(), 1, bytes.size(), file) == bytes.size();
+    // Seeks to the few bytes it needs; skin packs are tens of megabytes.
+    const bool inspected = length >= 0 && InspectRpakTexturePlatformsWith(
+        [&](std::size_t offset, void* destination, std::size_t size) {
+            return std::fseek(file, static_cast<long>(offset), SEEK_SET) == 0 &&
+                std::fread(destination, 1, size, file) == size;
+        },
+        static_cast<std::size_t>(length), platforms);
     std::fclose(file);
-    return read && InspectRpakTexturePlatforms(bytes.data(), bytes.size(), platforms);
+    return inspected;
 }
 
 void DiscoverModRpaks() {

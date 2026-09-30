@@ -424,6 +424,24 @@ void* ProcessSigreq1(void* argument) {
         return nullptr;
     }
     const std::string username = JsonString(json, "username");
+    // PC: a banned uid is rejected before its pdata is fetched.
+    if (!serverbans::IsUidAllowed(uid)) {
+        LogFormat("[NorthstarPS4] rejecting Atlas connection %s (uid=%llu): banned\n", token.c_str(),
+            static_cast<unsigned long long>(uid));
+        std::string reply, ownId;
+        int rejectStatus = 0;
+        {
+            Lock lock;
+            ownId = g_serverId;
+        }
+        const std::string url = std::string(uiapi::kMasterServerUrl) + "/server/connect?serverId=" +
+            http::UrlEscape(ownId) + "&token=" + http::UrlEscape(token) + "&reject=" +
+            http::UrlEscape("Banned from this server.");
+        if (!AtlasHttp("POST", url, nullptr, "", reply, rejectStatus) || rejectStatus != 200)
+            LogFormat("[NorthstarPS4] failed to respond to Atlas connect request %s: response status %d\n",
+                token.c_str(), rejectStatus);
+        return nullptr;
+    }
     std::string serverId;
     {
         Lock lock;
@@ -646,6 +664,17 @@ bool RuntimeConnectionlessPacket(void* self, void* packet) noexcept {
             return false;
         }
         if (data[4] == 'A') {
+            // PC: CBaseClient::Connect refuses a banned uid before anything
+            // else ("Banned From Server.").
+            atlas::ConnectRequest request;
+            if (serverbans::g_rejectConnection && atlas::ParseConnectRequest(data, static_cast<std::size_t>(size), request) &&
+                !serverbans::IsUidAllowed(request.uid)) {
+                LogFormat("[NorthstarPS4] %s's (uid %llu) connection was rejected: \"Banned From Server.\"\n",
+                    request.name.c_str(), static_cast<unsigned long long>(request.uid));
+                serverbans::g_rejectConnection(self, *reinterpret_cast<const std::int32_t*>(static_cast<char*>(self) + 0xc),
+                    packet, "Banned From Server.");
+                return false;
+            }
             std::uint64_t uid = 0;
             std::string pdata;
             bool hostConnection = false;
@@ -881,6 +910,7 @@ void ApplyStartupConVars() noexcept {
 }
 
 void InstallAtlasServer(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
+    InstallBans(engineBase, engineSize);
     using namespace atlasserver;
     alignas(16) static std::uint8_t storage[8][0x90]{};
     g_serverName = RegisterConVar(storage[0], "ns_server_name", "Unnamed Northstar Server", "This server's name");

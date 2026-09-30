@@ -234,40 +234,44 @@ inline bool RpakAdvance(std::size_t& cursor, std::size_t count,
 }
 
 // Inspect an uncompressed Titanfall 2 v7 archive without following any of its
-// pointers outside the supplied buffer. Texture header byte +0x1c is the
-// platform/layout marker written by RePak: 0 for PC linear blocks and 8 for
-// PS4 Morton-swizzled blocks. Compressed and patch archives are deliberately
-// refused; they need decoding/base-pak resolution before page pointers mean
-// file offsets.
-inline bool InspectRpakTexturePlatforms(const void* bytes, std::size_t size,
-    RpakTexturePlatforms& result) {
+// pointers outside the file. Texture header byte +0x1c is the platform/layout
+// marker written by RePak: 0 for PC linear blocks and 8 for PS4 Morton-swizzled
+// blocks. Compressed and patch archives are deliberately refused; they need
+// decoding/base-pak resolution before page pointers mean file offsets.
+//
+// `read(offset, destination, length)` returns false past the end. Only the
+// header, the tables and one byte per texture header are read, so a large skin
+// pack is never loaded whole: at boot the runtime cannot rely on a 20-60 MB
+// allocation succeeding, and with exceptions off a failed one aborts the game.
+template <typename Read>
+inline bool InspectRpakTexturePlatformsWith(Read&& read, std::size_t size, RpakTexturePlatforms& result) {
     result = {};
     constexpr std::size_t kHeaderSize = 0x58;
     constexpr std::size_t kSlabSize = 16;
     constexpr std::size_t kPageSize = 12;
     constexpr std::size_t kPointerSize = 8;
     constexpr std::size_t kAssetSize = 72;
+    constexpr std::size_t kMaxTableBytes = 16 * 1024 * 1024;
     constexpr std::uint32_t kTextureType =
         static_cast<std::uint32_t>('t') |
         (static_cast<std::uint32_t>('x') << 8) |
         (static_cast<std::uint32_t>('t') << 16) |
         (static_cast<std::uint32_t>('r') << 24);
-    if (!bytes || size < kHeaderSize) return false;
-    const auto* data = static_cast<const std::uint8_t*>(bytes);
-    if (std::memcmp(data, "RPak", 4) != 0 || RpakReadU16(data + 4) != 7 ||
-        RpakReadU16(data + 6) != 0 || RpakReadU16(data + 0x3e) != 0) return false;
+    std::uint8_t header[kHeaderSize];
+    if (size < kHeaderSize || !read(0, header, kHeaderSize)) return false;
+    if (std::memcmp(header, "RPak", 4) != 0 || RpakReadU16(header + 4) != 7 ||
+        RpakReadU16(header + 6) != 0 || RpakReadU16(header + 0x3e) != 0) return false;
 
-    const std::size_t pathSize = RpakReadU16(data + 0x38);
-    const std::size_t slabCount = RpakReadU16(data + 0x3a);
-    const std::size_t pageCount = RpakReadU16(data + 0x3c);
-    const std::size_t pointerCount = RpakReadU32(data + 0x40);
-    const std::size_t assetCount = RpakReadU32(data + 0x44);
-    const std::size_t usesCount = RpakReadU32(data + 0x48);
-    const std::size_t dependentsCount = RpakReadU32(data + 0x4c);
+    const std::size_t pathSize = RpakReadU16(header + 0x38);
+    const std::size_t slabCount = RpakReadU16(header + 0x3a);
+    const std::size_t pageCount = RpakReadU16(header + 0x3c);
+    const std::size_t pointerCount = RpakReadU32(header + 0x40);
+    const std::size_t assetCount = RpakReadU32(header + 0x44);
+    const std::size_t usesCount = RpakReadU32(header + 0x48);
+    const std::size_t dependentsCount = RpakReadU32(header + 0x4c);
     std::size_t cursor = kHeaderSize;
     if (!RpakAdvance(cursor, pathSize, 1, size) ||
         !RpakAdvance(cursor, slabCount, kSlabSize, size)) return false;
-
     const std::size_t pagesOffset = cursor;
     if (!RpakAdvance(cursor, pageCount, kPageSize, size) ||
         !RpakAdvance(cursor, pointerCount, kPointerSize, size)) return false;
@@ -276,6 +280,10 @@ inline bool InspectRpakTexturePlatforms(const void* bytes, std::size_t size,
         !RpakAdvance(cursor, usesCount, kPointerSize, size) ||
         !RpakAdvance(cursor, dependentsCount, 4, size)) return false;
     const std::size_t pageDataOffset = cursor;
+    if (pageDataOffset > kMaxTableBytes) return false;
+    std::vector<std::uint8_t> tables(pageDataOffset);
+    if (!read(0, tables.data(), tables.size())) return false;
+    const std::uint8_t* data = tables.data();
 
     std::vector<std::size_t> pageOffsets;
     pageOffsets.reserve(pageCount);
@@ -296,15 +304,32 @@ inline bool InspectRpakTexturePlatforms(const void* bytes, std::size_t size,
         if (page >= pageCount || headSize <= 0x1c) return false;
         const std::size_t pageBytes = RpakReadU32(data + pagesOffset + page * kPageSize + 8);
         if (offset > pageBytes || headSize > pageBytes - offset) return false;
-        const std::size_t header = pageOffsets[page] + offset;
-        if (header > size || headSize > size - header) return false;
-        const std::uint8_t platform = data[header + 0x1c];
+        const std::size_t textureHeader = pageOffsets[page] + offset;
+        if (textureHeader > size || headSize > size - textureHeader) return false;
+        std::uint8_t platform = 0;
+        if (!read(textureHeader + 0x1c, &platform, 1)) return false;
         ++result.textures;
         if (platform == 0) ++result.pc;
         else if (platform == 8) ++result.ps4;
         else ++result.other;
     }
     return true;
+}
+
+inline bool InspectRpakTexturePlatforms(const void* bytes, std::size_t size,
+    RpakTexturePlatforms& result) {
+    if (!bytes) {
+        result = {};
+        return false;
+    }
+    const auto* data = static_cast<const std::uint8_t*>(bytes);
+    return InspectRpakTexturePlatformsWith(
+        [&](std::size_t offset, void* destination, std::size_t length) {
+            if (offset > size || length > size - offset) return false;
+            std::memcpy(destination, data + offset, length);
+            return true;
+        },
+        size, result);
 }
 
 inline std::string NormaliseRpakStreamPath(const char* path) {
