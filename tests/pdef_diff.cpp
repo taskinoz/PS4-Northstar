@@ -22,6 +22,34 @@ int main(int argc, char** argv) {
     assert(PersistenceDefinitionSize(base, bytes, error));
     assert(bytes == 24); // two (int + two bools), eight-char string, float
 
+    // PC applies enabled mods in ascending load priority. A second mod can
+    // extend the same enum and append properties; enum-sized arrays must grow
+    // before the final layout is measured.
+    const std::string afterFirst = base;
+    assert(ApplyPdiff(base,
+        "$ENUM_ADD modes\n\tthree\n$ENUM_END\n$PROP_START\nint customModeWins\n",
+        "Second.Mod", error));
+    assert(base.find("\ttwo\n\tthree\n$ENUM_END") != std::string::npos);
+    assert(base.find("// $PROP_START Example.Mod") < base.find("// $PROP_START Second.Mod"));
+    assert(PersistenceDefinitionSize(base, bytes, error));
+    assert(bytes == 30); // two (int + three bools), string, float, int
+
+    // Reload compilation always starts from the shipped base, then replays
+    // the same ordered diffs. It must be deterministic rather than duplicating
+    // additions from the previous generation.
+    std::string reload =
+        "$ENUM_START modes\n\tone\n$ENUM_END\n"
+        "$STRUCT_START item\n\tint count\n\tbool flags[modes]\n$STRUCT_END\n"
+        "item items[2]\nstring{8} title\n";
+    assert(ApplyPdiff(reload,
+        "$ENUM_ADD modes\n\ttwo\n$ENUM_END\n$PROP_START\nfloat score\n",
+        "Example.Mod", error));
+    assert(reload == afterFirst);
+    assert(ApplyPdiff(reload,
+        "$ENUM_ADD modes\n\tthree\n$ENUM_END\n$PROP_START\nint customModeWins\n",
+        "Second.Mod", error));
+    assert(reload == base);
+
     std::string unchanged = base;
     assert(!ApplyPdiff(unchanged, "$ENUM_ADD missing\nvalue\n$ENUM_END\n", "Bad", error));
     assert(unchanged == base);

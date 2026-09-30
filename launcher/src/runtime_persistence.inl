@@ -139,15 +139,26 @@ struct RemoteSave {
     std::uint64_t uid = 0;
     std::string trailing;
     std::string pdata;  // as received, to install again if the engine resets the slot
+    // Latest snapshot submitted to Atlas. It is kept separate from pdata:
+    // pdata is the last acknowledged version, so a failed request stays dirty
+    // and a later lifecycle write retries it.
+    std::string queued;
 };
 RemoteSave g_remoteSaves[kMaxRemoteSaveSlots];
+std::atomic_flag g_remoteSaveLock = ATOMIC_FLAG_INIT;
+struct RemoteSaveLock {
+    RemoteSaveLock() { while (g_remoteSaveLock.test_and_set(std::memory_order_acquire)) {} }
+    ~RemoteSaveLock() { g_remoteSaveLock.clear(std::memory_order_release); }
+};
 char* ClientSlot(int client) noexcept;  // below, with the UID code
 
 void InstallRemoteSave(int client, char* slot, std::uint64_t uid, const std::string& pdata) noexcept {
+    RemoteSaveLock lock;
     auto& save = g_remoteSaves[client];
     save.trailing = pdata::InstallFromPc(pdata, reinterpret_cast<std::uint8_t*>(slot + kClientPersistenceBufferOffset));
     save.uid = uid;
     if (&save.pdata != &pdata) save.pdata = pdata;
+    save.queued.clear();
     save.installed = true;
     *reinterpret_cast<std::int32_t*>(slot + kClientPersistenceReadyOffset) = kPersistenceReadyRemote;
 }
@@ -171,14 +182,17 @@ bool InstallRemoteSaveAtConnect(std::uint64_t uid, const std::string& pdata, boo
     }
     const int count = *reinterpret_cast<const std::int32_t*>(engine + kEngineClientCountVa);
     persistence::SlotCandidate candidates[kMaxRemoteSaveSlots]{};
-    for (int client = 0; client < count && client < kMaxRemoteSaveSlots; ++client) {
-        char* slot = reinterpret_cast<char*>(engine + kEngineClientArrayVa) + static_cast<std::size_t>(client) * kEngineClientStride;
-        candidates[client] = {
-            *reinterpret_cast<const std::uint64_t*>(slot + kClientConnectUidOffset),
-            *reinterpret_cast<const std::int32_t*>(slot + kClientSignonStateOffset),
-            *reinterpret_cast<const std::uint8_t*>(slot + kClientFakePlayerOffset) != 0,
-            g_remoteSaves[client].installed,
-        };
+    {
+        RemoteSaveLock lock;
+        for (int client = 0; client < count && client < kMaxRemoteSaveSlots; ++client) {
+            char* slot = reinterpret_cast<char*>(engine + kEngineClientArrayVa) + static_cast<std::size_t>(client) * kEngineClientStride;
+            candidates[client] = {
+                *reinterpret_cast<const std::uint64_t*>(slot + kClientConnectUidOffset),
+                *reinterpret_cast<const std::int32_t*>(slot + kClientSignonStateOffset),
+                *reinterpret_cast<const std::uint8_t*>(slot + kClientFakePlayerOffset) != 0,
+                g_remoteSaves[client].installed,
+            };
+        }
     }
     const int client = persistence::SelectSlot(candidates,
         static_cast<std::size_t>(count < kMaxRemoteSaveSlots ? count : kMaxRemoteSaveSlots), uid, hostConnection);
@@ -209,9 +223,14 @@ bool RuntimePersistenceAvailable(void* self, int client) noexcept {
             const bool fake = *reinterpret_cast<const std::uint8_t*>(slot + kClientFakePlayerOffset) != 0;
             std::string pdata;
             // Installed at connect, but the engine reset the slot since.
-            if (!fake && client < kMaxRemoteSaveSlots && g_remoteSaves[client].installed &&
-                g_remoteSaves[client].uid == uid && !g_remoteSaves[client].pdata.empty()) {
-                InstallRemoteSave(client, slot, uid, g_remoteSaves[client].pdata);
+            std::string installedPdata;
+            if (!fake && client < kMaxRemoteSaveSlots) {
+                RemoteSaveLock lock;
+                const auto& save = g_remoteSaves[client];
+                if (save.installed && save.uid == uid) installedPdata = save.pdata;
+            }
+            if (!installedPdata.empty()) {
+                InstallRemoteSave(client, slot, uid, installedPdata);
                 LogFormat("[NorthstarPS4] client #%d persistence installed again from Atlas (the engine reset the slot)\n", client);
                 return g_originalPersistenceAvailable(self, client);
             }
@@ -225,7 +244,11 @@ bool RuntimePersistenceAvailable(void* self, int client) noexcept {
                 LogFormat("[NorthstarPS4] client #%d: Atlas pdata not installable (%zu bytes, version %d)\n", client,
                     pdata.size(), pdata.size() >= 4 ? pdata::Version(reinterpret_cast<const std::uint8_t*>(pdata.data())) : 0);
             }
-            if (client < kMaxRemoteSaveSlots) g_remoteSaves[client].installed = false;
+            if (client < kMaxRemoteSaveSlots) {
+                RemoteSaveLock lock;
+                g_remoteSaves[client].installed = false;
+                g_remoteSaves[client].queued.clear();
+            }
             *ready = kPersistenceReadyInsecure;
             LogFormat("[NorthstarPS4] client #%d persistence marked READY_INSECURE "
                 "(PC AuthenticatePlayer equivalent)\n", client);
@@ -238,9 +261,11 @@ bool RuntimePersistenceAvailable(void* self, int client) noexcept {
 // client, on disconnect, early leave and map change. The slot must still hold
 // the same player; `keep` leaves the save installed (the player stays).
 bool WriteRemoteSave(int client, const char* reason, bool keep) noexcept {
-    if (client < 0 || client >= kMaxRemoteSaveSlots || !g_remoteSaves[client].installed || !g_writeRemotePdata)
+    if (client < 0 || client >= kMaxRemoteSaveSlots || !g_writeRemotePdata)
         return false;
+    RemoteSaveLock lock;
     auto& save = g_remoteSaves[client];
+    if (!save.installed) return false;
     char* slot = ClientSlot(client);
     const bool samePlayer = slot &&
         *reinterpret_cast<const std::int32_t*>(slot + kClientPersistenceReadyOffset) == kPersistenceReadyRemote &&
@@ -262,12 +287,15 @@ bool WriteRemoteSave(int client, const char* reason, bool keep) noexcept {
         std::size_t changed = 0;
         for (std::size_t i = 0; i < out.size(); ++i)
             if (i >= save.pdata.size() || out[i] != save.pdata[i]) ++changed;
-        if (changed == 0 && out.size() == save.pdata.size()) {
+        const auto decision = persistence::ClassifyWrite(save.pdata, save.queued, out);
+        if (decision == persistence::WriteDecision::Unchanged) {
             LogFormat("[NorthstarPS4] client #%d: pdata unchanged (%s), nothing to write\n", client, reason);
+        } else if (decision == persistence::WriteDecision::AlreadyQueued) {
+            LogFormat("[NorthstarPS4] client #%d: pdata write already in flight (%s)\n", client, reason);
         } else {
             LogFormat("[NorthstarPS4] client #%d: pdata has %zu changed bytes (%s)\n", client, changed, reason);
-            g_writeRemotePdata(save.uid, out, reason);
-            save.pdata = out;
+            save.queued = out;
+            if (!g_writeRemotePdata(client, save.uid, out, reason)) save.queued.clear();
         }
     }
     if (!keep) {
@@ -276,6 +304,18 @@ bool WriteRemoteSave(int client, const char* reason, bool keep) noexcept {
         save.pdata.shrink_to_fit();
     }
     return !out.empty();
+}
+
+// Called by the Atlas worker after the request finishes. Only an acknowledged
+// latest snapshot advances the clean baseline. A failed request clears the
+// in-flight marker but deliberately leaves pdata unchanged for a retry.
+void RemotePdataWriteCompleted(int client, std::uint64_t uid,
+    const std::string& pdata, bool success) noexcept {
+    if (client < 0 || client >= kMaxRemoteSaveSlots) return;
+    RemoteSaveLock lock;
+    auto& save = g_remoteSaves[client];
+    if (!save.installed || save.uid != uid) return;
+    persistence::CompleteWrite(save.pdata, save.queued, pdata, success);
 }
 
 // CBaseClient::Disconnect for the client object at element+0x250.
@@ -292,7 +332,7 @@ void WriteRemoteSaveOnDisconnect(void* clientObject) noexcept {
 // for the next map).
 void WriteAllRemoteSaves(const char* reason) noexcept {
     for (int client = 0; client < kMaxRemoteSaveSlots; ++client)
-        if (g_remoteSaves[client].installed) WriteRemoteSave(client, reason, true);
+        WriteRemoteSave(client, reason, true);
 }
 
 // PC: ServerAuthenticationManager::AuthenticatePlayer copies the connecting

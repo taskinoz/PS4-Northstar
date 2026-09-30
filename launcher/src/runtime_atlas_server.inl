@@ -577,6 +577,7 @@ bool TakeRemotePdata(int client, std::uint64_t uid, std::string& pdata) noexcept
 // round-trip (docs/TECHNICAL-NOTES.md); +ns_ps4_write_remote_persistence 0 in
 // ns_startup_args.txt turns it off, and then what would be written is logged.
 struct PdataWrite {
+    int client;
     std::uint64_t uid;
     std::string pdata;
     std::string reason;
@@ -600,30 +601,33 @@ void* WritePdataWorker(void* argument) {
     std::string response;
     int status = 0;
     const std::string contentType = "multipart/form-data; boundary=" + boundary;
-    const bool sent = AtlasHttp("POST", url, contentType.c_str(), body, response, status);
+    const bool transported = AtlasHttp("POST", url, contentType.c_str(), body, response, status);
+    const bool accepted = transported && status >= 200 && status < 300;
     LogFormat("[NorthstarPS4] wrote pdata for uid %llu (%s, %zu bytes): %s status %d\n",
         static_cast<unsigned long long>(write->uid), write->reason.c_str(), write->pdata.size(),
-        sent ? "sent" : "not sent", status);
+        accepted ? "accepted" : "failed", status);
+    RemotePdataWriteCompleted(write->client, write->uid, write->pdata, accepted);
     delete write;
     --g_writesInFlight;
     return nullptr;
 }
 
-void WriteRemotePdata(std::uint64_t uid, const std::string& pdata, const char* reason) noexcept {
+bool WriteRemotePdata(int client, std::uint64_t uid, const std::string& pdata, const char* reason) noexcept {
     if (!ConVarInt(g_writeRemotePersistence, 1)) {
         LogFormat("[NorthstarPS4] pdata for uid %llu (%s, %zu bytes) not written: ns_ps4_write_remote_persistence is 0\n",
             static_cast<unsigned long long>(uid), reason, pdata.size());
-        return;
+        return false;
     }
-    auto* write = new PdataWrite{uid, pdata, reason};
+    auto* write = new PdataWrite{client, uid, pdata, reason};
     ++g_writesInFlight;
     OrbisPthread thread{};
     if (scePthreadCreate(&thread, nullptr, WritePdataWorker, write, "NSPdataWrite") != 0) {
         --g_writesInFlight;
         delete write;
-        return;
+        return false;
     }
     scePthreadDetach(thread);
+    return true;
 }
 
 bool RemotePdataWriting() noexcept { return g_writesInFlight.load() > 0; }

@@ -1,7 +1,7 @@
 // Included inside the runtime's anonymous namespace, experimental build only.
 // Addresses and preimages belong exclusively to the supported PS4 client.prx.
 namespace uiapi {
-struct Object { std::uint64_t tag, value; };
+using Object = northstar::ps4::SqObjectValue;
 struct SquirrelHelperBinding { void* vm; std::uintptr_t base; };
 SquirrelHelperBinding g_squirrelHelperBindings[3]{};
 
@@ -117,8 +117,10 @@ void Seal(void* vm, int slot) {
 int Error(void* vm, const char* message) { At<int (*)(void*, const char*)>(vm, 0x682a60)(vm, message); return -1; }
 const Object& Arg(void* vm, int index) { return (*reinterpret_cast<Object**>(static_cast<char*>(vm) + 0x48))[index]; }
 const char* TextArg(void* vm, int index) {
-    const auto& arg = Arg(vm, index);
-    return arg.tag == 0x8000010 ? reinterpret_cast<const char*>(arg.value + 0x30) : nullptr;
+    return northstar::ps4::SqStringValue(Arg(vm, index));
+}
+const char* AssetArg(void* vm, int index) {
+    return northstar::ps4::SqAssetValue(Arg(vm, index));
 }
 #include "runtime_save_files.inl"
 #include "runtime_json.inl"
@@ -549,7 +551,7 @@ int UserInfoKvString(void* vm) {
     return 1;
 }
 int UserInfoKvAsset(void* vm) {
-    const char* fallback = TextArg(vm, 3);
+    const char* fallback = AssetArg(vm, 3);
     bool found = false;
     const char* value = UserInfoArgs(vm, fallback ? fallback : "", &found, "GetUserInfoKVAsset expects entity player, string key");
     if (!value) return -1;

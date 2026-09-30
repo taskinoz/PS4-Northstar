@@ -5311,3 +5311,38 @@ Atlas POST. No script, fatal or unhandled-exception marker appears in the fresh-
 This accepts the same-account ownership fix and independently proves early leave targets the
 remote save. A changed-save early leave and an Atlas-unreachable write remain G05 tests.
 
+## Remaining P0 contract fixes and all-context ABI acceptance (2026-09-30)
+
+Two source audits found concrete contract bugs. `GetUserInfoKVAsset_Internal` read its third
+argument with the string-tag helper even though PC calls `getasset`; Titanfall's `OT_STRING`
+(`0x08000010`) and `OT_ASSET` (`0x08000400`) objects share the `+0x30` character layout but are
+not interchangeable. The runtime now uses a distinct asset getter, and portable tag tests reject
+cross-typed and null values.
+
+Persistence writes previously treated any completed HTTP transport as "sent", including a
+non-2xx Atlas response, and advanced the clean snapshot before the worker returned. The runtime
+now keeps acknowledged and queued snapshots separately. Only a 2xx response advances the
+acknowledged baseline; a transport or HTTP failure clears the in-flight marker while leaving the
+save dirty; duplicate early-leave/disconnect submissions are coalesced; and an older completion
+cannot overwrite a newer queued snapshot. `tests/persistence_write_state.cpp` covers successful,
+failed, duplicate and out-of-order completion. A live network-failure run is still required.
+
+Supported test PRX SHA256
+`acb514b0a7ddfd9720dad276fdfc470067c956c35d0b2b09d1f1972ea96ffc82` was built, passed the
+complete profile suite and engine preimage suite, and was installed with a recoverable backup.
+It reached the UI in 36.9 seconds, authenticated into `mp_lobby`, and loaded
+`mp_forwardbase_kodai`. An isolated one-script fixture ran after lifecycle creation in all three
+VMs. Its accepted markers are log lines 5681394 (UI), 5702566 and 5721537 (SERVER generations),
+and 5704166 and 5724737 (CLIENT generations). Every marker returned
+`$"ui/menu/common/button"`, a nine-element `array<string>` mod list and `error=true` after
+catching a deliberately malformed fatal DecodeJSON call. The earlier fixture draft's line
+5644023 compile failure belongs to the discarded `#elif` syntax run before this clean boot. No
+script, fatal or unhandled error occurs in the accepted range. The fixture was removed after the
+test, completing G06.
+
+`Start-NorthstarSession.ps1` now records the installed runtime and game-module hashes, emulator
+revision, mod metadata and enabled state, enabled-settings hash, runtime persistence-schema hash,
+and first error per VM. It archives the preceding and current logs with Atlas token/password JSON
+and query parameters redacted. One complete repeated transition should still be captured through
+this upgraded recorder to close G01 acceptance.
+
