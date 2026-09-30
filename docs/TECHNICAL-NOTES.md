@@ -5374,3 +5374,96 @@ Documentation reconciled against the code:
   section) are left as history. This file is chronological, and later entries correct earlier
   ones.
 
+## Thunderstore packages, ConCommands, bans and controller menus (2026-10-01)
+
+**Thunderstore test set.** Four small packages the user approved were downloaded to
+`work/thunderstore-test` (outside Git):
+- smooshie CAR UwU and Volt UwU: texture-only v7 paks, 7 textures each, 2048x2048,
+  formats 1, 6, 8 and 13, every mip in the rpak. `Convert-NorthstarModRpaks.ps1` converted
+  both (7/7 textures). Both skins rendered in first person (`give mp_weapon_car`,
+  `give mp_weapon_hemlok_smg` under `sv_cheats` in a hosted match) and on the lobby's pilot
+  model.
+- Rwyn's Kraber reload pack: three `audio/*.json`, 16-bit PCM WAVs. All three events were
+  replaced (`ns_print_played_sounds 1`); `slideback` is "random" and drew 2, 2, 1.
+- S2.SpeedometerV2: `CLIENT || UI` script with integer ConVar `Flags` and Mod Settings entries.
+  It draws its readout (with `s2_speedometer_fade 0` while standing still).
+
+**Mod ConVar pool.** Mod ConVars were constructed into a static pool of 32 objects shared by
+all mods. Northstar.Client, Northstar.Custom and Northstar.CustomServers already declare 30, so
+S2.SpeedometerV2 lost six of its eight and its scripts could not find them. Each ConVar now
+gets its own permanent allocation. Flags are still registered as 0, as before; see G21.
+
+**Rpak discovery crash.** `ReadRpakTexturePlatforms` read each mod pak whole (limit 64 MB) to
+count PC and PS4 textures. With the two skin packs installed, one boot aborted right after
+`mod rpak discovered: .../CAR UwU.rpak`: the 22 MB `std::vector` allocation failed, and with
+no exceptions that is an abort. `InspectRpakTexturePlatformsWith` now takes a reader. It reads
+the tables once and one byte (+0x1c) per texture header; the buffer version for host tests
+wraps it.
+
+**Mod ConCommands** (PC `modmanager.cpp` ModConCommandCallback, `mod_concommands.h`).
+- Registration uses the engine's ConCommand constructor, as the native commands do.
+- Running one finds its Function in the UI, CLIENT or SERVER VM (owners' VM at +8). The
+  function is called with only the root table when the command has no arguments, and with an
+  `array<string>` of the arguments otherwise, as PC does.
+- String flags are parsed with PC's `g_PrintCommandFlags` names, including its quirks.
+- A throwaway mod showed the UI command with no and with quoted arguments, and the CLIENT
+  command in the lobby and in a match. The SERVER command, flagged `CHEAT`, was refused until
+  `sv_cheats 1`.
+
+**Bans** (PC `bansystem.cpp`, `banlist.h`). The uid is checked where PC checks it:
+- The connectionless hook refuses an `'A'` connect packet from a banned uid. It calls the
+  engine's `RejectConnection`, engine+0xe4850. That function ignores `rdi` and takes the socket
+  (server+0xc), the packet (whose first field is the sender's address) and a format string;
+  all seven callers inside ProcessConnectionlessPacket pass exactly that.
+- An Atlas connect request for a banned uid is answered with
+  `reject=Banned from this server.` before any pdata is fetched.
+
+The host's `platform_user_id` is always allowed. The client name for `ban <name>` is at slot
++0x266: the PS4 slot holds PC's CBaseClient at +0x250, and the known offsets match PC's (UID
+0xf500, signon 0x2a0), so PC's m_Name at 0x16 lands there. `ban` confirmed the host's name
+there. m_UID is empty until scripts ask for it, so `ban` falls back to the connect uid.
+
+Verified with an encrypted connect probe. Titanfall 2 packets are AES-128-GCM with a fixed key
+(Atlas `pkg/nspkt/r2crypto.go`): nonce(12) | tag(16) | ciphertext, AAD 01..10. A plain packet
+never reaches the hook.
+- The banned uid got `Banned From Server.` back.
+- An unbanned uid got the engine's normal protocol refusal, so it passed the ban check.
+- Packets from loopback are ignored by the engine.
+
+The unban date comes from `localtime`, which reads as UTC here.
+
+**Controller audit** (G22), with scripted pad input on shadPS4 `94e21778`.
+
+Opening menus through the harness `menu` action gave false results. Custom Match Settings
+opened empty, and the server browser raised `sh_lobby.gnut #213: The index "" does not exist`
+from private-match state, so every menu was re-checked through its normal path.
+- Custom Match Settings: categories and enum toggles worked. Number settings are text boxes:
+  Cross on the row moved focus into the box and nothing could be typed.
+  `ps4_text_entry_keyboard.nut` opens the system keyboard when such a box gains focus. Done
+  returns focus to the row, so Northstar's lose-focus handler sends the override. The SERVER
+  script logged `override the setting scorelimit to 755`.
+- Server browser: list, scrolling, filters (reached through the column tabs, as on PC) and
+  Search (native keyboard) worked as shipped.
+- Mod Settings and the Mods list: nothing could be reached with the pad. Focus sat in Search
+  (Mod Settings) or nowhere (Mods). PS4 follows only explicit nav links, the rows' links do not
+  reach them, and both lists scroll only with a mouse wheel. S2.SpeedometerV2's entries sat
+  below the first page and could not be reached at all.
+
+  Generated overrides (`scripts/menus/build_mod_settings_override.py`,
+  `build_mod_list_override.py`) add row-to-row d-pad movement that skips headers, scrolling at
+  the edges, and L1/R1 paging. The Mods list also focuses its first mod on open.
+
+  Text boxes needed nothing extra: on PS4, Cross on a focused text box opens the system
+  keyboard natively. A script keyboard opened on top is refused with `0x80bc0001` (busy). The
+  value applies when focus leaves the box, as on PC.
+- Mod Settings' reset marker `vgui/reset` is a PC `.vtf` with a VTF 7.5 header. Retail PS4
+  `.vtf` files in the VPKs are raw data with no header, so it drew as a magenta checkerboard.
+  The `mod_setting.res` override uses `vgui/hud/white` as a small dot.
+
+**Test harness notes.**
+- The `quit` console command does not close the game. Test scripts now `disconnect` first,
+  then stop the process, so a match is not killed mid pipeline-cache write.
+- A request left pending in the harness mailbox makes the next `Send-AIHarnessCommand` throw.
+  Clear `request.json` and `claimed.json` before a new boot.
+- `Send-PadInput.ps1` now has `square` (`v`) and `triangle` (`c`).
+

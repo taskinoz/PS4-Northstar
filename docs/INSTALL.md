@@ -129,7 +129,11 @@ Reloading mods works live, as on PC: the server browser switches client-required
 
 Mods that servers require are downloaded, as on PC, when they are on Northstar's [verified list](https://github.com/R2Northstar/VerifiedMods) and `allow_mod_auto_download` is on. They go to guest `/data/northstar_ps4/runtime/remote/mods` (PC: `R2Northstar/runtime/remote/mods`), are checked against the list's SHA-256, and are only switched on for servers that need them.
 
-**What PC mods can use on PS4.** Scripts, `RunOn` conditions, console variables, localisation selected from the PS4 system language (with an English fallback), KeyValues (weapons, playlists, AI settings), VPKs and custom maps, `Dependencies` constants for optional mods, particle manifests, custom datatable CSVs in UI/CLIENT/SERVER scripts (including vectors), sound replacements (`audio/` folders, as on PC), and converted RPAK texture/material assets work. `ns_print_played_sounds 1` in the console logs the sound events that play, to find their names. Particle-manifest loading has also been checked in game with real Moblin.Archon PCFs: they precached, spawned and visibly rendered in an isolated test. That does not make the complete Moblin.Archon package compatible because its other dependencies and RPAKs were not part of the test. Still missing or unsupported: compressed/patch/array and non-texture RPak layouts, mod console commands (`ConCommands`) and plugins.
+**What PC mods can use on PS4.** Scripts, `RunOn` conditions, console variables, localisation selected from the PS4 system language (with an English fallback), KeyValues (weapons, playlists, AI settings), VPKs and custom maps, `Dependencies` constants for optional mods, particle manifests, custom datatable CSVs in UI/CLIENT/SERVER scripts (including vectors), sound replacements (`audio/` folders, as on PC), mod console commands (`ConCommands`), and converted RPAK texture/material assets work. `ns_print_played_sounds 1` in the console logs the sound events that play, to find their names. Particle-manifest loading has also been checked in game with real Moblin.Archon PCFs: they precached, spawned and visibly rendered in an isolated test. That does not make the complete Moblin.Archon package compatible because its other dependencies and RPAKs were not part of the test. Still missing or unsupported: compressed/patch/array and non-texture RPak layouts (models, UI images) and plugins.
+
+Tested with Thunderstore packages (2026-10-01): the smooshie CAR UwU and Volt UwU weapon skins (converted with `-ConvertRpaksForPs4`, shown in first person and on the lobby pilot), Rwyn's Kraber reload sound pack and S2.SpeedometerV2 (a HUD script mod with Mod Settings entries).
+
+**Menus on a controller.** Mods and Mod Settings (Northstar's menus) work with the pad: the d-pad moves between entries, and L1/R1 page through long lists. Cross on a text box (a setting value, or Search) opens the system keyboard; a Mod Settings value applies when you move off the box, as on PC. In Private Match → Settings, choosing a number setting (score limit, time limit…) opens the keyboard straight away.
 
 ### Hosting a private match for other players
 
@@ -157,6 +161,10 @@ shadPS4 writes web requests to `shad_log.txt` when its `Lib.Http` log level is I
 Players who join through the server browser play with their own Northstar progress, and what they earn is saved back to their account when a match ends or they leave, as on a PC server. To host without saving players' progress, add `+ns_ps4_write_remote_persistence 0` to `ns_startup_args.txt`. As the host you play with your own Northstar progress too, and it is saved to your account the same way. If Northstar can't be reached or your exported token has expired, the lobby still opens, but with a fresh local profile, and nothing from that session is saved to your account.
 
 PC players can connect to a PS4 host: it no longer sends the PS4 client module's checksum, which a PC always rejected with "Your .dll [..\bin\x64_retail\client.dll] differs from the server\'s."
+
+### Banning players
+
+The host can ban players as on a PC server, from the console: `ban <name or uid>` bans a connected player and disconnects them, `unban <uid>` lifts it and `clearbanlist` empties the list. The list is `banlist.txt` in the shadPS4 user data folder (guest `/data/northstar_ps4/`, PC keeps it in `R2Northstar`); one uid per line, `#` for comments, and edits take effect for the next connection. A banned player trying to join is refused with "Banned From Server.", whether they connect directly or through the server browser.
 
 ### Text chat
 
