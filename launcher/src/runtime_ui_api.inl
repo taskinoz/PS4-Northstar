@@ -234,6 +234,7 @@ int AuthFailReason(void* vm) {
     return 1;
 }
 #include "runtime_server_list.inl"
+#include "runtime_main_menu_promos.inl"
 #include "runtime_server_join.inl"
 #include "runtime_mod_download.inl"
 // Defined in runtime_http_script.inl, after the HTTP transport: script HTTP
@@ -265,8 +266,6 @@ int AuthResult(void* vm) {
     String(vm, AtlasIdentityMessage()); Seal(vm, 2);
     return 1;
 }
-int RequestPromos(void*) { LogFormat("[NorthstarPS4] custom promo request failed: transport unavailable\n"); return 0; }
-int PromoData(void* vm) { return Error(vm, "Custom promo data is unavailable"); }
 // PC reports the mouse cursor. This platform is driven by a gamepad and has
 // no cursor to report, and the declared return type is "vector ornull", so
 // null is the honest answer rather than an invented coordinate.
@@ -647,7 +646,7 @@ const Registration registrations[] = {
     {"NSIsFolder", "bool", "string path", IsFolder, kCtxAll},
     {"NSGetTotalSpaceRemaining", "int", "", SpaceRemaining, kCtxAll},
     {"NSRequestCustomMainMenuPromos", "void", "", RequestPromos, kCtxUi},
-    {"NSHasCustomMainMenuPromoData", "bool", "", Authenticated, kCtxUi},
+    {"NSHasCustomMainMenuPromoData", "bool", "", HasPromos, kCtxUi},
     {"NSGetCustomMainMenuPromoData", "var", "int promoDataKey", PromoData, kCtxUi},
     {"NSGetCursorPosition", "vector ornull", "", CursorPosition, kCtxUi},
     {"NSChatWrite", "void", "int context, string text", ChatWrite, kCtxClient},

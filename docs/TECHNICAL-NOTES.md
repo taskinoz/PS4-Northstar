@@ -5153,3 +5153,44 @@ and reached the test. The retry's early boot transcript is
 `work/stage2/iterations/20260930-161716/shad-new-lines.log`; the retirement evidence is in the
 same appended shadPS4 log.
 
+## Real-controller acceptance and main-menu announcements (2026-09-30)
+
+The user tested shadPS4 prerelease revision
+`94e21778155b2178b0fd5b74963b680a51899055` with a real controller. Host Options opened and
+accepted both password creation and password removal. The final Dismiss dialog button was
+redundant with Circle/back and has been removed. A PC join after changing the password is still
+the remaining password acceptance test; creating and clearing it on the host does not by itself
+prove the remote challenge.
+
+In the same user session, the PS4 joined a Parkour server and then a different public server.
+This verifies the real browser's modded join followed by another join on the newer emulator.
+The latter connection eventually logged `UICodeCallback_ErrorDialog: Connection to server
+timed out.` at global shadPS4 log line 4555527 and returned to the main menu. There is no crash
+or evidence in that line that identifies a port defect, so it remains an unclassified network
+timeout unless it reproduces with server/timing details.
+
+The missing main-menu announcements were a port defect. `NSRequestCustomMainMenuPromos` was a
+transport-unavailable adapter, `NSGetCustomMainMenuPromoData` always errored, and
+`NSHasCustomMainMenuPromoData` incorrectly returned Atlas authentication state. The runtime now
+performs the PC-compatible asynchronous GET of `/client/mainmenupromos`, strictly parses the
+four response objects, and publishes the thirteen string/integer fields only after the worker
+finishes. The two `MainMenuPromoData` instances are allocated on first use because this PRX's
+DT_INIT deliberately skips the C++ global constructor table. Malformed, oversized and non-200
+responses leave promo data unavailable instead of exposing a partial result.
+
+Host parser tests were added to `Test-NorthstarProfile.ps1`; the complete Northstar profile and
+Stage 2 engine profile suites passed. The live build's PRX SHA256 was
+`4186f2d5ea479a9daa41425ee86004cbc79665260870066fc983ac572c4f2330`. On the same shadPS4
+revision the runtime logged `main-menu promos parsed=1 bytes=599` at global line 4664517, and
+the menu visibly rendered the current three-line Northstar announcement plus the Custom
+shaders, Discord and Wiki spotlight cards. Evidence is
+`work/stage2/iterations/20260930-170207/shad-new-lines.log` and
+`work/main-menu-promos.png`.
+
+The first announcement-test launch separately faulted in the known Custom RPAK startup path at
+PRX address `0x812fa345`, before UI initialization. Its 64-byte cache was quarantined at
+`work/cache-backups/20260930-promos/profile.bin.rpak-startup-crash`; retrying the same PRX with
+the Custom RPAK manifest temporarily disabled reached the menu and verified announcements.
+The manifest was restored after the test. This isolated startup failure is not counted as an
+announcement failure.
+

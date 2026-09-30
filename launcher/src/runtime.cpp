@@ -21,6 +21,7 @@
 #include "northstar_ps4/pdef_diff.h"
 #include "northstar_ps4/pdata_convert.h"
 #include "northstar_ps4/server_list.h"
+#include "northstar_ps4/main_menu_promos.h"
 #include "northstar_ps4/mod_archive.h"
 #include "northstar_ps4/mod_download.h"
 
