@@ -358,6 +358,8 @@ void InstallUsercmdChecks(std::uintptr_t serverBase) noexcept {
 }
 } // namespace serverfixes
 
+void InstallServerUnsafeFuncStubs(std::uintptr_t serverBase) noexcept;  // below
+
 // Once server.prx is mapped, before any SERVER VM is created.
 void InstallServerExploitFixes(std::uintptr_t serverBase) noexcept {
     static bool done = false;
@@ -365,4 +367,84 @@ void InstallServerExploitFixes(std::uintptr_t serverBase) noexcept {
     done = true;
     serverfixes::InstallGetEntByIndexGuard(serverBase);
     serverfixes::InstallUsercmdChecks(serverBase);
+    InstallServerUnsafeFuncStubs(serverBase);
+}
+
+// PC squirrel.cpp StubUnsafeSQFuncs: unless -allowunsafesqfuncs is given,
+// DevTextBufferWrite, DevTextBufferClear, DevTextBufferDumpToFile,
+// Dev_CommandLineAddParm, DevP4Checkout and DevP4Add are replaced by a stub
+// that logs "Blocking call to stubbed function" and returns null, so a mod
+// script cannot write files or add command-line parameters. All six are still
+// registered in the retail PS4 client.prx (UI and CLIENT) and server.prx. Each
+// module fills a ScriptFunctionBinding per native on every VM creation and
+// loads the native's address with `lea rdi|rax, [rip+native]` just before
+// storing it at binding+0x60 (as for GetEntByIndex), so each of those 12
+// displacements is pointed at the stub.
+namespace unsafefuncs {
+constexpr const char* kNames[] = {"DevTextBufferWrite", "DevTextBufferClear", "DevTextBufferDumpToFile",
+    "Dev_CommandLineAddParm", "DevP4Checkout", "DevP4Add"};
+struct Site { int name; std::uintptr_t leaVa; std::uint8_t bytes[7]; std::uintptr_t nativeVa; };
+constexpr Site kClientSites[] = {
+    {0, 0x30f96c, {0x48, 0x8d, 0x3d, 0x4d, 0xb7, 0x46, 0x00}, 0x77b0c0},
+    {1, 0x30fa97, {0x48, 0x8d, 0x05, 0xd2, 0xb7, 0x46, 0x00}, 0x77b270},
+    {2, 0x30fc83, {0x48, 0x8d, 0x3d, 0x06, 0xb7, 0x46, 0x00}, 0x77b390},
+    {3, 0x30ada8, {0x48, 0x8d, 0x05, 0x61, 0xc5, 0x46, 0x00}, 0x777310},
+    {4, 0x30f58a, {0x48, 0x8d, 0x3d, 0x0f, 0xba, 0x46, 0x00}, 0x77afa0},
+    {5, 0x30f77b, {0x48, 0x8d, 0x3d, 0xae, 0xb8, 0x46, 0x00}, 0x77b030},
+};
+constexpr Site kServerSites[] = {
+    {0, 0x1dd821, {0x48, 0x8d, 0x3d, 0xf8, 0x4a, 0x54, 0x00}, 0x722320},
+    {1, 0x1dd94c, {0x48, 0x8d, 0x05, 0x7d, 0x4a, 0x54, 0x00}, 0x7223d0},
+    {2, 0x1ddb38, {0x48, 0x8d, 0x3d, 0xb1, 0x49, 0x54, 0x00}, 0x7224f0},
+    {3, 0x1d8c5d, {0x48, 0x8d, 0x05, 0x1c, 0x59, 0x54, 0x00}, 0x71e580},
+    {4, 0x1dd43f, {0x48, 0x8d, 0x3d, 0xba, 0x4d, 0x54, 0x00}, 0x722200},
+    {5, 0x1dd630, {0x48, 0x8d, 0x3d, 0x59, 0x4c, 0x54, 0x00}, 0x722290},
+};
+
+template <int Name, bool Server> std::int64_t Stub(void*) noexcept {
+    LogFormat("[NorthstarPS4] Blocking call to stubbed function %s in %s\n", kNames[Name], Server ? "SERVER" : "UI/CLIENT");
+    return 0;  // no return value: the script gets null, as PC's SQRESULT_NULL
+}
+template <bool Server> void* StubFor(int name) noexcept {
+    switch (name) {
+        case 0: return reinterpret_cast<void*>(&Stub<0, Server>);
+        case 1: return reinterpret_cast<void*>(&Stub<1, Server>);
+        case 2: return reinterpret_cast<void*>(&Stub<2, Server>);
+        case 3: return reinterpret_cast<void*>(&Stub<3, Server>);
+        case 4: return reinterpret_cast<void*>(&Stub<4, Server>);
+        default: return reinterpret_cast<void*>(&Stub<5, Server>);
+    }
+}
+
+template <bool Server, std::size_t N> void Install(std::uintptr_t base, const Site (&sites)[N], const char* module) noexcept {
+    if (StartupArgPresent("-allowunsafesqfuncs")) {
+        LogFormat("[NorthstarPS4] unsafe script functions left enabled in %s (-allowunsafesqfuncs)\n", module);
+        return;
+    }
+    for (const auto& site : sites) {
+        std::int32_t displacement = 0;
+        std::memcpy(&displacement, site.bytes + 3, sizeof(displacement));
+        if (std::memcmp(reinterpret_cast<const void*>(base + site.leaVa), site.bytes, sizeof(site.bytes)) != 0 ||
+            static_cast<std::int64_t>(site.leaVa + 7) + displacement != static_cast<std::int64_t>(site.nativeVa)) {
+            LogFormat("[NorthstarPS4] unsafe script functions not stubbed in %s: profile mismatch at %lx\n", module, site.leaVa);
+            return;
+        }
+    }
+    int stubbed = 0;
+    for (const auto& site : sites) {
+        const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(StubFor<Server>(site.name))) -
+            static_cast<std::int64_t>(base + site.leaVa + 7);
+        if (relative < -2147483648LL || relative > 2147483647LL) continue;
+        const auto value = static_cast<std::int32_t>(relative);
+        if (WriteEngineCode(base + site.leaVa + 3, &value, sizeof(value))) ++stubbed;
+    }
+    LogFormat("[NorthstarPS4] unsafe script functions stubbed in %s (%d/%zu)\n", module, stubbed, N);
+}
+} // namespace unsafefuncs
+
+void InstallClientUnsafeFuncStubs(std::uintptr_t clientBase) noexcept {
+    if (clientBase) unsafefuncs::Install<false>(clientBase, unsafefuncs::kClientSites, "client.prx");
+}
+void InstallServerUnsafeFuncStubs(std::uintptr_t serverBase) noexcept {
+    if (serverBase) unsafefuncs::Install<true>(serverBase, unsafefuncs::kServerSites, "server.prx");
 }

@@ -2781,6 +2781,8 @@ void* ModuleTracker(void*) noexcept {
     InstallRuntimeHostFrame(engineBase, engineSize);
     InstallClientChat(clientBase, clientSpan);
     InstallCustomAudio(clientBase, clientSpan);
+    // Before the UI VM registers its natives.
+    InstallClientUnsafeFuncStubs(clientBase);
 #endif
 #if defined(NORTHSTAR_PS4_ENABLE_M6_FS_OVERLAY)
     if (fsHandle != static_cast<OrbisKernelModule>(-1)) {

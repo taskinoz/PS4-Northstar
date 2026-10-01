@@ -26,7 +26,7 @@ This inventories explicit registrations, **not implementation or runtime compati
 | `NSChatWriteLine` | `void` / `int context, string text` | `ScriptContext::CLIENT` | `ChatWriteLine` / `kCtxClient` | `scripts/client/clientchathooks.cpp:67` |
 | `NSGetCursorPosition` | `vector ornull` / `` | `ScriptContext::UI` | `CursorPosition` / `kCtxUi` | `scripts/client/cursorposition.cpp:4` |
 | `NSRequestCustomMainMenuPromos` | `void` / `` | `ScriptContext::UI` | `RequestPromos` / `kCtxUi` | `scripts/client/scriptmainmenupromos.cpp:24` |
-| `NSHasCustomMainMenuPromoData` | `bool` / `` | `ScriptContext::UI` | `Authenticated` / `kCtxUi` | `scripts/client/scriptmainmenupromos.cpp:31` |
+| `NSHasCustomMainMenuPromoData` | `bool` / `` | `ScriptContext::UI` | `HasPromos` / `kCtxUi` | `scripts/client/scriptmainmenupromos.cpp:31` |
 | `NSGetCustomMainMenuPromoData` | `var` / `int promoDataKey` | `ScriptContext::UI` | `PromoData` / `kCtxUi` | `scripts/client/scriptmainmenupromos.cpp:37` |
 | `NSGetModsInformation` | `array<ModInfo>` / `` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `GetMods` / `kCtxAll` | `scripts/client/scriptmodmenu.cpp:53` |
 | `NSGetModInformation` | `array<ModInfo>` / `string modName` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `GetMod` / `kCtxAll` | `scripts/client/scriptmodmenu.cpp:65` |
