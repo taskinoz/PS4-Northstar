@@ -182,7 +182,7 @@ $markers = [ordered]@{
     UnhandledException   = [bool]($captured -match 'Unhandled Exception')
 }
 $firstFatal = ([regex]::Match($captured, '.*(?:FatalError|Unhandled Exception).*')).Value
-$emulatorRevision = ([regex]::Match($captured, '(?im)^.*Run:\s*Revision\s*[:=]\s*([0-9a-f]{7,40}).*$')).Groups[1].Value
+$emulatorRevision = ([regex]::Match($captured, '(?im)^.*Run:\s*Revision\s*[:=]?\s*([0-9a-f]{7,40}).*$')).Groups[1].Value
 $firstVmErrors = [ordered]@{}
 foreach ($context in @('UI', 'CLIENT', 'SERVER')) {
     $match = [regex]::Match($captured, "(?im)^.*(?:SCRIPT (?:COMPILE )?ERROR.*\[$context\]|\[$context\].*SCRIPT (?:COMPILE )?ERROR).*$")

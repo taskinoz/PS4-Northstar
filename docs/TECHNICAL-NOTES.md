@@ -5467,3 +5467,62 @@ from private-match state, so every menu was re-checked through its normal path.
   Clear `request.json` and `claimed.json` before a new boot.
 - `Send-PadInput.ps1` now has `square` (`v`) and `triangle` (`c`).
 
+## Client string commands, recorded sessions and boot faults (2026-10-01)
+
+**Client string commands** (PC `exploitfixes.cpp` CGameClient__ExecuteStringCommand,
+`ns_limits.cpp`, `misccommands.cpp`; `runtime_string_commands.inl`). PS4's
+`CGameClient::ExecuteStringCommand(this, cmd)` is engine+0xd8920. Its two callers are patched
+(rel32 call sites, preimage-gated): ProcessStringCmd at 0xd8908 (vtable slot at 0x3acd08) and
+the `this - 8` thunk at 0xd8d6c. The guard does, in PC's order:
+- logs each command when `ns_should_log_all_clientcommands` is 1;
+- counts commands per client slot per second against `sv_quota_stringcmdspersecond` (60, `-1`
+  off) and disconnects with "Sent too many stringcmd commands";
+- refuses a remote client's ConCommand that lacks FCVAR_GAMEDLL_FOR_REMOTE_CLIENTS (1 << 10);
+- with `sv_cheats 0`, blocks `emit`, `pre_go_to_hub`, `pre_go_to_calibration`, `end_movie` and
+  `load_recent_checkpoint`.
+
+The remote-client rule needs the flag set where PC sets it. The engine's client commands are a
+17-entry string table at engine+0x3ace80 (status, pause, recheck, migrateme,
+server_single_frame, setpause, unpause, ping, rpt_* and ss_*), which ExecuteStringCommand walks
+at 0xd8bae. On the first command, the flag is added to those and to PC's cheat list (`give`,
+`ent_*`, `particle_*` and so on), and removed from migrateme (also SERVER_CAN_EXECUTE), recheck,
+rpt_client_enable and rpt_password. 29 commands were marked and 4 cleared.
+
+The check uses ICvar::FindCommand (slot 18), as PC does, so a ConVar line such as
+`save_enable 0`, which clients send on map load, is not refused. FindCommandBase is slot 14 and
+ConCommandBase has its name at +0x18 and flags at +0x28, as on PC. The rule turns on only if both
+lookups return `ban` (flags 0x4, FCVAR_GAMEDLL) and FindCommand skips the ConVar `hostport`.
+The host is client slot 0, or the slot whose connect uid is the local `platform_user_id`; it is
+exempt.
+
+Tested in a hosted Kodai match:
+- the host's own commands passed;
+- a throwaway build that treated the host as remote refused nothing in a lobby-to-match run;
+- that build refused `cmd unban 1` (forwarded to the server), while `cmd status` and
+  `cmd save_enable 0` passed.
+A real remote client has not run it yet.
+
+**Recorded session.** `Start-NorthstarSession.ps1` recorded three lobby -> Kodai -> Colony ->
+lobby cycles with the Thunderstore test mods, 59 minutes, PRX 029b99d4:
+`work/stage2/sessions/20261001-014902-repeat-transitions-mods2`. No UI or SERVER errors. The first CLIENT error was
+`Attempted to call Show on invalid instance` from `ps4_chat_hud.nut`: the HUD is rebuilt during
+a match (here on entering spectator), which invalidates the panel handle, and a script error ends
+the match for that client. The panel is now looked up again whenever a call on it fails. Chat
+still showed afterwards. The manifest's `EmulatorRevision` was empty: the recorder expected
+`Revision:` or `Revision=`, while shadPS4 logs `Run: Revision <hash>`. The pattern now accepts
+both.
+
+**Intermittent boot faults** (shadPS4 prerelease `94e21778`). Neither has been tied to a
+runtime change.
+- Hang: the log stops mid-line while the game sits on the Respawn logo with the spinner turning
+  and the process using CPU. It stopped during mod localisation, or after `UI VM probe timed
+  out`. It happened on 2026-09-29 (`shad_log.txt.hang2`, before the string command guard
+  existed) and twice on 2026-10-01 (`.hang3`).
+- Crash: `Unhandled Exception code 0xc0000005 at 0x700000782c41` on a game thread (Thread5, then
+  Thread4), each time straight after Northstar.Custom's
+  `paks/northstarEventModels.rpak` loads (`mod rpak load: ... handle=4`). This was in the first recorded session
+  and in one boot on 2026-10-01.
+
+A retry booted normally each time. Next: boot repeatedly with Northstar.Custom's paks disabled,
+then enabled, to see whether the crash follows mod-rpak loading.
+

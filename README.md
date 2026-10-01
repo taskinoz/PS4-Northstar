@@ -4,7 +4,7 @@ Experimental PS4 native port of Northstar for Titanfall 2 under shadPS4, targeti
 
 The project now targets the PC Northstar install layout. Mods retain their original `mod.json`, `mod/`, `keyvalues/`, and other content; PS4 differences belong in the native launcher/runtime. **No VPK repacking, baked script manifests, or edits to mod scripts are part of setup.**
 
-**Status: alpha, tested under shadPS4 only.** The Northstar lobby, the server browser, joining public servers (with an Atlas identity exported from PC Northstar), hosting private matches, leaving back to the lobby, custom map mods and live mod reload all work. Downloading a server's verified mods works in lobby tests but has not yet been run as part of a real join. Converted texture/material RPaks and their streamed STARPaks load and render; unsupported PC-layout archives are refused safely. Releases, with the shadPS4 build to use, are on the [releases page](https://github.com/taskinoz/PS4-Northstar/releases); the current tracker is [docs/GOALS.md](docs/GOALS.md).
+**Status: alpha, tested under shadPS4 only.** The Northstar lobby, the server browser, joining public servers (with an Atlas identity exported from PC Northstar), hosting private matches, leaving back to the lobby, custom map mods and live mod reload all work. Joining a server downloads its verified mods, as on PC (tested by joining a Parkour server). Converted texture/material RPaks and their streamed STARPaks load and render, including Thunderstore weapon skin packs; unsupported PC-layout archives are refused safely. Releases, with the shadPS4 build to use, are on the [releases page](https://github.com/taskinoz/PS4-Northstar/releases); the current tracker is [docs/GOALS.md](docs/GOALS.md).
 
 For the current feature-completeness roadmap and agent handoff, use [docs/GOALS.md](docs/GOALS.md). The [native API inventory](docs/NATIVE-API-INVENTORY.md) maps the pinned PC registrations to PS4 handlers and can be regenerated from source. Historical technical notes do not override the current tracker.
 
@@ -46,7 +46,7 @@ Existing installations with Stage 1 patched VPKs or staged `r2` scripts must be 
 
 ## Development
 
-The supported build is `Build-Northstar.ps1 -EnableRuntimeManifest`. It builds the guest script manifest from the vanilla one and enabled mod metadata, serves mod files through the PS4 filesystem, and hooks the UI, CLIENT and SERVER script VMs (constants, Northstar natives, lifecycle callbacks). It also registers the console commands PC Northstar adds (`setplaylist`, `ns_start_reauth_and_leave_to_lobby`). The older `-EnableExperimentalScriptLoading` is a separate late-injection experiment.
+The supported build is `Build-Northstar.ps1 -EnableRuntimeManifest`. It builds the guest script manifest from the vanilla one and enabled mod metadata, serves mod files through the PS4 filesystem, and hooks the UI, CLIENT and SERVER script VMs (constants, Northstar natives, lifecycle callbacks). It also registers the console commands PC Northstar adds (such as `setplaylist`, `ns_start_reauth_and_leave_to_lobby`, `say`, `ban` and `unban`) and mods' own `ConCommands`. The older `-EnableExperimentalScriptLoading` is a separate late-injection experiment.
 
 UI mod-setting changes are saved under guest `/data/northstar_ps4/enabledmods.json`, which takes precedence over the original profile on subsequent boots, and `NSReloadMods` applies them live. Downloaded mods live under guest `/data/northstar_ps4/runtime/remote/mods`.
 
