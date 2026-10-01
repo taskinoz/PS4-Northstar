@@ -909,9 +909,12 @@ void ApplyStartupConVars() noexcept {
     }
 }
 
+void InstallNetMessageFixes(std::uintptr_t engineBase, std::size_t engineSize) noexcept;  // runtime_netmessage_fixes.inl
+
 void InstallAtlasServer(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
     InstallBans(engineBase, engineSize);
     InstallStringCommandGuard(engineBase, engineSize);
+    InstallNetMessageFixes(engineBase, engineSize);
     using namespace atlasserver;
     alignas(16) static std::uint8_t storage[8][0x90]{};
     g_serverName = RegisterConVar(storage[0], "ns_server_name", "Unnamed Northstar Server", "This server's name");

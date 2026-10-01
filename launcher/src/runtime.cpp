@@ -2231,6 +2231,7 @@ std::uint64_t ModSecondarySize(void* self, const char* fileName, const char* pat
 #include "runtime_bans.inl"
 #include "runtime_string_commands.inl"
 #include "runtime_atlas_server.inl"
+#include "runtime_netmessage_fixes.inl"
 #endif
 
 // IBaseFileSystem::ReadFile - secondary slot 14, filesystem_stdio+0xc3d0.
