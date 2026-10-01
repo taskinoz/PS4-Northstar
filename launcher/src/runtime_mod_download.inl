@@ -119,7 +119,10 @@ void RemoveModTree(const std::string& path) noexcept {
 }
 
 struct DownloadJob {
-    std::string name, version, archive, destination;
+    // The archive is extracted into `staging` and moved to `destination` only
+    // when every entry is in, so a failed or cancelled download never touches
+    // a copy that is already installed.
+    std::string name, version, archive, destination, staging;
     VerifiedModVersion verified;
 };
 
@@ -223,8 +226,8 @@ int ExtractModArchive(const DownloadJob& job) noexcept {
     modInstallState.store(kModExtracting, std::memory_order_release);
     SetInstallProgress(0, total);
 
-    RemoveModTree(job.destination);
-    if (!MakeDirectories(job.destination.c_str())) { close(fd); return kModFailedWritingToDisk; }
+    RemoveModTree(job.staging);
+    if (!MakeDirectories(job.staging.c_str())) { close(fd); return kModFailedWritingToDisk; }
     int result = kModDone;
     for (const auto& entry : entries) {
         if (modDownloadCancel.load(std::memory_order_relaxed)) { result = kModAborted; break; }
@@ -242,7 +245,7 @@ int ExtractModArchive(const DownloadJob& job) noexcept {
             result = kModFailedReadingArchive;
             break;
         }
-        const std::string target = job.destination + "/" + relative;
+        const std::string target = job.staging + "/" + relative;
         const std::size_t slash = target.find_last_of('/');
         if (!MakeDirectories(target.substr(0, slash).c_str())) { result = kModFailedWritingToDisk; break; }
         const int out = open(target.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
@@ -293,6 +296,26 @@ int ExtractModArchive(const DownloadJob& job) noexcept {
     return result;
 }
 
+// Moves the extracted mod into place. An existing copy is moved aside first
+// and restored if the move fails; it is deleted only once the new one is in.
+bool CommitModInstall(const DownloadJob& job) noexcept {
+    const std::string replaced = std::string(kRemoteModsRoot) + "/.replaced";
+    RemoveModTree(replaced);
+    struct stat info{};
+    const bool existed = stat(job.destination.c_str(), &info) == 0;
+    if (existed && rename(job.destination.c_str(), replaced.c_str()) != 0) {
+        LogFormat("[NorthstarPS4] mod install: could not move the existing copy aside: %s\n", job.destination.c_str());
+        return false;
+    }
+    if (rename(job.staging.c_str(), job.destination.c_str()) != 0) {
+        LogFormat("[NorthstarPS4] mod install: could not move the new copy into place: %s\n", job.destination.c_str());
+        if (existed) rename(replaced.c_str(), job.destination.c_str());
+        return false;
+    }
+    if (existed) RemoveModTree(replaced);
+    return true;
+}
+
 void* ModDownloadWorker(void* argument) noexcept {
     auto* job = static_cast<DownloadJob*>(argument);
     int result = kModFailed;
@@ -335,7 +358,8 @@ void* ModDownloadWorker(void* argument) noexcept {
         }
     }
     unlink(temporary.c_str());
-    if (result != kModDone) RemoveModTree(job->destination);
+    if (result == kModDone && !CommitModInstall(*job)) result = kModFailedWritingToDisk;
+    if (result != kModDone) RemoveModTree(job->staging);
     else modInstalledPending.store(true, std::memory_order_release);
     LogFormat("[NorthstarPS4] mod download %s %s finished: state %d%s\n", job->name.c_str(), job->version.c_str(),
         result, result == kModDone ? (" -> " + job->destination).c_str() : "");
@@ -367,7 +391,8 @@ int DownloadMod(void* vm) {
         return 0;
     }
     // Beside the installs; the leading dot keeps discovery from treating it as a mod.
-    auto* job = new DownloadJob{name, version, std::string(kRemoteModsRoot) + "/.download.zip", destination, *verified};
+    auto* job = new DownloadJob{name, version, std::string(kRemoteModsRoot) + "/.download.zip", destination,
+        std::string(kRemoteModsRoot) + "/.staging", *verified};
     modDownloadCancel.store(false);
     SetInstallProgress(0, 0);
     modInstallState.store(kModDownloading, std::memory_order_release);
