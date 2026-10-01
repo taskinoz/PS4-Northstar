@@ -48,7 +48,7 @@ constexpr std::uintptr_t kRtechStarpakOpenCallVa = 0x6773;
 // writes the handle, state, copied request name and allocator at these offsets
 // before publishing the entry to the worker.  The runtime module watcher can
 // install this hook after the initial requests have already passed the two
-// call sites, so the table is also the authoritative catch-up source.
+// call sites, so the table also says which mod paks are overdue.
 constexpr std::uintptr_t kRtechPakTableVa = 0x2a66d08;
 constexpr std::size_t kRtechPakEntrySize = 0xa8;
 constexpr std::size_t kRtechPakEntryCount = 512;
@@ -68,6 +68,7 @@ RtechLoadPakFn g_originalLoadPak = nullptr;
 RtechOpenFileFn g_originalRtechOpenFile = nullptr;
 void* g_rpakAllocator = nullptr;
 bool g_modRpakHookReady = false;
+std::uintptr_t g_rtechBase = 0;
 
 struct RuntimeModRpak {
     std::string request;  // what LoadPakAsync is given
@@ -243,56 +244,43 @@ void LoadModRpaks(const char* requested, void* allocator) noexcept {
     g_loadingModRpaks.clear();
 }
 
+// Mod paks whose parent the engine has already loaded, from the pak table:
+// the hook can be installed after the engine requested common.rpak.
+void LoadOverdueModRpaks(void* allocator) noexcept {
+    if (!g_rtechBase) return;
+    auto* const table = reinterpret_cast<const std::uint8_t*>(g_rtechBase + kRtechPakTableVa);
+    for (std::size_t i = 0; i < kRtechPakEntryCount; ++i) {
+        const std::uint8_t* const entry = table + i * kRtechPakEntrySize;
+        std::int32_t handle = kInvalidPakHandle;
+        std::int32_t state = 0;
+        const char* name = nullptr;
+        std::memcpy(&handle, entry, sizeof(handle));
+        std::memcpy(&state, entry + kRtechPakStateOffset, sizeof(state));
+        std::memcpy(&name, entry + kRtechPakNameOffset, sizeof(name));
+        // State 7 is the loader's successful terminal state (11 is failure).
+        if (handle != kInvalidPakHandle && state == 7 && name) LoadModRpaks(name, allocator);
+    }
+}
+
+bool ModRpaksPending() noexcept {
+    for (const auto& pak : g_modRpaks)
+        if (pak.handle == kInvalidPakHandle) return true;
+    return false;
+}
+
+// Every mod pak is loaded here, on the thread making the engine's own request
+// and after that request returns, as PC loads its Postload paks. The module
+// tracker used to load overdue ones from its own thread; the pak system is not
+// safe to drive from there while its own threads run, and boots crashed at
+// 0x700000782c41 on either thread (2026-10-01).
 std::int32_t ModLoadPakAsync(const char* path, void* allocator, std::int32_t flags) noexcept {
     // The engine hands us a working allocator on every call, so mod paks never
     // need one located independently.
     if (allocator) g_rpakAllocator = allocator;
-    LoadModRpaks(nullptr, allocator);
     const std::int32_t result = g_originalLoadPak(path, allocator, flags);
     LoadModRpaks(path, allocator);
+    if (ModRpaksPending()) LoadOverdueModRpaks(allocator);
     return result;
-}
-
-void CatchUpQueuedModRpaks(std::uintptr_t rtechBase) noexcept {
-    auto* const table = reinterpret_cast<const std::uint8_t*>(rtechBase + kRtechPakTableVa);
-    std::size_t queued = 0;
-    // State 7 is the loader's successful terminal state (11 is failure).  Do
-    // not insert a late dependent while its parent is still being processed:
-    // the ordinary hooked path queues them serially on the calling thread,
-    // whereas this catch-up runs on the independent module-watcher thread.
-    for (std::uint32_t attempt = 0; attempt < 1000; ++attempt) {
-        queued = 0;
-        for (std::size_t i = 0; i < kRtechPakEntryCount; ++i) {
-            const std::uint8_t* const entry = table + i * kRtechPakEntrySize;
-            std::int32_t handle = kInvalidPakHandle;
-            std::int32_t state = 0;
-            const char* name = nullptr;
-            void* allocator = nullptr;
-            std::memcpy(&handle, entry, sizeof(handle));
-            std::memcpy(&state, entry + kRtechPakStateOffset, sizeof(state));
-            std::memcpy(&name, entry + kRtechPakNameOffset, sizeof(name));
-            std::memcpy(&allocator, entry + kRtechPakAllocatorOffset, sizeof(allocator));
-            if (handle == kInvalidPakHandle || state == 0 || !name || !allocator) continue;
-            g_rpakAllocator = allocator;
-            ++queued;
-            if (state == 7) LoadModRpaks(name, allocator);
-        }
-        bool complete = true;
-        for (const auto& pak : g_modRpaks) {
-            if (pak.handle == kInvalidPakHandle) {
-                complete = false;
-                break;
-            }
-        }
-        if (complete) {
-            LogFormat("[NorthstarPS4] mod rpak catch-up: queued=%zu allocator=%p attempt=%u\n",
-                queued, g_rpakAllocator, attempt);
-            return;
-        }
-        sceKernelUsleep(10000);
-    }
-    LogFormat("[NorthstarPS4] mod rpak catch-up timed out: queued=%zu allocator=%p\n",
-        queued, g_rpakAllocator);
 }
 
 // Rewrites one `call rel32` to reach `target` instead. Same shape as the
@@ -370,7 +358,7 @@ void InstallModRpakHook(OrbisKernelModule rtechHandle) noexcept {
         LogFormat("[NorthstarPS4] mod rpak hook failed: no call sites patched\n");
         return;
     }
+    g_rtechBase = base;
     g_modRpakHookReady = true;
     LogFormat("[NorthstarPS4] mod rpak hook installed sites=%d paks=%zu\n", patched, g_modRpaks.size());
-    CatchUpQueuedModRpaks(base);
 }

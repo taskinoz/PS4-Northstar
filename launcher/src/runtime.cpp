@@ -784,7 +784,7 @@ bool IsDirectory(const char* path) noexcept {
     return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
 }
 
-void CollectModNames(ModDiscovery& discovery, bool includeDisabled = false) noexcept {
+void CollectModNamesLocked(ModDiscovery& discovery, bool includeDisabled) noexcept {
     discovery.count = 0;
     static char enabled[kModJsonBufferSize];
     std::size_t size = 0;
@@ -870,6 +870,18 @@ void CollectModNames(ModDiscovery& discovery, bool includeDisabled = false) noex
         if (!newline) break;
         line = newline + 1;
     }
+}
+
+// The scan above reads into function-level static buffers, and it is called
+// from the module tracker, the game's main thread (localisation at vgui init,
+// VM creation) and UI natives. Two at once overwrote each other's buffers; one
+// boot crashed in memcmp during the tracker's scan (2026-10-01).
+std::atomic_flag g_collectModNamesBusy = ATOMIC_FLAG_INIT;
+
+void CollectModNames(ModDiscovery& discovery, bool includeDisabled = false) noexcept {
+    while (g_collectModNamesBusy.test_and_set(std::memory_order_acquire)) sceKernelUsleep(100);
+    CollectModNamesLocked(discovery, includeDisabled);
+    g_collectModNamesBusy.clear(std::memory_order_release);
 }
 
 using ModFindVarFn = void* (*)(void*, const char*);
