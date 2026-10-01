@@ -189,3 +189,72 @@ void InstallNetMessageFixes(std::uintptr_t engineBase, std::size_t engineSize) n
     }
     LogFormat("[NorthstarPS4] netmessage fixes installed (%d/%zu)\n", installed, sizeof(hooks) / sizeof(hooks[0]));
 }
+
+// PC GetEntByIndex (server.dll): an index of 0x4000 or more reads past the
+// entity list, and one script client command takes an arbitrary index. On PS4
+// the GetEntByIndex script native (server+0x71b150) raises a script error for
+// a negative index but indexes the 0x4000-entry list at server+0xfc27a0
+// without an upper bound: index 16384.5 read a garbage entity and crashed the
+// game. The guard returns null for an index past the list, as PC's fix does.
+namespace serverfixes {
+constexpr std::uintptr_t kGetEntByIndexNativeVa = 0x71b150;
+constexpr std::uintptr_t kGetEntByIndexLeaVa = 0x1d574e;
+constexpr std::uint32_t kSqInteger = 0x5000002;
+constexpr int kMaxEntityIndex = 0x4000;
+using ScriptNativeFn = std::int64_t (*)(void* vm);
+ScriptNativeFn g_getEntByIndex = nullptr;
+
+std::int64_t GetEntByIndexGuard(void* vm) noexcept {
+    auto* const argument = *reinterpret_cast<char**>(static_cast<char*>(vm) + 0x48);
+    if (argument) {
+        const bool integer = *reinterpret_cast<const std::uint32_t*>(argument + 0x10) == kSqInteger;
+        // The native truncates a float; floats past int range and NaN become
+        // negative there and get its script error, as a negative index does.
+        const bool outOfBounds = integer ? *reinterpret_cast<const std::int32_t*>(argument + 0x18) >= kMaxEntityIndex
+                                         : *reinterpret_cast<const float*>(argument + 0x18) >= kMaxEntityIndex;
+        if (outOfBounds) {
+            LogFormat("[NorthstarPS4] GetEntByIndex %d is out of bounds (max %d)\n",
+                integer ? *reinterpret_cast<const std::int32_t*>(argument + 0x18)
+                        : static_cast<int>(*reinterpret_cast<const float*>(argument + 0x18)),
+                kMaxEntityIndex);
+            // PC returns null; the native's own negative-index path raises a
+            // script error instead, so the null is pushed here.
+            uiapi::Null(vm);
+            return 1;
+        }
+    }
+    return g_getEntByIndex(vm);
+}
+} // namespace serverfixes
+
+// The binding is filled in on every SERVER VM creation (server+0x1d5600 writes
+// the native's address into it just before registering it), so the guard goes
+// into that code instead: `lea rdi, [rip+disp]` at server+0x1d574e loads
+// server+0x71b150, and its displacement is pointed at the guard. Installed
+// once server.prx is mapped, before any SERVER VM is created.
+void InstallServerExploitFixes(std::uintptr_t serverBase) noexcept {
+    using namespace serverfixes;
+    static bool done = false;
+    if (!serverBase || done) return;
+    done = true;
+    // lea rdi, [rip+0x5459fb]  ->  server+0x71b150
+    constexpr std::uint8_t leaBytes[] = {0x48, 0x8d, 0x3d, 0xfb, 0x59, 0x54, 0x00};
+    if (std::memcmp(reinterpret_cast<const void*>(serverBase + kGetEntByIndexLeaVa), leaBytes, sizeof(leaBytes)) != 0 ||
+        kGetEntByIndexLeaVa + sizeof(leaBytes) + 0x5459fb != kGetEntByIndexNativeVa) {
+        LogFormat("[NorthstarPS4] GetEntByIndex guard refused: server profile mismatch\n");
+        return;
+    }
+    const auto next = static_cast<std::int64_t>(serverBase + kGetEntByIndexLeaVa + sizeof(leaBytes));
+    const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&GetEntByIndexGuard)) - next;
+    if (relative < -2147483648LL || relative > 2147483647LL) {
+        LogFormat("[NorthstarPS4] GetEntByIndex guard refused: guard outside rel32 range\n");
+        return;
+    }
+    g_getEntByIndex = reinterpret_cast<ScriptNativeFn>(serverBase + kGetEntByIndexNativeVa);
+    const auto displacement = static_cast<std::int32_t>(relative);
+    if (!WriteEngineCode(serverBase + kGetEntByIndexLeaVa + 3, &displacement, sizeof(displacement))) {
+        LogFormat("[NorthstarPS4] GetEntByIndex guard: write failed\n");
+        return;
+    }
+    LogFormat("[NorthstarPS4] GetEntByIndex guard installed\n");
+}

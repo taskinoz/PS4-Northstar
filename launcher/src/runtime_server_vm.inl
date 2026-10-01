@@ -191,6 +191,8 @@ bool RuntimeServerMapSpawn(void* owner, const char* callback) noexcept {
     return result;
 }
 
+void InstallServerExploitFixes(std::uintptr_t serverBase) noexcept;  // runtime_netmessage_fixes.inl
+
 bool RuntimeServerVmInit(void* owner, int context, float time) noexcept {
     using Init = bool (*)(void*, int, float);
     const bool result = reinterpret_cast<Init>(g_runtimeServerBase + kServerVmInitVa)(owner, context, time);
@@ -371,6 +373,7 @@ bool InstallRuntimeServerVm(OrbisKernelModule serverHandle) noexcept {
     int protection = 0;
     for (auto page : pages) protection |= sceKernelMprotect(page, 0x4000, 5);
     g_runtimeServerVmHooked = true;
+    InstallServerExploitFixes(g_runtimeServerBase);
     LogFormat("[NorthstarPS4] SERVER VM init, MapSpawn and destroy hooks installed base=%p protection=%d\n",
         reinterpret_cast<void*>(g_runtimeServerBase), protection);
     return protection == 0;
