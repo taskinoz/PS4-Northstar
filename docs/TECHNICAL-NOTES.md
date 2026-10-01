@@ -5711,3 +5711,52 @@ Differences from PC:
 nothing was flagged. No malformed commands were sent, so the blocking path itself has not been
 exercised. `Send-PadInput.ps1` gained `move_forward`, `move_back`, `move_left` and `move_right`
 (the left stick's w/s/a/d) for this.
+
+## Unsafe script functions, DX buffer natives, LZSS and the host tests (2026-10-02)
+
+**Unsafe script functions** (PC `squirrel.cpp` StubUnsafeSQFuncs). Unless `-allowunsafesqfuncs`
+is given, PC replaces six functions with a stub that logs "Blocking call to stubbed function"
+and returns null: DevTextBufferWrite, DevTextBufferClear, DevTextBufferDumpToFile,
+Dev_CommandLineAddParm, DevP4Checkout and DevP4Add. Otherwise a mod script could write files or
+add command-line parameters.
+
+All six are still registered by the retail client.prx (UI and CLIENT) and server.prx. As with
+GetEntByIndex, each module refills a ScriptFunctionBinding on every VM creation. The native's
+address is loaded with `lea rdi|rax, [rip+native]` and stored at binding+0x60. The 12 `lea`s
+(6 per module, found by the scratchpad `binding_scan.py`) are checked against their bytes and
+targets and pointed at the stubs:
+- the client's before the UI VM exists;
+- the server's when server.prx is mapped.
+
+A throwaway mod called them from UI and SERVER scripts in a hosted match. Every call was blocked
+and logged, and the scripts carried on.
+
+**Custom DX buffer natives.** PC's `materialsystem/nscustomdxbuffer.cpp` registers four CLIENT
+natives through AddFuncRegistration, which the ADD_SQFUNC inventory does not see:
+NSRegisterCustomDXBufferForGUID, NSDeregisterCustomDXBufferForGUID,
+NSUpdateCustomDXBufferForGUID and NSBindTextureToMaterial. They write a Direct3D 11 constant
+buffer and texture slots for an RPak material; GNM has no equivalent. Unregistered, a mod calling
+them fails to compile and does not load. They are now registered, do nothing, return null and
+log once. A throwaway CLIENT script calling two of them compiled and ran.
+
+**LZSS** (PC `exploitfixes_lzss.cpp`). The engine's CLZSS::SafeUncompress is at engine+0x20f190.
+It is static, taking input, output and buffer size. It checks the header, the declared size and
+the output bound, but not that a back-reference lies within the output written so far. Its
+entry is now a jump to PC's rewrite (`northstar_ps4/lzss.h`), after its first 21 bytes are
+checked. `tests/lzss.cpp` covers:
+- literals, back-references and overlapping runs;
+- a reference to before the output (refused);
+- exact and one-past bounds;
+- header checks, output overflow and a length mismatch.
+
+**Script console commands.** PC's `script`, `script_client` and `script_ui` compile a buffer with
+sq_compilebuffer and call it. The PS4 client's compile-file wrapper (0x6783f0) compiles through
+0x82b160, called on an object taken from the shared state (SQVM+0x50, then +0x4218) with the
+SQVM, a buffer state and a source name; 0x82bb10 or 0x82b270 then runs it. Not wired up yet.
+
+**Host tests.** Eleven suites existed but no script ran them. `Test-NorthstarProfile.ps1` now runs
+them, and all pass: atlas_server, audio_override, banlist, chat_text, host_options, http_request,
+mod_concommands, mod_dependencies, pdata_convert, regex_lite, startup_args (plus the new lzss).
+
+**Not applicable:** PC's UTF-8 parser fix guards data from Origin open invites and communities,
+which the PS4 port does not use.
