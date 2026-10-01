@@ -5595,3 +5595,86 @@ mods' localised footer text.
 
 The mid-line cut in hung logs is the emulator's unflushed log buffer, not the hang point.
 `LogFormat` uses `sceKernelDebugOutText`, not stdio.
+
+## Netmessage fixes, connectionless limits and GetEntByIndex (2026-10-01)
+
+Ports from PC `shared/exploit_fixes/exploitfixes.cpp` and `ns_limits.cpp`
+(`runtime_netmessage_fixes.inl`, `runtime_atlas_server.inl`).
+
+**Finding the messages.** The console engine has its netmessage names but not PC's debug
+strings. Each message's GetName (`lea rax, [rip+name]; ret`) is referenced by exactly one vtable,
+found through the module's RELATIVE relocations. The layout is Source's: slot 4 Process, 5
+ReadFromBuffer, 6 WriteToBuffer, 11 GetName. Slot 5 of clc_Move parses its fields and slot 4
+forwards to the handler at +0x18. PC's `Base_CmdKeyValues` is shared by `clc_CmdKeyValues` and
+`svc_CmdKeyValues`. Slots are replaced in the engine's read-only data (mprotect 3, then back to 1)
+only when every GetName and every target slot holds the expected function.
+
+| message | vtable | hooked | PC behaviour |
+|---|---|---|---|
+| clc_Screenshot | 0x3b0938 | read 0x1b86b0, write 0x1b8620 | both refused |
+| clc_CmdKeyValues | 0x3af508 | read 0x1ae8d0 | refused |
+| svc_CmdKeyValues | 0x3af590 | read 0x1ae960 | refused |
+| net_SetConVar | 0x3afb68 | process 0x2eef30 | count, terminators, REPLICATED |
+| clc_Move | 0x3afe10 | process 0x2ef130 | counts and length |
+
+The message layouts match PC's:
+- net_SetConVar (reader engine+0x1b4690): entries at +0x20 (two 0x104-byte strings, 0x208 per
+  entry), count at +0x38, an 8-bit count on the wire.
+- clc_Move (engine+0x1ac460): new commands at +0x24, backup commands at +0x20, length at +0x28.
+
+PC tells the server's copy of net_SetConVar from the client's by thread. The PS4 listen server
+and client share threads, so a message whose handler lies in the engine's client array is the
+server's. ConVar name and flags are read at +0x18/+0x28 only after FindVar("hostport") is checked
+to return the same object as FindCommandBase.
+
+In hosted Kodai matches the clc_Move and server-side net_SetConVar hooks ran (logged once each)
+and blocked nothing. The client side of net_SetConVar runs only when joining another server and
+has not been exercised yet.
+
+**Connectionless limits** (PC `CheckConnectionlessPacketLimits`). At most `sv_querylimit_per_sec`
+(15) connectionless packets a second are accepted from one address, then it gets a minute of
+silence. Atlas's `T` packets are exempt, and `N` packets too while `net_data_block_enabled` is on.
+
+The packet starts with its sender's netadr_t:
+- On PS4 it is Source's `{int type; uint8 ip[4]; uint16 port}` with NA_IP = 3 (NA_BROADCAST is
+  still 2), not PC's `{type, ip[16], port}` with NA_IP = 2.
+- The bytes after the port change between packets, so the key is the 4-byte address.
+- A steady stream of type 1 (loopback) packets comes from the host's own client. As on PC,
+  loopback is not limited.
+
+Test with 20 encrypted connect requests from this machine:
+- 14 were answered and the 15th tripped the limit.
+- The address was still silent 5 s later and was answered again after a minute.
+- A hosted match still loaded.
+
+**GetEntByIndex** (PC hooks server.dll's GetEntByIndex at 0x4000). The PS4 SERVER native
+(server+0x71b150) raises a script error for a negative index but indexes the 0x4000-entry entity
+list at server+0xfc27a0 with no upper bound. From a SERVER client-command callback, index 20000
+happened to read a null slot. Index 16384.5 read a garbage entity and crashed the game with a call
+to 0x0.
+
+The native's ScriptFunctionBinding (server+0xf280c8) is refilled on every SERVER VM creation by
+server+0x1d5600, so writing the binding did not stick. Instead the `lea rdi, [rip+native]` at
+server+0x1d574e is repointed at the guard once server.prx is mapped. For an index past the list,
+the guard pushes null (`uiapi::Null`) and returns 1 without calling the native, matching PC.
+Afterwards index 1 returned the player, 20000 and 16384.5 returned null, and the match continued.
+
+**Not ported, and why:**
+- CL_CopyExistingEntity: the PS4 engine inlined it into its caller, and CL_CopyNewEntity already
+  checks MAX_EDICTS.
+- CNetChan::ProcessMessages time limits: no strings left to find it by; PC only warns by
+  default.
+- ReadUsercmd sanitising: server.prx, not yet located.
+- Also still open: the WriteBaselines overflow, NET_ReceiveDatagram, LZSS and UTF-8 parsing, Cbuf
+  execution markers and IsRespawnMod.
+
+**Analysis tools** (scratchpad, not committed): `msgvt.py` prints a message's vtable from its
+name using the RELATIVE relocations; `xref.py` finds strings, rip-relative references and
+disassembly.
+
+**Stability.** The build with all three fixes booted to the lobby 12 times out of 12. While these
+fixes were in development, one boot crashed in `malloc` (+0x615, a free-list unlink) during the
+module tracker's scan of the mod folders. That is the same signature as before the malloc lock
+was turned on (one in roughly 20 boots since). With malloc locked, this points to a heap
+corruption detected at that point rather than two threads allocating at once. The cause is not
+yet found; all such crashes so far happened during `opendir`/`readdir` scans on the tracker.
