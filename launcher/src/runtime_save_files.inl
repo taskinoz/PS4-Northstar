@@ -9,7 +9,6 @@
 // provides the file owns the data. A shared folder would break that isolation
 // and is deliberately not used.
 constexpr const char* kSaveRoot = "/data/northstar_ps4/save_data";
-constexpr std::size_t kSaveFileBufferLimit = 1024 * 1024;
 
 // Call-stack layout of the supported PS4 client.prx, read (never written) the
 // way the client's own callstack printer does at VA 0x67f062-0x67f0bf:
@@ -99,6 +98,18 @@ bool MakeDirectories(const char* path) noexcept {
     return mkdir(buffer, 0777) == 0 || errno == EEXIST;
 }
 
+// A file's size from lseek: shadPS4's stat reported st_size 1 for a 25-byte
+// save (and its fstat is a stub), so stat is only trusted for the file type.
+bool FileSizeOf(const char* path, std::uint64_t& size) noexcept {
+    const int fd = open(path, O_RDONLY);
+    if (fd < 0) return false;
+    const off_t end = lseek(fd, 0, SEEK_END);
+    close(fd);
+    if (end < 0) return false;
+    size = static_cast<std::uint64_t>(end);
+    return true;
+}
+
 // PC's folder cap is advisory ("prevents mods taking gigabytes", not an exact
 // quota), so the same directory walk is used, skipping one file by name.
 std::uint64_t FolderSize(const char* directory, const char* skip) noexcept {
@@ -114,7 +125,10 @@ std::uint64_t FolderSize(const char* directory, const char* skip) noexcept {
         struct stat info{};
         if (stat(path, &info) != 0) continue;
         if (S_ISDIR(info.st_mode)) total += FolderSize(path, nullptr);
-        else total += static_cast<std::uint64_t>(info.st_size);
+        else {
+            std::uint64_t size = 0;
+            if (FileSizeOf(path, size)) total += size;
+        }
     }
     closedir(dir);
     return total;
@@ -160,7 +174,7 @@ int WriteSaveFile(void* vm, const char* directory, const char* full, const char*
     if (!MakeDirectories(directory)) return Error(vm, "Cannot create the mod save folder");
     // PC checks the cap before dispatching the write, then again in the writer.
     const char* leaf = std::strrchr(relative, '/');
-    if (FolderSize(directory, leaf ? leaf + 1 : relative) + size > kMaxSaveFolderSize)
+    if (FolderSize(directory, leaf ? leaf + 1 : relative) + size > MaxSaveFolderSize())
         return Error(vm, "This mod has reached the maximum save folder size. Ask the mod developer to reduce its data usage.");
     // The extension whitelist is enforced on PC inside the writer, which logs
     // and drops the write instead of raising. That behaviour is preserved.
@@ -209,19 +223,28 @@ int SaveFile(void* vm) {
 // itself is synchronous: PS4 has no background VM thread to hand a result to.
 struct PendingLoad { void* vm; int handle; bool success; std::string contents; };
 std::vector<PendingLoad> pendingLoads;
-int lastLoadHandle = 0;
+std::atomic<int> lastLoadHandle{0};
+// SERVER scripts also run on the engine's worker threads, while the host frame
+// drains on the main thread.
+std::atomic_flag pendingLoadsBusy = ATOMIC_FLAG_INIT;
+struct PendingLoadsLock {
+    PendingLoadsLock() noexcept { while (pendingLoadsBusy.test_and_set(std::memory_order_acquire)) {} }
+    ~PendingLoadsLock() { pendingLoadsBusy.clear(std::memory_order_release); }
+};
 
 int LoadFile(void* vm) {
     // Depth 1: NS_InternalLoadFile is always reached through NSLoadFile.
     char directory[320], full[512];
     int error = 0;
     if (!ResolveSavePath(vm, 1, 1, false, directory, sizeof(directory), full, sizeof(full), nullptr, &error)) return error;
-    PendingLoad pending{vm, ++lastLoadHandle, false, std::string()};
+    const int handle = ++lastLoadHandle;
+    PendingLoad pending{vm, handle, false, std::string()};
     struct stat info{};
-    if (stat(full, &info) == 0 && S_ISREG(info.st_mode) &&
-        static_cast<std::uint64_t>(info.st_size) <= kSaveFileBufferLimit) {
+    std::uint64_t fileSize = 0;
+    if (stat(full, &info) == 0 && S_ISREG(info.st_mode) && FileSizeOf(full, fileSize) &&
+        fileSize <= MaxSaveFolderSize()) {
         if (FILE* file = std::fopen(full, "rb")) {
-            pending.contents.resize(static_cast<std::size_t>(info.st_size));
+            pending.contents.resize(static_cast<std::size_t>(fileSize));
             const std::size_t read = pending.contents.empty() ? 0
                 : std::fread(&pending.contents[0], 1, pending.contents.size(), file);
             pending.success = read == pending.contents.size();
@@ -233,8 +256,11 @@ int LoadFile(void* vm) {
         pending.contents.clear();
         LogFormat("[NorthstarPS4] save load failed: %s\n", full);
     }
-    pendingLoads.push_back(std::move(pending));
-    Integer(vm, lastLoadHandle);
+    {
+        PendingLoadsLock lock;
+        pendingLoads.push_back(std::move(pending));
+    }
+    Integer(vm, handle);
     return 1;
 }
 
@@ -259,9 +285,9 @@ int FileSize(void* vm) {
     char directory[320], full[512];
     int error = 0;
     if (!ResolveSavePath(vm, 0, 1, false, directory, sizeof(directory), full, sizeof(full), nullptr, &error)) return error;
-    struct stat info{};
-    if (stat(full, &info) != 0) return Error(vm, "GET FILE SIZE FAILED! Is the path valid?");
-    Integer(vm, static_cast<int>(static_cast<std::uint64_t>(info.st_size) / 1024));
+    std::uint64_t size = 0;
+    if (!FileSizeOf(full, size)) return Error(vm, "GET FILE SIZE FAILED! Is the path valid?");
+    Integer(vm, static_cast<int>(size / 1024));
     return 1;
 }
 
@@ -296,7 +322,8 @@ int SpaceRemaining(void* vm) {
     if (!CallingModFolder(vm, 0, folder, sizeof(folder))) return Error(vm, "Has to be called from a mod function!");
     std::snprintf(directory, sizeof(directory), "%s/%s", kSaveRoot, folder);
     const std::uint64_t used = FolderSize(directory, nullptr);
-    const std::uint64_t remaining = used >= kMaxSaveFolderSize ? 0 : kMaxSaveFolderSize - used;
+    const std::uint64_t limit = MaxSaveFolderSize();
+    const std::uint64_t remaining = used >= limit ? 0 : limit - used;
     Integer(vm, static_cast<int>(remaining / 1024));
     return 1;
 }
@@ -338,31 +365,40 @@ bool DispatchLoadResult(void* vm, const PendingLoad& load) noexcept {
     String(vm, load.contents.c_str());
     const int result = At<int (*)(void*, int, int, int)>(vm, 0x6876c0)(vm, 4, 0, 1);
     Pop(vm, 1);
-    LogFormat("[NorthstarPS4] NSHandleLoadResult handle=%d success=%d result=%d\n",
-        load.handle, load.success ? 1 : 0, result);
+    LogFormat("[NorthstarPS4] NSHandleLoadResult handle=%d success=%d bytes=%zu result=%d\n",
+        load.handle, load.success ? 1 : 0, load.contents.size(), result);
     return result >= 0;
 }
 
-// Drained wherever the runtime regains control of a script VM. PC drains this
-// queue from CHostState::FrameUpdate; no equivalent PS4 per-frame hook is
-// profiled yet, so a load result is delivered at the next code callback for
-// that context rather than on the next frame. Results are keyed to the VM
-// that requested them, so a CLIENT load never resolves into the UI VM.
-void DrainPendingLoads(void* owner) noexcept {
-    if (pendingLoads.empty() || !owner) return;
-    void* vm = *reinterpret_cast<void**>(static_cast<char*>(owner) + 8);
+// PC drains this queue from CHostState::FrameUpdate, so a result arrives on a
+// later frame. Here the host frame hook (runtime_host_frame.inl) drains it for
+// every bound VM each frame; the code-callback paths drain it too. Results
+// are keyed to the VM that requested them, so a CLIENT load never resolves
+// into the UI VM.
+void DrainPendingLoadsForVm(void* vm) noexcept {
     if (!vm) return;
-    std::vector<PendingLoad> keep, batch;
-    for (auto& load : pendingLoads) (load.vm == vm ? batch : keep).push_back(std::move(load));
-    pendingLoads.swap(keep);
+    std::vector<PendingLoad> batch;
+    {
+        PendingLoadsLock lock;
+        if (pendingLoads.empty()) return;
+        std::vector<PendingLoad> keep;
+        for (auto& load : pendingLoads) (load.vm == vm ? batch : keep).push_back(std::move(load));
+        pendingLoads.swap(keep);
+    }
+    // Delivered outside the lock: the callback may load another file.
     for (const auto& load : batch) DispatchLoadResult(vm, load);
+}
+void DrainPendingLoads(void* owner) noexcept {
+    if (!owner) return;
+    DrainPendingLoadsForVm(*reinterpret_cast<void**>(static_cast<char*>(owner) + 8));
 }
 
 // Discards results for a VM that is going away before they were delivered.
 void DropPendingLoads(void* owner) noexcept {
-    if (pendingLoads.empty() || !owner) return;
+    if (!owner) return;
     void* vm = *reinterpret_cast<void**>(static_cast<char*>(owner) + 8);
     if (!vm) return;
+    PendingLoadsLock lock;
     std::vector<PendingLoad> keep;
     for (auto& load : pendingLoads) if (load.vm != vm) keep.push_back(std::move(load));
     if (keep.size() != pendingLoads.size())

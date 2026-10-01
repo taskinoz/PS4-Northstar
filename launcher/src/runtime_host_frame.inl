@@ -42,6 +42,7 @@ void RuntimeHostFrameUpdate(double currentTime, float frameTime) noexcept {
             LogFormat("[NorthstarPS4] native async drain active context=%s vm=%p\n",
                 names[context], vm);
         }
+        uiapi::DrainPendingLoadsForVm(vm);
         uiapi::RunAsyncCalls(vm, masks[context]);
     }
 }

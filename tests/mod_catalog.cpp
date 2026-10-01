@@ -102,8 +102,13 @@ int main() {
     assert(!SavePathSafe("../escape.json"));
     assert(!SavePathSafe("nested/../../escape.json"));
     assert(!SavePathSafe("/absolute.json"));
-    assert(!SavePathSafe("nested//data.json"));
-    assert(!SavePathSafe("./data.json"));
+    // As PC's weakly_canonical containment check: these stay inside.
+    assert(SavePathSafe("nested//data.json"));
+    assert(SavePathSafe("./data.json"));
+    assert(SavePathSafe("nested/../data.json"));
+    assert(SavePathSafe("a/b/../../data.json"));
+    assert(!SavePathSafe("a/../../data.json"));
+    assert(!SavePathSafe(".."));
     assert(!SavePathSafe("back\\slash.json"));
     assert(!SavePathSafe("drive:name.json"));
     assert(!SavePathSafe("caf\xc3\xa9.json")); // non-ASCII, rejected as on PC

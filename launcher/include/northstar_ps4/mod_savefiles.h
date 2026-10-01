@@ -9,7 +9,8 @@
 // a small extension whitelist may be created. The PS4 runtime applies these
 // before touching the filesystem; the host tests exercise them directly.
 namespace northstar::ps4::mods {
-// PC default (-maxfoldersize overrides it there; PS4 has no command line).
+// PC default; -maxfoldersize in ns_startup_args.txt overrides it, as on PC
+// (MaxSaveFolderSize in runtime.cpp).
 constexpr std::uint64_t kMaxSaveFolderSize = 52428800; // 50 MiB
 constexpr std::size_t kMaxSaveRelativePath = 192;
 
@@ -26,10 +27,14 @@ inline bool SaveExtensionAllowed(const char* relative) noexcept {
     return std::strcmp(dot, ".txt") == 0 || std::strcmp(dot, ".json") == 0;
 }
 
-// True when `relative` stays inside the mod's own save folder. PC resolves the
-// path and checks containment; without weakly_canonical on PS4 the equivalent
-// is to reject every escape at the syntax level, which is stricter and cannot
-// be confused by symlinks. Paths are ASCII-only, exactly as PC documents.
+// True when `relative` stays inside the mod's own save folder. PC resolves
+// the path (weakly_canonical) and checks it is still under the folder, so
+// "./a.txt", "a//b.txt" and "a/../b.txt" are fine and "../a.txt" is not. The
+// same is decided here by walking the segments: "." and empty segments stay
+// put, ".." climbs one level, and climbing above the folder is refused.
+// Paths are ASCII-only, as on PC. Absolute paths are refused, and so are
+// backslashes and colons (path separators or drive letters on PC's Windows,
+// ordinary characters here).
 inline bool SavePathSafe(const char* relative, bool allowEmpty = false) noexcept {
     if (!relative) return false;
     if (!*relative) return allowEmpty;
@@ -41,13 +46,16 @@ inline bool SavePathSafe(const char* relative, bool allowEmpty = false) noexcept
         if (c == '\\' || c == ':') return false;
     }
     if (relative[0] == '/') return false;
+    int depth = 0;
     const char* segment = relative;
     while (*segment) {
         const char* end = std::strchr(segment, '/');
         const std::size_t span = end ? static_cast<std::size_t>(end - segment) : std::strlen(segment);
-        if (span == 0) return false;
-        if (span == 1 && segment[0] == '.') return false;
-        if (span == 2 && segment[0] == '.' && segment[1] == '.') return false;
+        if (span == 2 && segment[0] == '.' && segment[1] == '.') {
+            if (--depth < 0) return false;
+        } else if (span != 0 && !(span == 1 && segment[0] == '.')) {
+            ++depth;
+        }
         if (!end) break;
         segment = end + 1;
     }

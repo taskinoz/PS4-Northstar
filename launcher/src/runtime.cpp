@@ -747,6 +747,30 @@ bool ReadFileIntoBuffer(const char* path, char* buffer,
     return true;
 }
 
+// PC -maxfoldersize: the per-mod save folder cap in bytes (default 50 MiB),
+// read from ns_startup_args.txt; the copy in the user data folder wins over
+// the game folder's.
+std::uint64_t MaxSaveFolderSize() noexcept {
+    static std::uint64_t cached = 0;
+    if (cached) return cached;
+    std::uint64_t size = kMaxSaveFolderSize;
+    for (const char* file : {"/app0/ns_startup_args.txt", "/data/northstar_ps4/ns_startup_args.txt"}) {
+        char text[2048];
+        std::size_t length = 0;
+        if (!ReadFileIntoBuffer(file, text, sizeof(text), length)) continue;
+        std::string value;
+        if (!startup::ArgValue(startup::SplitArgs(text), "-maxfoldersize", value)) continue;
+        char* end = nullptr;
+        const unsigned long long parsed = std::strtoull(value.c_str(), &end, 10);
+        if (end && *end == '\0' && parsed > 0) {
+            size = parsed;
+            LogFormat("[NorthstarPS4] -maxfoldersize %llu from %s\n", parsed, file);
+        }
+    }
+    cached = size;
+    return cached;
+}
+
 bool ReadEnabledSettings(char* buffer, std::size_t capacity) noexcept {
     std::size_t size = 0;
     const char* paths[] = {"/data/northstar_ps4/enabledmods.json", "/app0/R2Northstar/enabledmods.json"};
@@ -1967,7 +1991,7 @@ bool SendChat(const char* text, bool isTeam) noexcept {
 std::vector<std::pair<std::string, std::int64_t>> ScriptConstants(const char* vmName) noexcept {
     std::vector<std::pair<std::string, std::int64_t>> values = {
         {"VANILLA", 0}, {"NS_VERSION_MAJOR", 0}, {"NS_VERSION_MINOR", 1}, {"NS_VERSION_PATCH", 0},
-        {"NS_VERSION_DEV", 1}, {"MAX_FOLDER_SIZE", static_cast<std::int64_t>(kMaxSaveFolderSize / 1024)}};
+        {"NS_VERSION_DEV", 1}, {"MAX_FOLDER_SIZE", static_cast<std::int64_t>(MaxSaveFolderSize() / 1024)}};
     static ModDiscovery all;
     CollectModNames(all, true);
     static char settings[kModJsonBufferSize];

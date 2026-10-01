@@ -30,6 +30,14 @@ int main() {
     CHECK(ConVarAssignments(SplitArgs("+alone")).empty());
     CHECK(SplitArgs("   ").empty());
 
+    {
+        std::string value;
+        const auto args = SplitArgs("-allowdupeaccounts -maxfoldersize 1048576 +ns_server_name x");
+        if (!ArgValue(args, "-maxfoldersize", value) || value != "1048576") return std::puts("ArgValue value"), 1;
+        if (ArgValue(args, "-allowdupeaccounts", value)) return std::puts("ArgValue followed by option"), 1;
+        if (ArgValue(SplitArgs("-maxfoldersize"), "-maxfoldersize", value)) return std::puts("ArgValue at end"), 1;
+        if (ArgValue(args, "-missing", value)) return std::puts("ArgValue absent"), 1;
+    }
     std::puts("startup_args tests passed");
     return 0;
 }

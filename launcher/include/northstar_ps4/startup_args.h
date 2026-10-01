@@ -36,6 +36,20 @@ inline std::vector<std::string> SplitArgs(const std::string& text) {
     return out;
 }
 
+// The value after "-name" (PC CommandLine()->GetParm(FindParm(name))), e.g.
+// "-maxfoldersize 1048576". False when the option is absent or is followed by
+// nothing or by another option.
+inline bool ArgValue(const std::vector<std::string>& args, const std::string& name, std::string& value) {
+    for (std::size_t i = 0; i + 1 < args.size(); ++i) {
+        if (args[i] != name) continue;
+        const std::string& next = args[i + 1];
+        if (next.empty() || next[0] == '-' || next[0] == '+') return false;
+        value = next;
+        return true;
+    }
+    return false;
+}
+
 // "+name value" pairs. A "+name" followed by another option (+ or -) or by
 // nothing has no value and is skipped.
 inline std::vector<std::pair<std::string, std::string>> ConVarAssignments(const std::vector<std::string>& args) {
