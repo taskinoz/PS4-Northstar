@@ -650,6 +650,65 @@ bool WriteRemotePdata(int client, std::uint64_t uid, const std::string& pdata, c
 
 bool RemotePdataWriting() noexcept { return g_writesInFlight.load() > 0; }
 
+// PC ServerLimitsManager::CheckConnectionlessPacketLimits (ns_limits.cpp): at
+// most sv_querylimit_per_sec connectionless packets a second from one IP
+// address, then a minute of silence for it. A packet starts with its sender's
+// netadr_t. PC's is {type, ip[16], port} with NA_IP 2; the PS4 engine keeps
+// Source's {type, ip[4], port} with NA_IP 3 (NA_BROADCAST is still 2), and the
+// bytes after the port vary between packets, so only the IPv4 address is the
+// key. Loopback (1), the host's own client, is not limited, as on PC. PC keeps
+// an entry per address forever; this keeps the 256 most recently seen.
+void* g_queryLimit = nullptr;
+void* g_dataBlockEnabled = nullptr;
+struct QueryLimit {
+    std::uint8_t ip[4];
+    std::uint64_t quotaStart;
+    std::uint64_t timeoutEnd;
+    std::uint64_t lastSeen;
+    int count;
+    bool used;
+};
+QueryLimit g_queryLimits[256];
+
+bool CheckConnectionlessLimits(const void* packet, const std::uint8_t* data) noexcept {
+    constexpr std::int32_t kNaIp = 3;
+    const auto* address = static_cast<const std::uint8_t*>(packet);
+    if (*reinterpret_cast<const std::int32_t*>(address) != kNaIp) return true;
+    // Data-block packets ('N') are exempt while data blocks are enabled.
+    if (data[4] == 'N' && ConVarInt(g_dataBlockEnabled, 0)) return true;
+    const std::uint8_t* ip = address + 4;
+    const std::uint64_t now = sceKernelGetProcessTime();
+    QueryLimit* entry = nullptr;
+    QueryLimit* oldest = &g_queryLimits[0];
+    for (auto& candidate : g_queryLimits) {
+        if (candidate.used && std::memcmp(candidate.ip, ip, 4) == 0) {
+            entry = &candidate;
+            break;
+        }
+        if (!candidate.used || (oldest->used && candidate.lastSeen < oldest->lastSeen)) oldest = &candidate;
+    }
+    if (!entry) {
+        entry = oldest;
+        *entry = QueryLimit{};
+        std::memcpy(entry->ip, ip, 4);
+        entry->used = true;
+    }
+    entry->lastSeen = now;
+    if (now < entry->timeoutEnd) return false;
+    if (now - entry->quotaStart >= 1000000) {
+        entry->quotaStart = now;
+        entry->count = 0;
+    }
+    const int limit = ConVarInt(g_queryLimit, 15);
+    if (++entry->count >= limit) {
+        LogFormat("[NorthstarPS4] client went over connectionless ratelimit of %d per sec with packet of type %c\n", limit,
+            data[4] >= 0x20 && data[4] < 0x7f ? data[4] : '?');
+        entry->timeoutEnd = now + 60ull * 1000000;
+        return false;
+    }
+    return true;
+}
+
 bool RuntimeConnectionlessPacket(void* self, void* packet) noexcept {
     const auto bytes = static_cast<const char*>(packet);
     const auto data = *reinterpret_cast<const std::uint8_t* const*>(bytes + kPacketDataOffset);
@@ -663,6 +722,7 @@ bool RuntimeConnectionlessPacket(void* self, void* packet) noexcept {
             HandleAtlasPacket(data, static_cast<std::size_t>(size));
             return false;
         }
+        if (!CheckConnectionlessLimits(packet, data)) return false;
         if (data[4] == 'A') {
             // PC: CBaseClient::Connect refuses a banned uid before anything
             // else ("Banned From Server.").
@@ -932,6 +992,10 @@ void InstallAtlasServer(std::uintptr_t engineBase, std::size_t engineSize) noexc
         "Whether to disable signature verification for Atlas connectionless packets (DANGEROUS: this allows anyone "
         "to impersonate Atlas)");
     if (g_modConVarCvar && g_modConVarFindVar) g_hostPort = g_modConVarFindVar(g_modConVarCvar, "hostport");
+    alignas(16) static std::uint8_t queryLimitStorage[0x90]{};
+    g_queryLimit = RegisterConVar(queryLimitStorage, "sv_querylimit_per_sec", "15", "");
+    if (g_modConVarCvar && g_modConVarFindVar)
+        g_dataBlockEnabled = g_modConVarFindVar(g_modConVarCvar, "net_data_block_enabled");
     alignas(16) static std::uint8_t writeStorage[0x90]{};
     g_writeRemotePersistence = RegisterConVar(writeStorage, "ns_ps4_write_remote_persistence", "1",
         "Whether this PS4 host writes Atlas-authenticated players' pdata back to Atlas");
