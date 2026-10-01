@@ -48,10 +48,18 @@ New-Item -ItemType Directory -Path $scratch -Force | Out-Null
 try {
     $merged = Join-Path $scratch 'merged'
     New-Item -ItemType Directory -Path $merged -Force | Out-Null
+    $skipped = @()
     foreach ($pak in $paks) {
         $one = Join-Path $scratch ([IO.Path]::GetFileNameWithoutExtension($pak.Name))
         & $tool $pak.FullName $one
-        if ($LASTEXITCODE) { throw "PS4 RPak conversion failed: $($pak.FullName)" }
+        if ($LASTEXITCODE) {
+            # One pak the converter cannot handle (the reason is printed above)
+            # must not stop every other mod from syncing. Its PC-layout copy
+            # stays in the profile, and the PS4 runtime refuses to load it.
+            Write-Warning "Skipped $($pak.Name) in $(Split-Path $sourceMod -Leaf): it cannot be converted, and the PS4 runtime will not load it."
+            $skipped += $pak.Name
+            continue
+        }
         foreach ($file in Get-ChildItem -LiteralPath $one -File) {
             $destination = Join-Path $merged $file.Name
             if (Test-Path -LiteralPath $destination -PathType Leaf) {
@@ -67,7 +75,7 @@ try {
     foreach ($file in Get-ChildItem -LiteralPath $merged -File) {
         Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $outputRoot $file.Name)
     }
-    [pscustomobject]@{ Mod = (Split-Path $sourceMod -Leaf); Rpaks = $paks.Count; Files = @(Get-ChildItem -LiteralPath $outputRoot -File).Count }
+    [pscustomobject]@{ Mod = (Split-Path $sourceMod -Leaf); Rpaks = $paks.Count; Files = @(Get-ChildItem -LiteralPath $outputRoot -File).Count; Skipped = $skipped.Count }
 } finally {
     if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Recurse -Force }
 }

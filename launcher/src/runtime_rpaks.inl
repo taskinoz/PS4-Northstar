@@ -229,17 +229,25 @@ void LoadModRpaks(const char* requested, void* allocator) noexcept {
     // A mod pak's own load re-enters this hook; without the guard each one
     // would try to satisfy its own dependants.
     if (g_loadingModRpaks.test_and_set()) return;
-    for (auto& pak : g_modRpaks) {
-        if (pak.handle != kInvalidPakHandle) continue;
-        // PS4 difference: Preload paks load once common.rpak has, not inside
-        // the engine's next pak request. Loaded there, two 2048x2048 skin
-        // packs left about half of all boots hung or crashed (2026-10-01).
-        const bool due = requested &&
-            RpakNameMatches(pak.preload ? std::string(kPreloadAfterPak) : pak.after, requested);
-        if (!due) continue;
-        pak.handle = g_originalLoadPak(pak.request.c_str(), chosen, kModRpakFlags);
-        LogFormat("[NorthstarPS4] mod rpak load: %s after=%s handle=%d\n",
-            pak.request.c_str(), requested ? requested : "(preload)", pak.handle);
+    // Preload paks first: on PC they load before anything else, and a mod's
+    // Postload pak often holds materials whose textures are in its
+    // "_preload" pak. Loaded the other way round (both are due at
+    // common.rpak here), the Octane knife's materials went in before their
+    // textures and the boot stalled (2026-10-02).
+    for (const bool preloadPass : {true, false}) {
+        for (auto& pak : g_modRpaks) {
+            if (pak.handle != kInvalidPakHandle || pak.preload != preloadPass) continue;
+            // PS4 difference: Preload paks load once common.rpak has, not
+            // inside the engine's next pak request. Loaded there, two
+            // 2048x2048 skin packs left about half of all boots hung or
+            // crashed (2026-10-01).
+            const bool due = requested &&
+                RpakNameMatches(pak.preload ? std::string(kPreloadAfterPak) : pak.after, requested);
+            if (!due) continue;
+            pak.handle = g_originalLoadPak(pak.request.c_str(), chosen, kModRpakFlags);
+            LogFormat("[NorthstarPS4] mod rpak load: %s after=%s handle=%d\n",
+                pak.request.c_str(), requested ? requested : "(preload)", pak.handle);
+        }
     }
     g_loadingModRpaks.clear();
 }

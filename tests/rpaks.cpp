@@ -148,6 +148,17 @@ int main(int argc, char** argv) {
     assert(!IsSupportedPs4TextureRpak(platforms));
     platforms = {};
     assert(!IsSupportedPs4TextureRpak(platforms));
+    // A materials-only pak (a skin's matl assets beside a _preload pak of
+    // textures) is loadable; one with a PC texture still is not.
+    {
+        std::string materialPak = texturePak;
+        std::memcpy(materialPak.data() + assetHeader + 68, "matl", 4);
+        assert(InspectRpakTexturePlatforms(materialPak.data(), materialPak.size(), platforms));
+        assert(platforms.textures == 0 && platforms.materials == 1);
+        assert(IsSupportedPs4TextureRpak(platforms));
+        platforms.textures = platforms.pc = 1;
+        assert(!IsSupportedPs4TextureRpak(platforms));
+    }
     texturePak.resize(texturePak.size() - 1);
     assert(!InspectRpakTexturePlatforms(texturePak.data(), texturePak.size(), platforms));
 

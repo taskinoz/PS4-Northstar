@@ -206,10 +206,16 @@ struct RpakTexturePlatforms {
     std::size_t pc = 0;
     std::size_t ps4 = 0;
     std::size_t other = 0;
+    std::size_t materials = 0;  // 'matl' assets
 };
 
+// Loadable on PS4: every texture is in the PS4 layout, and there is at least
+// one texture or material. A materials-only pak is common (a skin's
+// materials beside a "_preload" pak holding its textures); materials need no
+// conversion (Northstar.Custom's render on PS4). Other asset types are not
+// checked here, as before.
 inline bool IsSupportedPs4TextureRpak(const RpakTexturePlatforms& platforms) {
-    return platforms.textures != 0 && platforms.ps4 == platforms.textures &&
+    return (platforms.textures != 0 || platforms.materials != 0) && platforms.ps4 == platforms.textures &&
         platforms.pc == 0 && platforms.other == 0;
 }
 
@@ -295,9 +301,14 @@ inline bool InspectRpakTexturePlatformsWith(Read&& read, std::size_t size, RpakT
         if (!RpakAdvance(pageCursor, pageBytes, 1, size)) return false;
     }
 
+    constexpr std::uint32_t kMaterialType =
+        static_cast<std::uint32_t>('m') | (static_cast<std::uint32_t>('a') << 8) |
+        (static_cast<std::uint32_t>('t') << 16) | (static_cast<std::uint32_t>('l') << 24);
     for (std::size_t i = 0; i < assetCount; ++i) {
         const std::size_t asset = assetsOffset + i * kAssetSize;
-        if (RpakReadU32(data + asset + 68) != kTextureType) continue;
+        const std::uint32_t type = RpakReadU32(data + asset + 68);
+        if (type == kMaterialType) ++result.materials;
+        if (type != kTextureType) continue;
         const std::size_t page = RpakReadU32(data + asset + 16);
         const std::size_t offset = RpakReadU32(data + asset + 20);
         const std::size_t headSize = RpakReadU32(data + asset + 60);
