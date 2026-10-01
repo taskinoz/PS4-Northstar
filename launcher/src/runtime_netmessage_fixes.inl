@@ -225,6 +225,82 @@ std::int64_t GetEntByIndexGuard(void* vm) noexcept {
     }
     return g_getEntByIndex(vm);
 }
+
+// PC ReadUsercmd (server.dll): every command a client sends is checked after
+// it is read. Invalid (non-finite) angles, movement and camera vectors are
+// zeroed, and a command with bogus timing has everything that affects play
+// cleared. The PS4 CPlayer::ProcessUsercmds (server+0xb5950) reads up to 64
+// commands into a stack array with ReadUsercmd inlined, then passes the array
+// to CBasePlayer::ProcessUsercmds (server+0x43e0f0, called at server+0xbbb15:
+// player, cmds, numcmds, totalcmds, dropped, paused). That call is redirected
+// here, so every command is checked before it is used. The CUserCmd layout
+// matches PC's SV_CUserCmd for every field touched (command_number, tick_count
+// and command_time printed by net_sv_showusercmd at +0/+4/+8; the copy at
+// server+0x198a60 has PC's field widths through frameTime at +0x9c), with a
+// stride of 0x138.
+constexpr std::uintptr_t kProcessUsercmdsCallVa = 0xbbb15;
+constexpr std::uintptr_t kProcessUsercmdsVa = 0x43e0f0;
+constexpr std::size_t kUserCmdStride = 0x138;
+constexpr int kMaxUserCmds = 64;
+using ProcessUsercmdsFn = void (*)(void* player, char* cmds, int numcmds, int totalcmds, int dropped, int paused);
+ProcessUsercmdsFn g_processUsercmds = nullptr;
+std::uint64_t g_lastBogusLog = 0;
+
+struct UserCmdFields {
+    static constexpr std::size_t kTickCount = 0x04, kCommandTime = 0x08, kWorldViewAngles = 0x0c,
+        kLocalViewAngles = 0x1c, kAttackAngles = 0x28, kMove = 0x34, kButtons = 0x40, kMeleeTarget = 0x48,
+        kCameraPos = 0x70, kCameraAngles = 0x7c, kFrameTime = 0x9c;
+};
+
+void ResetIfInvalid(char* cmd, std::size_t offset) noexcept {
+    auto* v = reinterpret_cast<float*>(cmd + offset);
+    if (!__builtin_isfinite(v[0]) || !__builtin_isfinite(v[1]) || !__builtin_isfinite(v[2])) v[0] = v[1] = v[2] = 0.0f;
+}
+void Zero(char* cmd, std::size_t offset) noexcept {
+    auto* v = reinterpret_cast<float*>(cmd + offset);
+    v[0] = v[1] = v[2] = 0.0f;
+}
+
+void SanitizeUserCmd(char* cmd) noexcept {
+    using F = UserCmdFields;
+    ResetIfInvalid(cmd, F::kWorldViewAngles);
+    ResetIfInvalid(cmd, F::kAttackAngles);
+    ResetIfInvalid(cmd, F::kLocalViewAngles);
+    ResetIfInvalid(cmd, F::kCameraPos);
+    ResetIfInvalid(cmd, F::kCameraAngles);
+    ResetIfInvalid(cmd, F::kMove);
+    const float frameTime = *reinterpret_cast<const float*>(cmd + F::kFrameTime);
+    const std::uint32_t tickCount = *reinterpret_cast<const std::uint32_t*>(cmd + F::kTickCount);
+    const float commandTime = *reinterpret_cast<const float*>(cmd + F::kCommandTime);
+    // !(x > 0) also catches NaN, which PC's `x <= 0` lets through.
+    if (!(frameTime > 0.0f) || tickCount == 0 || !(commandTime > 0.0f)) {
+        // PC logs every one; once every 5 s is enough to see it happening.
+        const std::uint64_t now = sceKernelGetProcessTime();
+        if (now - g_lastBogusLog >= 5000000) {
+            g_lastBogusLog = now;
+            if (stringcommands::ConVarIntValue(netfixes::g_logConVar, 1) != 0)
+                LogFormat("[NorthstarPS4] exploit fix: ReadUsercmd: bogus cmd timing (tick_count: %u, frameTime: %f, "
+                          "commandTime: %f)\n", tickCount, static_cast<double>(frameTime), static_cast<double>(commandTime));
+        }
+        Zero(cmd, F::kWorldViewAngles);
+        Zero(cmd, F::kLocalViewAngles);
+        Zero(cmd, F::kAttackAngles);
+        Zero(cmd, F::kCameraAngles);
+        Zero(cmd, F::kMove);
+        Zero(cmd, F::kCameraPos);
+        *reinterpret_cast<std::uint32_t*>(cmd + F::kTickCount) = 0;
+        *reinterpret_cast<float*>(cmd + F::kFrameTime) = 0.0f;
+        *reinterpret_cast<std::uint32_t*>(cmd + F::kButtons) = 0;
+        *reinterpret_cast<std::uint32_t*>(cmd + F::kMeleeTarget) = 0;
+    }
+}
+
+void ProcessUsercmdsGuard(void* player, char* cmds, int numcmds, int totalcmds, int dropped, int paused) noexcept {
+    const int count = totalcmds < 0 ? 0 : (totalcmds > kMaxUserCmds ? kMaxUserCmds : totalcmds);
+    if (cmds)
+        for (int i = 0; i < count; ++i) SanitizeUserCmd(cmds + static_cast<std::size_t>(i) * kUserCmdStride);
+    g_processUsercmds(player, cmds, numcmds, totalcmds, dropped, paused);
+}
 } // namespace serverfixes
 
 // The binding is filled in on every SERVER VM creation (server+0x1d5600 writes
@@ -232,11 +308,8 @@ std::int64_t GetEntByIndexGuard(void* vm) noexcept {
 // into that code instead: `lea rdi, [rip+disp]` at server+0x1d574e loads
 // server+0x71b150, and its displacement is pointed at the guard. Installed
 // once server.prx is mapped, before any SERVER VM is created.
-void InstallServerExploitFixes(std::uintptr_t serverBase) noexcept {
-    using namespace serverfixes;
-    static bool done = false;
-    if (!serverBase || done) return;
-    done = true;
+namespace serverfixes {
+void InstallGetEntByIndexGuard(std::uintptr_t serverBase) noexcept {
     // lea rdi, [rip+0x5459fb]  ->  server+0x71b150
     constexpr std::uint8_t leaBytes[] = {0x48, 0x8d, 0x3d, 0xfb, 0x59, 0x54, 0x00};
     if (std::memcmp(reinterpret_cast<const void*>(serverBase + kGetEntByIndexLeaVa), leaBytes, sizeof(leaBytes)) != 0 ||
@@ -257,4 +330,39 @@ void InstallServerExploitFixes(std::uintptr_t serverBase) noexcept {
         return;
     }
     LogFormat("[NorthstarPS4] GetEntByIndex guard installed\n");
+}
+
+void InstallUsercmdChecks(std::uintptr_t serverBase) noexcept {
+    // call CBasePlayer::ProcessUsercmds (rel32 to server+0x43e0f0), and that
+    // function's prologue.
+    constexpr std::uint8_t callBytes[] = {0xe8, 0xd6, 0x25, 0x38, 0x00};
+    constexpr std::uint8_t targetBytes[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53,
+        0x48, 0x83, 0xec, 0x38};
+    if (std::memcmp(reinterpret_cast<const void*>(serverBase + kProcessUsercmdsCallVa), callBytes, sizeof(callBytes)) != 0 ||
+        std::memcmp(reinterpret_cast<const void*>(serverBase + kProcessUsercmdsVa), targetBytes, sizeof(targetBytes)) != 0) {
+        LogFormat("[NorthstarPS4] usercmd checks refused: server profile mismatch\n");
+        return;
+    }
+    const auto callNext = static_cast<std::int64_t>(serverBase + kProcessUsercmdsCallVa + 5);
+    const auto callRelative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&ProcessUsercmdsGuard)) - callNext;
+    if (callRelative < -2147483648LL || callRelative > 2147483647LL) {
+        LogFormat("[NorthstarPS4] usercmd checks refused: guard outside rel32 range\n");
+        return;
+    }
+    g_processUsercmds = reinterpret_cast<ProcessUsercmdsFn>(serverBase + kProcessUsercmdsVa);
+    const auto callDisplacement = static_cast<std::int32_t>(callRelative);
+    if (!WriteEngineCode(serverBase + kProcessUsercmdsCallVa + 1, &callDisplacement, sizeof(callDisplacement)))
+        LogFormat("[NorthstarPS4] usercmd checks: write failed\n");
+    else
+        LogFormat("[NorthstarPS4] usercmd checks installed\n");
+}
+} // namespace serverfixes
+
+// Once server.prx is mapped, before any SERVER VM is created.
+void InstallServerExploitFixes(std::uintptr_t serverBase) noexcept {
+    static bool done = false;
+    if (!serverBase || done) return;
+    done = true;
+    serverfixes::InstallGetEntByIndexGuard(serverBase);
+    serverfixes::InstallUsercmdChecks(serverBase);
 }

@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)] [ValidateSet('up','down','left','right','l1','r1','l2','r2','options','cross','circle','square','triangle')] [string] $Key, [int] $Times = 1, [int] $HoldMs = 120, [int] $GapMs = 350)
+param([Parameter(Mandatory)] [ValidateSet('up','down','left','right','l1','r1','l2','r2','options','cross','circle','square','triangle','move_forward','move_back','move_left','move_right')] [string] $Key, [int] $Times = 1, [int] $HoldMs = 120, [int] $GapMs = 350)
 # Sends a pad button to shadPS4 through its keyboard mapping (input_config/default.ini)
 # by posting key messages to the game window, without taking focus.
 Add-Type @'
@@ -13,7 +13,9 @@ public static class KeyPost {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
 }
 '@ -ErrorAction SilentlyContinue
-$vk = @{ up = 0x26; down = 0x28; left = 0x25; right = 0x27; l1 = 0x51; r1 = 0x55; l2 = 0x45; r2 = 0x4F; options = 0x0D; cross = 0x4E; circle = 0x42; square = 0x56; triangle = 0x43 }[$Key]
+$vk = @{ up = 0x26; down = 0x28; left = 0x25; right = 0x27; l1 = 0x51; r1 = 0x55; l2 = 0x45; r2 = 0x4F; options = 0x0D; cross = 0x4E; circle = 0x42; square = 0x56; triangle = 0x43
+    # Left stick (w/s/a/d in the default mapping).
+    move_forward = 0x57; move_back = 0x53; move_left = 0x41; move_right = 0x44 }[$Key]
 $extended = $Key -in 'up', 'down', 'left', 'right'
 $proc = Get-Process shadPS4 -ErrorAction Stop | Select-Object -First 1
 $windows = New-Object System.Collections.Generic.List[IntPtr]
