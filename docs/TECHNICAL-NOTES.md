@@ -5664,7 +5664,6 @@ Afterwards index 1 returned the player, 20000 and 16384.5 returned null, and the
   checks MAX_EDICTS.
 - CNetChan::ProcessMessages time limits: no strings left to find it by; PC only warns by
   default.
-- ReadUsercmd sanitising: server.prx, not yet located.
 - Also still open: the WriteBaselines overflow, NET_ReceiveDatagram, LZSS and UTF-8 parsing, Cbuf
   execution markers and IsRespawnMod.
 
@@ -5678,3 +5677,37 @@ module tracker's scan of the mod folders. That is the same signature as before t
 was turned on (one in roughly 20 boots since). With malloc locked, this points to a heap
 corruption detected at that point rather than two threads allocating at once. The cause is not
 yet found; all such crashes so far happened during `opendir`/`readdir` scans on the tracker.
+
+## Usercmd checks (2026-10-01)
+
+PC hooks server.dll's ReadUsercmd and checks each command after it is read:
+- non-finite world-view, attack, local-view, camera position, camera angle and move vectors are
+  zeroed;
+- a command with bogus timing (frameTime <= 0, tick_count 0 or command_time <= 0) has its
+  angles, movement, camera, buttons and melee target cleared.
+
+**Where the hook goes on PS4.** ReadUsercmd is inlined into CPlayer::ProcessUsercmds
+(server+0xb5950). That function holds both "CPlayer::ProcessUsercmds: too many cmds" and
+net_sv_showusercmd's "ReadUsercmd: from=%d ..." strings, and has no direct callers. It reads up
+to 64 commands (stride 0x138) into a stack array: each read starts with CUserCmd::operator=
+(server+0x198a60), and the array is read last to first. Afterwards it passes the whole array to
+CBasePlayer::ProcessUsercmds (server+0x43e0f0, six register arguments: player, cmds, numcmds,
+totalcmds, dropped, paused). That call, at server+0xbbb15, is redirected to a guard that checks
+every one of the totalcmds commands (at most 64) and then calls the original. The call and the
+target's prologue are checked before the patch.
+
+**Layout.** The fields match PC's SV_CUserCmd:
+- net_sv_showusercmd prints command_number, tick_count and command_time from +0/+4/+8;
+- the copy function moves PC's field widths, including the single bytes at +0x18 and +0x44 and
+  frameTime at +0x9c;
+- offsets: world-view angles +0x0c, local-view +0x1c, attack +0x28, move +0x34, buttons +0x40,
+  melee target +0x48, camera position +0x70, camera angles +0x7c.
+
+Differences from PC:
+- NaN timing counts as bogus; PC's `<= 0` comparisons let it through.
+- The bogus-timing line is logged at most every 5 s, under `ns_exploitfixes_log`.
+
+**Test.** In a hosted Kodai match, scripted left-stick input moved the player normally and
+nothing was flagged. No malformed commands were sent, so the blocking path itself has not been
+exercised. `Send-PadInput.ps1` gained `move_forward`, `move_back`, `move_left` and `move_right`
+(the left stick's w/s/a/d) for this.
