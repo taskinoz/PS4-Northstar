@@ -5549,3 +5549,49 @@ with the disk at 354% busy and queue length 4. Cold small-file reads took about 
 and `Sync-NorthstarProfile.ps1` hashes every source and destination file, so a sync did not
 finish in 20 minutes; the single changed file was copied by hand instead. One boot hang in this
 period fits that, but the earlier hangs on the same day were not measured.
+
+## Boot hangs and crashes traced to runtime races (2026-10-01)
+
+This corrects the entry above that called the boot hang and the `0x700000782c41` crash
+emulator faults not tied to the runtime, and its note that one hang fitted the slow drive.
+With the drive idle, 2 of 6 boots still hung. With the two skin packs disabled, 8 of 8 boots
+reached the lobby; with them enabled, 4 of 9. All four causes were in the runtime.
+Each test booted repeatedly with `Invoke-Stage2Iteration.ps1 -SkipBuild -SkipDeploy` (success
+pattern `menu_LobbyMenu menu opened`, 240 s timeout), recording lobby, hang or crash.
+
+1. **Mod localisation from the tracker thread.** `ProbeLocaliseInterface` called
+   `CLocalize::AddFile` from the module tracker while the engine's main thread loaded its own
+   files. PC adds mod files right after `CEngineVGui::Init`. The PS4 engine loads its stock
+   files at engine+0x1cd4af..0x1cd518 through the CLocalize pointer at engine+0x51e9bf0 (vtable
+   slot 9). The last load (`r1_%language%_lv.txt`, behind the flag at engine+0x3eef284) is a
+   33-byte block with no jumps into it. `runtime_localise_boot.inl` replaces it with a call that
+   makes the same load and then adds the mods' files. The patch goes in as soon as the tracker
+   sees the engine, and the log shows `mod localisation added (vgui init)` in every boot. If it
+   lands too late, the first host frame adds them. The tracker now only checks that the engine's
+   CLocalize is the profiled singleton.
+2. **musl malloc never locked.** The PRX links OpenOrbis's musl. Its malloc, free and `__lock`
+   lock only when `__libc.threads_minus_1` (`__libc+0xc`) is non-zero, and only musl's own
+   `pthread_create` raises it. This module's threads come from `scePthreadCreate` and its hooks
+   run on game threads, so the heap was unprotected; one boot crashed inside `malloc` (+0x615, a
+   free-list unlink). `Initialize` sets the field to 1. OpenOrbis builds `__wait` as a bare
+   `ret`, so the lock is a spinlock. stdio is unaffected: `FILE::lock` stays -1 without musl's
+   `pthread_create`.
+3. **Mod paks loaded from the tracker thread.** The rpak hook usually installs after the engine
+   has requested common.rpak, so a catch-up loop on the tracker loaded overdue mod paks itself,
+   and `Preload` paks loaded inside the engine's next request. Crashes at `0x700000782c41` (a
+   shadPS4 host address) hit the tracker or the game's pak thread right after such a load. Now
+   every mod pak loads in the hooked `LoadPakAsync`, after the engine's own request returns, as
+   PC loads Postload paks. The pak table (engine state 7 = loaded) says which are overdue.
+   `Preload` paks wait for common.rpak (a PS4 difference). All four mod paks now load on
+   Thread4, the game's pak thread.
+4. **`CollectModNames` shared static buffers** (enabled settings and `mod.json`). It is called
+   from the tracker, the main thread (localisation, VM creation) and UI natives. After change 1
+   one boot crashed in `memcmp` during the tracker's scan. It now takes a spinlock.
+
+Results, boots to the lobby with both skin packs enabled: 4 of 9 before; 7 of 8 after 1-3 with
+preload deferred but tracker loading kept; 7 of 8 again; 11 of 12 after change 3 (one `memcmp`
+crash); 12 of 12 after change 4. The CAR skin rendered in a Kodai match and the lobby showed the
+mods' localised footer text.
+
+The mid-line cut in hung logs is the emulator's unflushed log buffer, not the hang point.
+`LogFormat` uses `sceKernelDebugOutText`, not stdio.

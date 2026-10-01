@@ -121,8 +121,6 @@ If needed, supply the matching record explicitly with `-BuildInfo .\dist\northst
 
 Launch the game's `eboot.bin` through shadPS4. In this workspace the log is `C:\Users\tristan\AppData\Roaming\shadPS4\log\shad_log.txt`. Inspect only the current boot's lines. `runtime manifest generated` and `mod file served` prove progress, not successful startup. Look for `FatalError` and `UI SCRIPT COMPILE ERROR`. Even `UI lifecycle hook installed` does not prove the callbacks executed; successful dispatch logs each `UI Before:` and `UI After:` name and ends with `UI lifecycle completed`. A callback a mod declares but never defines is logged as `callback not found` and skipped, which is what PC does. Map validation must still be performed separately.
 
-Occasionally a boot stops on the Respawn logo with the loading spinner turning, or shadPS4 closes with `Unhandled Exception code 0xc0000005 at 0x700000782c41` in the log. Both are intermittent and still being traced; close shadPS4 and launch again.
-
 ## Mod settings and authentication
 
 Settings use the PC `Name -> Version -> bool` format. On PS4, saved changes live in guest `/data/northstar_ps4/enabledmods.json` because `/app0` is read-only. That saved file overrides `R2Northstar/enabledmods.json` on subsequent boots. Its host location depends on the emulator's data mount; do not confuse it with the installation profile.
