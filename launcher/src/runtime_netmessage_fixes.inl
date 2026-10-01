@@ -140,9 +140,12 @@ bool WriteEngineData(std::uintptr_t address, std::uintptr_t value) noexcept {
 }
 } // namespace netfixes
 
+void InstallLzssFix(std::uintptr_t engineBase) noexcept;  // below
+
 void InstallNetMessageFixes(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
     using namespace netfixes;
     (void)engineSize;
+    InstallLzssFix(engineBase);
     g_engineBase = engineBase;
     alignas(16) static std::uint8_t logStorage[0x90]{};
     g_logConVar = atlasserver::RegisterConVar(logStorage, "ns_exploitfixes_log", "1", "Whether to log whenever ExploitFixes.cpp blocks/corrects something");
@@ -447,4 +450,46 @@ void InstallClientUnsafeFuncStubs(std::uintptr_t clientBase) noexcept {
 }
 void InstallServerUnsafeFuncStubs(std::uintptr_t serverBase) noexcept {
     if (serverBase) unsafefuncs::Install<true>(serverBase, unsafefuncs::kServerSites, "server.prx");
+}
+
+// PC exploitfixes_lzss.cpp: CLZSS::SafeUncompress rewritten so a malformed
+// compressed payload cannot make it copy from before the start of the output.
+// The PS4 engine's copy (engine+0x20f190; static, input in rdi, output in rsi,
+// buffer size in edx) checks the header, the declared size and the output
+// bound, but not that a back-reference lies within what has been written. Its
+// entry is replaced by a jump to this rewrite, which is PC's, so the original
+// is never run.
+namespace lzssfix {
+constexpr std::uintptr_t kSafeUncompressVa = 0x20f190;
+
+// The engine's calling convention: input, output, buffer size (no `this`).
+unsigned int SafeUncompress(const unsigned char* input, unsigned char* output, unsigned int bufferSize) noexcept {
+    return lzss::SafeUncompress(input, output, bufferSize);
+}
+} // namespace lzssfix
+
+void InstallLzssFix(std::uintptr_t engineBase) noexcept {
+    using namespace lzssfix;
+    // push rbp; push r14; push rbx; xor eax, eax; test rdi, rdi; je ...;
+    // cmp dword [rdi], "LZSS"
+    constexpr std::uint8_t entry[] = {0x55, 0x41, 0x56, 0x53, 0x31, 0xc0, 0x48, 0x85, 0xff, 0x0f, 0x84, 0xd5, 0x00, 0x00,
+        0x00, 0x81, 0x3f, 0x4c, 0x5a, 0x53, 0x53};
+    const auto function = engineBase + kSafeUncompressVa;
+    if (std::memcmp(reinterpret_cast<const void*>(function), entry, sizeof(entry)) != 0) {
+        LogFormat("[NorthstarPS4] LZSS fix refused: engine profile mismatch\n");
+        return;
+    }
+    const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&SafeUncompress)) -
+        static_cast<std::int64_t>(function + 5);
+    if (relative < -2147483648LL || relative > 2147483647LL) {
+        LogFormat("[NorthstarPS4] LZSS fix refused: rewrite outside rel32 range\n");
+        return;
+    }
+    std::uint8_t jump[5] = {0xe9};
+    const auto displacement = static_cast<std::int32_t>(relative);
+    std::memcpy(jump + 1, &displacement, sizeof(displacement));
+    if (WriteEngineCode(function, jump, sizeof(jump)))
+        LogFormat("[NorthstarPS4] LZSS fix installed\n");
+    else
+        LogFormat("[NorthstarPS4] LZSS fix: write failed\n");
 }

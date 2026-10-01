@@ -17,6 +17,7 @@
 #include "northstar_ps4/audio_override.h"
 #include "northstar_ps4/mod_concommands.h"
 #include "northstar_ps4/banlist.h"
+#include "northstar_ps4/lzss.h"
 #include <ctime>
 #include "northstar_ps4/particle_manifest.h"
 #include "northstar_ps4/datatable_csv.h"
