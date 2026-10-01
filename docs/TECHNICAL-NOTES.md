@@ -5526,3 +5526,26 @@ runtime change.
 A retry booted normally each time. Next: boot repeatedly with Northstar.Custom's paks disabled,
 then enabled, to see whether the crash follows mod-rpak loading.
 
+## Password prompt on a pad; user checks (2026-10-01)
+
+The user confirmed on a real pad that Mod Settings and Custom Match Settings work, and heard
+the Kraber sound pack's replaced reload sounds. They could not reach Connect on the join
+password prompt (`connect_password.menu`, Northstar.Client): the password box and the button
+have no navigation links, and PS4 focus moves only along explicit links. The Northstar.PS4
+KeyValues patch `keyvalues/resource/ui/menus/connect_password.menu` adds `navDown`/`navUp`
+between them (root key `mods_browse.menu`, copied from the source file).
+
+Checked with scripted input:
+- the box has focus on open, down reaches Connect and up returns;
+- Cross opens the system keyboard; three letters and Done showed `***`, then down reached
+  Connect.
+Connect itself was not pressed, as no server was selected. Closing the keyboard with Circle
+from the scripted input also backed out of the prompt; that has not been checked with a real
+pad.
+
+**Slow game drive.** The game folder is on D:, a 1 TB laptop hard disk (HGST
+HTS721010A9E630). From 13:01 that day the R5Reloaded launcher was reading about 22 MB/s from it,
+with the disk at 354% busy and queue length 4. Cold small-file reads took about 115 ms each,
+and `Sync-NorthstarProfile.ps1` hashes every source and destination file, so a sync did not
+finish in 20 minutes; the single changed file was copied by hand instead. One boot hang in this
+period fits that, but the earlier hangs on the same day were not measured.

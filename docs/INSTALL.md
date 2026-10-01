@@ -135,7 +135,7 @@ Mods that servers require are downloaded, as on PC, when they are on Northstar's
 
 Tested with Thunderstore packages (2026-10-01): the smooshie CAR UwU and Volt UwU weapon skins (converted with `-ConvertRpaksForPs4`, shown in first person and on the lobby pilot), Rwyn's Kraber reload sound pack and S2.SpeedometerV2 (a HUD script mod with Mod Settings entries).
 
-**Menus on a controller.** Mods and Mod Settings (Northstar's menus) work with the pad: the d-pad moves between entries, and L1/R1 page through long lists. Cross on a text box (a setting value, or Search) opens the system keyboard; a Mod Settings value applies when you move off the box, as on PC. In Private Match → Settings, choosing a number setting (score limit, time limit…) opens the keyboard straight away.
+**Menus on a controller.** Mods and Mod Settings (Northstar's menus) work with the pad: the d-pad moves between entries, and L1/R1 page through long lists. Cross on a text box (a setting value, or Search) opens the system keyboard; a Mod Settings value applies when you move off the box, as on PC. In Private Match → Settings, choosing a number setting (score limit, time limit…) opens the keyboard straight away. When a server asks for a password, Cross on the box opens the keyboard; after Done, press down to reach Connect.
 
 ### Hosting a private match for other players
 
