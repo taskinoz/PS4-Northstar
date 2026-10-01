@@ -12,7 +12,8 @@
 //
 // PC hooks the same call and loads each enabled mod's paks around it: `Preload`
 // entries before the engine's own load, `Postload` entries straight after the
-// vanilla pak they name. That is mirrored here.
+// vanilla pak they name. That is mirrored here, except that `Preload` entries
+// wait for common.rpak (see LoadModRpaks).
 //
 // The hook is on the loader's two call sites, `+0x78c0` and `+0x7ed1`, rewritten
 // with the same rel32 patcher the lifecycle hooks use. Two other approaches
@@ -59,6 +60,7 @@ constexpr std::int32_t kInvalidPakHandle = -1;
 // here, so the same value is used rather than echoing the engine's own flags,
 // whose meaning may be specific to the pak being loaded.
 constexpr std::int32_t kModRpakFlags = 7;
+constexpr const char* kPreloadAfterPak = "common.rpak";
 
 using RtechLoadPakFn = std::int32_t (*)(const char*, void*, std::int32_t);
 using RtechOpenFileFn = int (*)(const char*, void*);
@@ -217,8 +219,8 @@ int ModOpenRtechStarpak(const char* path, void* sizeOut) noexcept {
     return g_originalRtechOpenFile(path, sizeOut);
 }
 
-// `requested` is null for the preload pass, which runs before the engine's own
-// load; otherwise it is the pak that just finished loading.
+// `requested` is the pak that just finished loading, or null for the pass
+// before the engine's own load, which loads nothing on PS4 (see `due`).
 void LoadModRpaks(const char* requested, void* allocator) noexcept {
     if (!g_modRpakHookReady || g_modRpaks.empty()) return;
     void* const chosen = allocator ? allocator : g_rpakAllocator;
@@ -228,8 +230,11 @@ void LoadModRpaks(const char* requested, void* allocator) noexcept {
     if (g_loadingModRpaks.test_and_set()) return;
     for (auto& pak : g_modRpaks) {
         if (pak.handle != kInvalidPakHandle) continue;
-        const bool due = requested ? (!pak.preload && RpakNameMatches(pak.after, requested))
-                                   : pak.preload;
+        // PS4 difference: Preload paks load once common.rpak has, not inside
+        // the engine's next pak request. Loaded there, two 2048x2048 skin
+        // packs left about half of all boots hung or crashed (2026-10-01).
+        const bool due = requested &&
+            RpakNameMatches(pak.preload ? std::string(kPreloadAfterPak) : pak.after, requested);
         if (!due) continue;
         pak.handle = g_originalLoadPak(pak.request.c_str(), chosen, kModRpakFlags);
         LogFormat("[NorthstarPS4] mod rpak load: %s after=%s handle=%d\n",

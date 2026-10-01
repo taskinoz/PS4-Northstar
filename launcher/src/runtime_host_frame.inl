@@ -23,6 +23,10 @@ bool g_hostFrameContextSeen[3]{};
 
 void RuntimeHostFrameUpdate(double currentTime, float frameTime) noexcept {
     g_originalHostFrameUpdate(currentTime, frameTime);
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST) && defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && \
+    defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
+    AddBootModLocalisationIfMissed();
+#endif
 
     // ScriptContext values are SERVER=0, CLIENT=1 and UI=2. The async API
     // uses Northstar's context masks instead, hence the explicit mapping.

@@ -42,7 +42,8 @@ const char* SystemLocalisationLanguage() noexcept {
 }
 
 // Adds the Localisation files of every enabled mod that have not been added
-// yet. Main thread (or the module tracker at boot) only.
+// yet. Game main thread only: at boot from the engine's vgui init
+// (runtime_localise_boot.inl), later from NSReloadMods.
 void AddModLocalisationFiles(std::int32_t& total, std::int32_t& loaded) noexcept {
     if (!g_localiseAddFile || !g_localiseThis) return;
     // AddFile routes through vtable slot 9 (its own address) when this+0x48 is

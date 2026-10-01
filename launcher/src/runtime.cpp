@@ -54,6 +54,19 @@
 #include "northstar_ps4/mod_rpaks.h"
 #include <vector>
 
+// musl's internal libc state (src/internal/libc.h in the musl the OpenOrbis
+// toolchain ships): its malloc locks only while threads_minus_1 is non-zero.
+// Hidden in libc.a, so it resolves within this module's static link. The
+// field offsets match the `cmp [__libc+0xc], 0` in this build's malloc.
+struct MuslLibcState {
+    int canDoThreads;
+    int threaded;
+    int secure;
+    volatile int threadsMinus1;
+};
+extern "C" __attribute__((visibility("hidden"))) MuslLibcState __libc;
+static MuslLibcState& g_muslLibc = __libc;
+
 namespace northstar::ps4 {
 namespace {
 constexpr std::size_t kMaxModules = 256;
@@ -2188,6 +2201,10 @@ std::uint64_t ModSecondarySize(void* self, const char* fileName, const char* pat
 #include "runtime_concommands.inl"
 #include "runtime_chat_client.inl"
 #include "runtime_audio.inl"
+#if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
+// After runtime_mod_reload.inl and WriteEngineCode (runtime_concommands.inl).
+#include "runtime_localise_boot.inl"
+#endif
 #endif
 #include "runtime_server_vm.inl"
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
@@ -2601,13 +2618,25 @@ void ProbeLocaliseInterface(OrbisKernelModule localizeHandle,
             vptrInModule ? 1 : 0, slotInModule ? 1 : 0);
         return;
     }
-    g_localiseAddFile = reinterpret_cast<AddFileFn>(addFileSlot);
-    g_localiseThis = thisAddr;
+    // The mods' files are added on the game's thread (runtime_localise_boot.inl):
+    // calling AddFile from this thread raced the engine's own localisation
+    // loading and hung boots. Publishing the validated AddFile lets the first
+    // host frame add them if the engine hook was refused.
+    if (!g_localiseAddFile) {
+        g_localiseThis = thisAddr;
+        g_localiseAddFile = reinterpret_cast<AddFileFn>(addFileSlot);
+    }
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    LogFormat("[NorthstarPS4] localise probe complete engineLocalizeMatches=%d\n",
+        BootLocalizeIs(thisAddr) ? 1 : 0);
+#else
+    // Diagnostic builds without the runtime manifest keep the old direct call.
     std::int32_t totalFiles = 0;
     std::int32_t loadedFiles = 0;
     AddModLocalisationFiles(totalFiles, loadedFiles);
     LogFormat("[NorthstarPS4] localise probe complete files=%d loaded=%d\n",
         totalFiles, loadedFiles);
+#endif
 }
 #endif
 void* ModuleTracker(void*) noexcept {
@@ -2703,6 +2732,11 @@ void* ModuleTracker(void*) noexcept {
                     if (info.segmentCount > 0) {
                         engineBase = reinterpret_cast<std::uintptr_t>(info.segmentInfo[0].address);
                         engineSize = info.segmentInfo[0].size;
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST) && defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && \
+    defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
+                        // Before the engine reaches vgui init, if possible.
+                        InstallBootLocalisation(engineBase, engineSize);
+#endif
                     }
                 }
                 if (isClient && info.segmentCount > 0) {
@@ -2788,6 +2822,14 @@ void* ModuleTracker(void*) noexcept {
 
 bool Initialize(InitStage stage) noexcept {
     if (stage != InitStage::ModuleLoaded) return false;
+    // musl (the OpenOrbis libc linked into this PRX) locks malloc only when
+    // __libc.threads_minus_1 is non-zero, and only its own pthread_create
+    // raises it. This module's threads come from scePthreadCreate and its hooks
+    // run on the game's threads, so malloc ran unlocked from several threads at
+    // once: boots crashed inside malloc or hung spinning on a corrupted free
+    // list (2026-10-01). OpenOrbis builds __wait as a bare return, so the lock
+    // this turns on is a spinlock.
+    if (g_muslLibc.threadsMinus1 == 0) g_muslLibc.threadsMinus1 = 1;
     OrbisPthread thread{};
     const int result = scePthreadCreate(&thread, nullptr, ModuleTracker, nullptr, "NorthstarPS4");
     if (result != 0) {
