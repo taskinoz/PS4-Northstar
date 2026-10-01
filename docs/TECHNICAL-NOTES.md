@@ -5760,3 +5760,48 @@ mod_concommands, mod_dependencies, pdata_convert, regex_lite, startup_args (plus
 
 **Not applicable:** PC's UTF-8 parser fix guards data from Origin open invites and communities,
 which the PS4 port does not use.
+
+## Save files, mod ConVar flags and download staging (2026-10-02)
+
+**Save files** (PC `mods/modsavefiles.cpp`).
+- **Sizes.** shadPS4's `stat` reported st_size 1 for a 25-byte save. NSLoadFile read one byte
+  and called it a success, NSGetFileSize was wrong and the quota undercounted. Sizes now come from
+  `open` + `lseek(SEEK_END)`; `stat` is only used for the file type.
+- **Load timing.** Results reach NSHandleLoadResult on a later frame, as on PC, drained per bound
+  VM in the host frame. They used to wait for the next script code callback. The queue is locked,
+  because SERVER scripts also run on the engine's worker threads (Thread4/5).
+- **Limits.** Loads go up to the folder limit (the 1 MB cap is gone). `-maxfoldersize` (bytes) in
+  ns_startup_args.txt sets the limit and MAX_FOLDER_SIZE; the user-data copy wins.
+- **Paths.** SavePathSafe follows PC's weakly_canonical containment rather than rejecting `.`,
+  `..` and empty segments outright. Backslashes and colons stay refused.
+- **Test.** A UI probe saved through `./probe/notes.txt`, checked NSDoesFileExist and
+  NSGetTotalSpaceRemaining (51,199 KB), loaded the file through `probe/../probe/notes.txt` (all 25
+  bytes) and saw a missing file reported as failed.
+
+**Mod ConVar flags.** Mod ConVars were registered with flags 0, so settings mods' values were
+never saved. They now get mod.json's Flags:
+- a number is taken as is (S2.SpeedometerV2: 16777232 = ARCHIVE_PLAYERPROFILE | 1 << 4);
+- a string is parsed as names with PC's table;
+- the catalog used to drop a numeric Flags member and now keeps its digits.
+
+On PS4 the profile is `/savedata0/profile.cfg`; under shadPS4 it is user 1004's savedata here,
+`home/1004/savedata/CUSA04013/CONFIG/profile.cfg`. The engine reads it during host init
+(engine+0x10d720, from 0x114100). That is after the runtime registers mod ConVars, so saved
+values apply: `s2_speedometer_fade 0` was read back as 0 after a reboot.
+
+The engine writes the profile when `savePlayerConfig` ("Store player settings.", callback
+engine+0x120d00) sets the flag at engine+0x3eefe00, which the host frame (engine+0x111fd0)
+checks. PC instead writes archived ConVars at shutdown, which a PS4 game rarely gets. The Mod
+Settings override therefore runs `savePlayerConfig` when the menu closes; closing it after a
+change wrote the new value.
+
+**Mod download staging.** The extractor used to delete the mod's final folder and extract into
+it, so a failed or cancelled download of an installed version removed the working copy. Now:
+1. The archive is extracted into `.staging`.
+2. When it is complete, any existing copy moves to `.replaced`.
+3. Staging is renamed into place, then the old copy is deleted.
+4. If the rename fails, the old copy is restored.
+
+A fresh install of lexi.lexire125 1.0.7 through this path matched the previous copy file for
+file. shadPS4 logs the temporary `.download.zip` as unlinked but the host file stays; the next
+download truncates it.
