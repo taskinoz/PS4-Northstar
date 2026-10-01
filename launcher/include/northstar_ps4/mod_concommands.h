@@ -74,6 +74,20 @@ inline int ParseConVarFlagsString(const std::string& text, std::vector<std::stri
     return flags;
 }
 
+// A mod.json ConVar's "Flags", as PC's Mod constructor reads it: a number is
+// taken as is, a string is parsed as flag names. `text` is the member as the
+// catalog stored it (digits for a number).
+inline int ParseModConVarFlags(const char* text) {
+    if (!text || !*text) return 0;
+    const char* p = text;
+    if (*p == '-') ++p;
+    bool digits = *p != '\0';
+    for (const char* q = p; *q; ++q)
+        if (*q < '0' || *q > '9') digits = false;
+    if (digits) return static_cast<int>(std::strtol(text, nullptr, 10));
+    return ParseConVarFlagsString(text);
+}
+
 // Commands in order; `warnings` gets PC's skip messages.
 inline std::vector<ModConCommand> ParseModConCommands(const char* json, std::vector<std::string>* warnings = nullptr) {
     std::vector<ModConCommand> out;

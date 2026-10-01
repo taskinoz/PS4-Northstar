@@ -887,6 +887,7 @@ void function OnModMenuClosed()
 	DeregisterButtonPressedCallback( MOUSE_WHEEL_DOWN, OnScrollDown )
 	DeregisterButtonPressedCallback( MOUSE_LEFT, OnClick )
 	PS4ModSettings_DeregisterPad() // PS4
+	ClientCommand( "savePlayerConfig" ) // PS4: keep mod settings across restarts
 
 	file.scrollOffset = 0
 	UpdateListSliderPosition()

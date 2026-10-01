@@ -254,8 +254,13 @@ inline bool ParseModMetadata(const char* json, ModInfo& out) noexcept {
                             sizeof(info.defaultValue));
                     }
                     const char* const fv = JsonFindMember(elem, "Flags");
-                    if (fv != nullptr) {
-                        JsonExtractString(fv, info.flags, sizeof(info.flags));
+                    if (fv != nullptr && !JsonExtractString(fv, info.flags, sizeof(info.flags))) {
+                        // PC also takes a number ("Flags": 16777232); keep its digits.
+                        const char* n = JsonSkipWs(fv);
+                        std::size_t k = 0;
+                        while ((*n == '-' || (*n >= '0' && *n <= '9')) && k + 1 < sizeof(info.flags))
+                            info.flags[k++] = *n++;
+                        info.flags[k] = '\0';
                     }
                     ++out.conVarCount;
                 }

@@ -42,6 +42,20 @@ int main() {
     warnings.clear();
     CHECK(ParseModConCommands(R"({"ConCommands": {}})", &warnings).empty() && warnings.size() == 1);
 
+    // ConVar Flags: a number as is, a string as names.
+    if (ParseModConVarFlags("16777232") != 16777232) return std::puts("numeric ConVar flags"), 1;
+    if (ParseModConVarFlags("ARCHIVE_PLAYERPROFILE") != (1 << 24)) return std::puts("named ConVar flags"), 1;
+    if (ParseModConVarFlags("REPLICATED | CHEAT") != ((1 << 13) | (1 << 14))) return std::puts("combined ConVar flags"), 1;
+    if (ParseModConVarFlags("") != 0 || ParseModConVarFlags(nullptr) != 0) return std::puts("empty ConVar flags"), 1;
+    {
+        // The catalog keeps a numeric Flags member as digits.
+        ModInfo info{};
+        const char* json = R"({"Name":"X","Version":"1.0.0","ConVars":[{"Name":"a","DefaultValue":"1","Flags":16777232},)"
+                           R"({"Name":"b","DefaultValue":"0","Flags":"ARCHIVE_PLAYERPROFILE"}]})";
+        if (!ParseModMetadata(json, info) || info.conVarCount != 2) return std::puts("catalog ConVars"), 1;
+        if (ParseModConVarFlags(info.conVars[0].flags) != 16777232) return std::puts("catalog numeric flags"), 1;
+        if (ParseModConVarFlags(info.conVars[1].flags) != (1 << 24)) return std::puts("catalog named flags"), 1;
+    }
     std::puts("mod_concommands tests passed");
     return 0;
 }

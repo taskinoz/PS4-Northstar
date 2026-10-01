@@ -63,7 +63,11 @@ script = replace_once(script,
 script = replace_once(script,
     '\tDeregisterButtonPressedCallback( MOUSE_LEFT, OnClick )' + NL,
     '\tDeregisterButtonPressedCallback( MOUSE_LEFT, OnClick )' + NL +
-    '\tPS4ModSettings_DeregisterPad() // PS4' + NL)
+    '\tPS4ModSettings_DeregisterPad() // PS4' + NL +
+    # PC writes archived ConVars to the profile when the game shuts down; a
+    # PS4 game is usually just closed, so the changed settings are stored now
+    # (the engine's own "Store player settings." command).
+    '\tClientCommand( "savePlayerConfig" ) // PS4: keep mod settings across restarts' + NL)
 
 PS4_CODE = r'''
 

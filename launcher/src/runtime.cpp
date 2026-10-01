@@ -942,11 +942,14 @@ void RegisterModConVars(const ModInfo& mod, std::int32_t& count,
         std::strncpy(storage->name, info.name, sizeof(storage->name) - 1);
         std::strncpy(storage->value, info.defaultValue, sizeof(storage->value) - 1);
         std::snprintf(storage->help, sizeof(storage->help), "Northstar PS4 mod convar (%s)", mod.name);
-        constructor(storage->object, storage->name, storage->value, 0, storage->help, nullptr);
+        // PC passes mod.json's Flags (a number, or names such as
+        // ARCHIVE_PLAYERPROFILE, which saves the value in profile.cfg).
+        const int flags = mods::ParseModConVarFlags(info.flags);
+        constructor(storage->object, storage->name, storage->value, flags, storage->help, nullptr);
         void* registered = findVar(cvar, storage->name);
         LogFormat(
-            "[NorthstarPS4] mod convar name=%s default=%s flags=%s result=%p success=%d\n",
-            storage->name, storage->value, info.flags, registered,
+            "[NorthstarPS4] mod convar name=%s default=%s flags=%s (0x%x) result=%p success=%d\n",
+            storage->name, storage->value, info.flags, flags, registered,
             registered == storage->object ? 1 : 0);
         ++count;
     }
