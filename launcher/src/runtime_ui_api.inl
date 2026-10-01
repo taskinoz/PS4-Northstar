@@ -272,6 +272,19 @@ int AuthResult(void* vm) {
 // no cursor to report, and the declared return type is "vector ornull", so
 // null is the honest answer rather than an invented coordinate.
 int CursorPosition(void*) { return 0; }
+// PC materialsystem/nscustomdxbuffer.cpp: NSRegisterCustomDXBufferForGUID,
+// NSDeregisterCustomDXBufferForGUID, NSUpdateCustomDXBufferForGUID and
+// NSBindTextureToMaterial write a Direct3D 11 constant buffer and texture
+// bindings for an RPak material. The PS4 renders through GNM, which has no
+// such buffer, so these are not implemented. They are registered anyway, so
+// a mod that calls them still compiles and loads; each call does nothing and
+// returns null, and the first one says so in the log.
+int CustomDxBufferUnsupported(void*) {
+    static bool warned = false;
+    if (!warned) LogFormat("[NorthstarPS4] custom DX buffer natives (NSBindTextureToMaterial etc.) are not supported on PS4; calls do nothing\n");
+    warned = true;
+    return 0;
+}
 // CLIENT-context natives.
 //
 // NSChatWrite, NSChatWriteLine and NSChatWriteRaw: PC's LocalChatWriter,
@@ -655,6 +668,12 @@ const Registration registrations[] = {
     {"NSChatWrite", "void", "int context, string text", ChatWrite, kCtxClient},
     {"NSChatWriteLine", "void", "int context, string text", ChatWriteLine, kCtxClient},
     {"NSChatWriteRaw", "void", "int context, string text", ChatWriteRaw, kCtxClient},
+    {"NSUpdateCustomDXBufferForGUID", "void", "string rPakMaterialGUID, array NSCustomBufferPerMaterialData",
+        CustomDxBufferUnsupported, kCtxClient},
+    {"NSRegisterCustomDXBufferForGUID", "void", "string rPakMaterialGUID", CustomDxBufferUnsupported, kCtxClient},
+    {"NSDeregisterCustomDXBufferForGUID", "void", "string rPakMaterialGUID", CustomDxBufferUnsupported, kCtxClient},
+    {"NSBindTextureToMaterial", "void", "string rPakMaterialGUID, string rPakTextureGUID, int shaderBindingSlot",
+        CustomDxBufferUnsupported, kCtxClient},
     {"NSSendMessage", "void", "string message, bool isIngame, bool isTeam", SendMessage, kCtxClient},
     // Same name as the CLIENT native above, and deliberately a separate
     // entry: PC declares NSSendMessage twice, once per context, with
