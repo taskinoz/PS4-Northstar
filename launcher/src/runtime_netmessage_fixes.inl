@@ -124,6 +124,28 @@ bool MoveProcess(void* message) noexcept {
     return g_moveProcess(message);
 }
 
+// PC Cbuf_HasRoomForExecutionMarkers / CBaseClientState_ProcessStringCmd. The
+// client's ProcessStringCmd (engine+0x155e80, slot 2 of the vtable at
+// engine+0x3a25a0) wraps a remote server's command in two execution markers
+// so that only FCVAR_SERVER_CAN_EXECUTE commands run: m_bRestrictServerCommands
+// (+0xfac4) is set to 1 by the client state's constructor (engine+0x77247)
+// and never cleared, so PC's IsRespawnMod hook has nothing to do here. When
+// the marker list (count at engine+0x3e78fe0) is past 2048, the PS4 engine
+// drops its oldest marker, and a dropped "enable" marker would let the
+// commands after it run unrestricted. As on PC, a command that leaves no room
+// for its two markers is ignored instead.
+constexpr std::uintptr_t kExecutionMarkerCountVa = 0x3e78fe0;
+constexpr int kMaxExecutionMarkers = 2048;
+BufferFn g_clientStringCmd = nullptr;
+
+bool ClientStringCmd(void* clientState, void* message) noexcept {
+    if (*reinterpret_cast<const std::int32_t*>(g_engineBase + kExecutionMarkerCountVa) + 2 >= kMaxExecutionMarkers) {
+        Blocked("server string command (no room for execution markers)");
+        return true;  // ignored, as on PC; false would drop the connection
+    }
+    return g_clientStringCmd(clientState, message);
+}
+
 struct SlotHook {
     const char* message;
     std::uintptr_t vtableVa;
@@ -168,6 +190,8 @@ void InstallNetMessageFixes(std::uintptr_t engineBase, std::size_t engineSize) n
         {"net_SetConVar", 0x3afb68, 4, 0x2eef30, reinterpret_cast<void*>(&SetConVarProcess),
             reinterpret_cast<void**>(&g_setConVarProcess)},
         {"clc_Move", 0x3afe10, 4, 0x2ef130, reinterpret_cast<void*>(&MoveProcess), reinterpret_cast<void**>(&g_moveProcess)},
+        {"client ProcessStringCmd", 0x3a25a0, 2, 0x155e80, reinterpret_cast<void*>(&ClientStringCmd),
+            reinterpret_cast<void**>(&g_clientStringCmd)},
     };
     // Every vtable's GetName (slot 11) must be the function that names it.
     const struct { std::uintptr_t vtableVa, getNameVa; } names[] = {

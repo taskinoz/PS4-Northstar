@@ -5917,3 +5917,26 @@ to `ns_baseline_overflow_thunk` (runtime.cpp, global asm):
 - the host frame then disconnects that client with PC's message.
 
 The fix installs, but no overflow has been triggered.
+
+## Server-sent console commands on the PS4 client (2026-10-02)
+
+PC Northstar hooks IsRespawnMod so that `m_bRestrictServerCommands` is set. A remote server's
+net_StringCmd then runs only commands flagged FCVAR_SERVER_CAN_EXECUTE. PC also ignores a command
+when two more execution markers would not fit.
+
+On PS4:
+- The client's ProcessStringCmd is engine+0x155e80, slot 2 of the vtable at engine+0x3a25a0. It
+  was found through the execution-marker command `[$&*,`]` (format `;%s %c %d;`); the function that
+  adds markers is engine+0xef330 and their count is at engine+0x3e78fe0. Unless the command buffer
+  is unrestricted, it wraps the command text in marker 'a' and marker 'b'. The command buffer is
+  unrestricted when `[this+0xfac4]` is 0 or a local server is active (`[engine+0x3818688] >= 2`).
+- `[this+0xfac4]` is set to 1 in the client state's constructor (engine+0x77247) and nothing
+  writes 0. So a remote server is always restricted, and IsRespawnMod has no PS4 counterpart to
+  fix.
+- Past 0x800 markers, the add function drops the oldest marker. A dropped 'a' marker would leave the
+  commands after it unrestricted. The slot now goes through `ClientStringCmd`: when
+  count + 2 >= 2048 the command is ignored and the guard returns true, as on PC (false would drop
+  the connection).
+
+The hook installs (netmessage fixes 7/7) and the lobby loads. Only a remote server reaches the
+restricted path, so it is untested in play.
