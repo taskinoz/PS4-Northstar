@@ -5805,3 +5805,51 @@ it, so a failed or cancelled download of an installed version removed the workin
 A fresh install of lexi.lexire125 1.0.7 through this path matched the previous copy file for
 file. shadPS4 logs the temporary `.download.zip` as unlinked but the host file stays; the next
 download truncates it.
+
+## RPak survey, materials-only paks and the heap arena (2026-10-02)
+
+**What Thunderstore paks contain.** About 30 paks from 13 packages were read: weapon skins, the
+Archon titan, an Octane knife, a reticle framework, TF1 ammo counters, a restore mod and the
+Resonance Rifle. None is compressed (header flags 0). One sets bit 0 (HAS_MODULE in RePak's
+naming) on a datatable-only pak. Asset types:
+- txtr v8 (textures);
+- matl v12 (materials);
+- uimg v10 (UI image atlas; Archon's);
+- dtbl v0 (datatable).
+None of these samples has model assets in a pak; model mods ship .mdl files loose or in VPKs.
+The converter converted every pak except the flagged one. "Compressed RPaks" are therefore not
+what blocks current mods; the content types are.
+
+**Materials-only paks.** Discovery accepted only paks with textures, so a skin whose materials
+live in their own pak (the Octane knife's `ocanfh.rpak`, two matl, beside `ocanfh_preload.rpak`
+with 13 textures) was refused at boot. Paks with only PS4-layout textures and/or materials are
+now accepted (tests/rpaks.cpp).
+
+**Load order.** Preload and Postload paks both become due at common.rpak on PS4, and they loaded
+in name order, so `ocanfh.rpak` went in before its textures and that boot stalled. A batch now
+loads its Preload paks first.
+
+**Conversion failures.** `Convert-NorthstarModRpaks.ps1` used to abort the whole profile sync on
+one pak it could not convert. It now skips that pak with a warning; the runtime refuses the
+unconverted copy.
+
+**Heap arena.** One knife-pak boot crashed right after this module's mmap returned 0x23af7c000
+while a game thread logged "Unable to map 0xc000 bytes at address 0x23af7c000". The game's
+allocator frees a range (sceKernelMunmap) and maps it again at the same address
+(sceKernelMapNamedDirectMemory with in_addr). Under shadPS4, an mmap(0, ...) from another thread
+in between can be given that range.
+
+musl maps memory that way whenever its heap grows and for every allocation above its mmap
+threshold. Anonymous mmaps tallied over 19 boots came to about 5 MB per boot, almost all from
+this module's threads and hooks. Changes:
+- `Initialize` maps a 64 MiB arena once;
+- this module defines musl's internal `__mmap`/`__munmap`, so libc.a's are not linked;
+- anonymous read/write requests are served from the arena in 16 KiB pages, zeroed as mmap memory
+  is, under a spinlock;
+- other requests, or a full arena, go to the real mmap.
+
+`__expand_heap` and malloc's large-allocation path both call `__mmap` (checked in the ELF).
+
+Results with this build: of 13 boots, the first two after deploying it timed out and the next 11
+reached the lobby. The arena mapped every time and never filled, and a hosted match loads.
+Whether the arena also removes the rare `malloc` crash during the mod scan needs more boots.
