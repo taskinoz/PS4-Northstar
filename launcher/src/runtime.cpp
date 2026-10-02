@@ -2240,7 +2240,12 @@ bool BuildRuntimeManifest(void* self) noexcept {
         static char json[kModJsonBufferSize];
         std::size_t size = 0;
         static ModInfo info;
-        if (!ReadFileIntoBuffer(metadataPath, json, sizeof(json), size) || !ParseModMetadata(json, info)) return false;
+        // Discovery already parsed it; if it cannot be read again, only this
+        // mod's scripts are left out.
+        if (!ReadFileIntoBuffer(metadataPath, json, sizeof(json), size) || !ParseModMetadata(json, info)) {
+            LogFormat("[NorthstarPS4] manifest skipped mod with unreadable metadata: %s\n", metadataPath);
+            continue;
+        }
         if (info.initScript[0] && !g_runtimeVmInitHooked) {
             // The client and delayed server VM-init hooks compile every mod's
             // InitScript directly in all three contexts. Keep the manifest
@@ -2257,27 +2262,34 @@ bool BuildRuntimeManifest(void* self) noexcept {
             const char* pathValue = JsonFindMember(entries, "Path");
             const char* whenValue = JsonFindMember(entries, "RunOn");
             char path[256]{}, when[512]{}, normalized[256]{};
-            if (!pathValue || !whenValue || !JsonExtractString(pathValue, path, sizeof(path)) ||
-                !JsonExtractString(whenValue, when, sizeof(when)) ||
+            // As PC's Mod::ParseScripts, an entry without a Path or RunOn is
+            // skipped with a warning; it must not cost every mod its scripts.
+            // A quote, newline or bracket would break the generated rson, so
+            // such an entry is skipped too.
+            if (!pathValue || !JsonExtractString(pathValue, path, sizeof(path)) ||
+                !whenValue || !JsonExtractString(whenValue, when, sizeof(when)) ||
                 !NormalizeRequestedPath(path[0] == '/' ? path + 1 : path, normalized, sizeof(normalized)) ||
-                std::strpbrk(when, "\"\r\n") || std::strpbrk(path, "\"\r\n[]")) { LogFormat("[NorthstarPS4] manifest rejected mod=%s script=%s\n", info.name, path); return false; }
-            auto existing = scripts.end();
-            for (auto it = scripts.begin(); it != scripts.end(); ++it)
-                if (it->path == normalized) { existing = it; break; }
-            if (existing == scripts.end()) {
-                scripts.push_back({normalized, when, i});
-            } else if (existing->mod == i) {
-                auto last = existing;
-                for (auto it = existing; it != scripts.end(); ++it)
-                    if (it->path == normalized) last = it;
-                scripts.insert(last + 1, {normalized, when, i});
+                std::strpbrk(when, "\"\r\n") || std::strpbrk(path, "\"\r\n[]")) {
+                LogFormat("[NorthstarPS4] manifest skipped invalid script entry mod=%s script=%s\n", info.name, path);
             } else {
-                LogFormat("[NorthstarPS4] manifest override mod=%s script=%s\n", info.name, normalized);
-                existing->when = when;
-                existing->mod = i;
-                const std::string key = normalized;
-                for (auto it = existing + 1; it != scripts.end();)
-                    it = it->path == key ? scripts.erase(it) : it + 1;
+                auto existing = scripts.end();
+                for (auto it = scripts.begin(); it != scripts.end(); ++it)
+                    if (it->path == normalized) { existing = it; break; }
+                if (existing == scripts.end()) {
+                    scripts.push_back({normalized, when, i});
+                } else if (existing->mod == i) {
+                    auto last = existing;
+                    for (auto it = existing; it != scripts.end(); ++it)
+                        if (it->path == normalized) last = it;
+                    scripts.insert(last + 1, {normalized, when, i});
+                } else {
+                    LogFormat("[NorthstarPS4] manifest override mod=%s script=%s\n", info.name, normalized);
+                    existing->when = when;
+                    existing->mod = i;
+                    const std::string key = normalized;
+                    for (auto it = existing + 1; it != scripts.end();)
+                        it = it->path == key ? scripts.erase(it) : it + 1;
+                }
             }
             entries = JsonSkipWs(JsonSkipValue(entries));
             if (*entries != ',') break;
