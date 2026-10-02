@@ -243,7 +243,8 @@ bool RuntimeServerVmInit(void* owner, int context, float time) noexcept {
     for (int i = 0; i < mods.count; ++i) {
         char metadata[256]; std::size_t size = 0;
         std::snprintf(metadata, sizeof(metadata), "%s/mod.json", mods.dirs[i]);
-        ModInfo mod{};
+        const auto modHolder = std::make_unique<ModInfo>();
+        ModInfo& mod = *modHolder;
         if (!ReadFileIntoBuffer(metadata, json, kModJsonBufferSize, size) ||
             !ParseModMetadata(json, mod)) return false;
         if (!mod.initScript[0]) continue;

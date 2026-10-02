@@ -12,8 +12,10 @@ void DiscoverModVpks() {
         const std::string directory = std::string(mods.dirs[i]) + "/vpk";
         DIR* dir = opendir(directory.c_str());
         if (!dir) continue;
-        char config[kModJsonBufferSize]{}; std::size_t size = 0;
-        const bool readConfig = ReadFileIntoBuffer((directory + "/vpk.json").c_str(), config, sizeof(config), size);
+        std::vector<char> configBuffer(kModJsonBufferSize);
+        char* const config = configBuffer.data();
+        std::size_t size = 0;
+        const bool readConfig = ReadFileIntoBuffer((directory + "/vpk.json").c_str(), config, configBuffer.size(), size);
         const bool preload = VpkPreload(readConfig ? config : nullptr);
         std::vector<std::string> stems;
         while (dirent* entry = readdir(dir)) {

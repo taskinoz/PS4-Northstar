@@ -21,6 +21,28 @@ int main() {
     assert(std::strcmp(m.initScript,"init.nut") == 0);
     assert(std::strcmp(m.initScriptCallback,"Init") == 0);
     assert(m.loadPriority == -10 && m.uiScriptCount == 1 && m.conVarCount == 1 && m.localisationCount == 1);
+    // Every ConVar is kept, as on PC (32 used to drop the Resonance Rifle's
+    // later ones, including its last, flagless s2_rr_simulate_kill); past
+    // the cap they are still counted, so the runtime can say so.
+    {
+        auto many = [](int count) {
+            std::string json = R"({"Name":"Many","Version":"1.0.0","ConVars":[)";
+            for (int i = 0; i < count; ++i) {
+                json += i ? "," : "";
+                json += "{\"Name\":\"cv" + std::to_string(i) + "\",\"DefaultValue\":\"" + std::to_string(i) + "\"";
+                json += i + 1 == count ? "}" : ",\"Flags\":16777232}";
+            }
+            return json + "]}";
+        };
+        static ModInfo big;
+        big = ModInfo{};
+        assert(ParseModMetadata(many(40).c_str(), big));
+        assert(big.conVarCount == 40 && big.conVarDeclared == 40);
+        assert(std::strcmp(big.conVars[39].name, "cv39") == 0 && big.conVars[39].flags[0] == '\0');
+        big = ModInfo{};
+        assert(ParseModMetadata(many(300).c_str(), big));
+        assert(big.conVarCount == static_cast<int>(kMaxModConVars) && big.conVarDeclared == 300);
+    }
     assert(IsModEnabled("{}",m));
     assert(!IsModEnabled(R"({"Author.Mod":{"1.2.3":false},"Version":1})",m));
     assert(IsModEnabled(R"({"Author.Mod":{"1.2.2":false},"Version":1})",m));

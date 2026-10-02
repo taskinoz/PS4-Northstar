@@ -4,9 +4,13 @@
 #include <cstring>
 
 namespace northstar::ps4::mods {
-constexpr std::size_t kMaxModConVars = 32;
+// PC has no limit on either. 32 ConVars dropped the Resonance Rifle's 33rd
+// and later ones, and its script then failed on them; Northstar.Custom's
+// mod.json is already 11.8 KB. ModInfo is large, so keep it off thread
+// stacks (static, or allocated).
+constexpr std::size_t kMaxModConVars = 256;
 constexpr std::size_t kMaxModNames = 128;
-constexpr std::size_t kModJsonBufferSize = 16 * 1024;
+constexpr std::size_t kModJsonBufferSize = 64 * 1024;
 
 inline const char* JsonSkipWs(const char* p) noexcept {
     for (;;) {
@@ -169,7 +173,8 @@ struct ModInfo {
     char initScriptCallback[96];
     std::int32_t loadPriority = 0;
     std::int32_t scriptCount = 0;
-    std::int32_t conVarCount = 0;
+    std::int32_t conVarCount = 0;     // parsed into conVars
+    std::int32_t conVarDeclared = 0;  // in mod.json, including any past the cap
     ModConVarInfo conVars[kMaxModConVars];
     // Subset of Scripts[] whose "RunOn" is exactly "UI" (the only CompileList
     // context proven safe so far, VA-verified as countTable index 2 by
@@ -240,9 +245,10 @@ inline bool ParseModMetadata(const char* json, ModInfo& out) noexcept {
     if (conVarsValue != nullptr) {
         const char* elem = JsonSkipWs(conVarsValue);
         if (*elem == '[') elem = JsonSkipWs(elem + 1);
-        while (elem != nullptr && *elem != ']' &&
-            out.conVarCount < static_cast<std::int32_t>(kMaxModConVars)) {
-            if (*elem == '{') {
+        while (elem != nullptr && *elem != ']') {
+            if (*elem == '{' && out.conVarCount >= static_cast<std::int32_t>(kMaxModConVars)) {
+                if (JsonFindMember(elem, "Name") != nullptr) ++out.conVarDeclared;
+            } else if (*elem == '{') {
                 ModConVarInfo& info = out.conVars[out.conVarCount];
                 const char* const nv = JsonFindMember(elem, "Name");
                 if (nv != nullptr &&
@@ -263,6 +269,7 @@ inline bool ParseModMetadata(const char* json, ModInfo& out) noexcept {
                         info.flags[k] = '\0';
                     }
                     ++out.conVarCount;
+                    ++out.conVarDeclared;
                 }
             }
             elem = JsonSkipWs(JsonSkipValue(elem));

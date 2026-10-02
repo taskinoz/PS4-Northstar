@@ -131,14 +131,18 @@ void LoadCatalog() {
     if (catalogReady) return;
     static ModDiscovery all;
     CollectModNames(all, true);
-    char settings[kModJsonBufferSize] = "{}";
+    std::vector<char> settingsBuffer(kModJsonBufferSize);
+    char* const settings = settingsBuffer.data();
     std::size_t size = 0;
-    if (!ReadEnabledSettings(settings, sizeof(settings))) return;
+    if (!ReadEnabledSettings(settings, settingsBuffer.size())) return;
+    std::vector<char> jsonBuffer(kModJsonBufferSize);
+    char* const json = jsonBuffer.data();
     for (int i = 0; i < all.count; ++i) {
-        char path[256], json[kModJsonBufferSize];
+        char path[256];
         std::snprintf(path, sizeof(path), "%s/mod.json", all.dirs[i]);
-        CatalogEntry entry{};
-        if (!ReadFileIntoBuffer(path, json, sizeof(json), size) || !ParseModMetadata(json, entry.info)) continue;
+        const auto entryHolder = std::make_unique<CatalogEntry>();
+        CatalogEntry& entry = *entryHolder;
+        if (!ReadFileIntoBuffer(path, json, jsonBuffer.size(), size) || !ParseModMetadata(json, entry.info)) continue;
         char download[512]{};
         const char* link = JsonFindMember(json, "DownloadLink");
         if (link) JsonExtractString(link, download, sizeof(download));
@@ -189,9 +193,9 @@ int SetEnabled(void* vm) {
 int ReloadMods(void* vm) {
     LoadCatalog();
     if (!catalogReady) return Error(vm, "Cannot reload: enabled settings are unreadable");
-    char buffer[kModJsonBufferSize];
-    if (!ReadEnabledSettings(buffer, sizeof(buffer))) return Error(vm, "Cannot read enabled settings");
-    std::string settings = buffer;
+    std::vector<char> buffer(kModJsonBufferSize);
+    if (!ReadEnabledSettings(buffer.data(), buffer.size())) return Error(vm, "Cannot read enabled settings");
+    std::string settings = buffer.data();
     for (const auto& mod : catalog)
         if (!SetEnabledSetting(settings, mod.info.name, mod.info.version, mod.enabled))
             return Error(vm, "Cannot save enabled settings: unsupported metadata key");

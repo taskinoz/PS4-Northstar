@@ -70,7 +70,8 @@ bool CallingModDisplayName(void* vm, int depth, char* out, std::size_t capacity)
     std::size_t size = 0;
     if (!CallingModDirectory(vm, depth, directory)) return false;
     const std::string path = directory + "/mod.json";
-    ModInfo info{};
+    const auto infoHolder = std::make_unique<ModInfo>();
+    ModInfo& info = *infoHolder;
     if (!ReadFileIntoBuffer(path.c_str(), json, sizeof(json), size) || !ParseModMetadata(json, info)) return false;
     const std::size_t length = std::strlen(info.name);
     if (length + 1 > capacity) return false;

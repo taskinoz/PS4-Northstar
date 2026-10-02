@@ -52,6 +52,7 @@
 #include <string>
 #include <algorithm>
 #include <atomic>
+#include <memory>
 #include "northstar_ps4/mod_vpks.h"
 #include "northstar_ps4/mod_rpaks.h"
 #include <vector>
@@ -943,7 +944,8 @@ void CollectModNamesLocked(ModDiscovery& discovery, bool includeDisabled) noexce
         if (!IsModFolderName(folder)) return;
         std::snprintf(path, sizeof(path), "%s/mod.json", dir);
         static char json[kModJsonBufferSize];
-        ModInfo mod{};
+        static ModInfo mod;
+        mod = ModInfo{};
         if (!ReadFileIntoBuffer(path, json, sizeof(json), size) || !ParseModMetadata(json, mod)) {
             LogFormat("[NorthstarPS4] skipping invalid mod metadata: %s\n", path);
             return;
@@ -1133,7 +1135,8 @@ void ProbeModMetadata(void* cvar, ModFindVarFn findVar,
             LogFormat("[NorthstarPS4] mod metadata read failed: %s\n", path);
             continue;
         }
-        ModInfo mod{};
+        const auto modHolder = std::make_unique<ModInfo>();
+        ModInfo& mod = *modHolder;
         if (!ParseModMetadata(jsonBuffer, mod)) {
             LogFormat("[NorthstarPS4] mod metadata parse failed: %s\n", path);
             continue;
@@ -1144,6 +1147,9 @@ void ProbeModMetadata(void* cvar, ModFindVarFn findVar,
             mod.description);
         LogFormat("[NorthstarPS4] mod %s convars=%d scripts=%d uiScripts=%d\n",
             mod.name, mod.conVarCount, mod.scriptCount, mod.uiScriptCount);
+        if (mod.conVarDeclared > mod.conVarCount)
+            LogFormat("[NorthstarPS4] mod %s declares %d ConVars; only the first %d are registered\n", mod.name,
+                mod.conVarDeclared, mod.conVarCount);
         for (std::int32_t s = 0; s < mod.conVarCount; ++s) {
             LogFormat(
                 "[NorthstarPS4] mod %s convar[%d] name=%s default=%s flags=%s\n",

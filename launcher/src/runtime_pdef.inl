@@ -52,7 +52,8 @@ bool BuildRuntimePdef() noexcept {
     for (std::size_t i = 0; i < overlay->dirs.size(); ++i) {
         std::string json;
         if (!ReadRuntimePdefText(overlay->dirs[i] + "/mod.json", kModJsonBufferSize, json)) continue;
-        ModInfo info{};
+        const auto infoHolder = std::make_unique<ModInfo>();
+        ModInfo& info = *infoHolder;
         if (ParseModMetadata(json.c_str(), info) && !std::strcmp(info.name, "Northstar.PS4")) {
             basePath = overlay->roots[i] + "/" + kRuntimePdefLogical;
             break;
@@ -77,7 +78,8 @@ bool BuildRuntimePdef() noexcept {
         std::string pdiff;
         if (!ReadRuntimePdefText(pdiffPath, kRuntimePdiffReadLimit, pdiff)) continue;
         std::string json;
-        ModInfo info{};
+        const auto infoHolder = std::make_unique<ModInfo>();
+        ModInfo& info = *infoHolder;
         if (!ReadRuntimePdefText(overlay->dirs[i] + "/mod.json", kModJsonBufferSize, json) ||
             !ParseModMetadata(json.c_str(), info)) {
             LogFormat("[NorthstarPS4] pdef refused: metadata unreadable for %s\n", pdiffPath.c_str());
