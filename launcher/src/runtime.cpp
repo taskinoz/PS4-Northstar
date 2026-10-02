@@ -48,6 +48,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <string>
 #include <algorithm>
 #include <atomic>
@@ -67,6 +68,103 @@ struct MuslLibcState {
 };
 extern "C" __attribute__((visibility("hidden"))) MuslLibcState __libc;
 static MuslLibcState& g_muslLibc = __libc;
+
+// This module's heap memory, from one arena mapped at load.
+//
+// musl's malloc gets memory with anonymous mmap(0, ...): __expand_heap grows
+// the heap that way, and allocations above its mmap threshold are mapped and
+// unmapped one by one. The game's own allocator frees a range and maps it
+// again at the same address (sceKernelMunmap, then
+// sceKernelMapNamedDirectMemory with in_addr), and under shadPS4 an mmap from
+// another thread in between can be handed that range: one boot logged this
+// module's mmap returning 0x23af7c000, a game thread failing "Unable to map
+// 0xc000 bytes at address 0x23af7c000", and a crash (2026-10-02). So the
+// module maps its arena once, while the game is still starting, and musl's
+// internal __mmap/__munmap (which resolve to these definitions instead of
+// libc.a's) serve anonymous requests from it in 16 KiB pages. Anything else,
+// or a full arena, goes to the real mmap. Pages are zeroed when handed out,
+// as anonymous mmap memory is (musl's calloc relies on it).
+namespace heaparena {
+constexpr std::size_t kPage = 0x4000;
+constexpr std::size_t kArenaSize = 64u * 1024 * 1024;
+constexpr std::size_t kPages = kArenaSize / kPage;
+unsigned char* g_base = nullptr;
+bool g_used[kPages];
+std::size_t g_hint = 0;
+std::atomic_flag g_busy = ATOMIC_FLAG_INIT;
+bool g_fullLogged = false;
+
+struct Lock {
+    Lock() noexcept { while (g_busy.test_and_set(std::memory_order_acquire)) {} }
+    ~Lock() { g_busy.clear(std::memory_order_release); }
+};
+
+bool Contains(const void* address) noexcept {
+    const auto p = static_cast<const unsigned char*>(address);
+    return g_base && p >= g_base && p < g_base + kArenaSize;
+}
+
+void* Allocate(std::size_t length) noexcept {
+    const std::size_t pages = (length + kPage - 1) / kPage;
+    if (!g_base || !pages || pages > kPages) return nullptr;
+    std::size_t found = kPages;
+    {
+        Lock lock;
+        // First fit, starting where the last search ended.
+        for (std::size_t pass = 0; pass < 2 && found == kPages; ++pass) {
+            const std::size_t from = pass ? 0 : g_hint;
+            std::size_t run = 0;
+            for (std::size_t i = from; i < kPages; ++i) {
+                run = g_used[i] ? 0 : run + 1;
+                if (run == pages) {
+                    found = i + 1 - pages;
+                    break;
+                }
+            }
+        }
+        if (found == kPages) return nullptr;
+        for (std::size_t i = 0; i < pages; ++i) g_used[found + i] = true;
+        g_hint = found + pages;
+    }
+    void* memory = g_base + found * kPage;
+    std::memset(memory, 0, pages * kPage);
+    return memory;
+}
+
+void Release(void* address, std::size_t length) noexcept {
+    const std::size_t first = static_cast<std::size_t>(static_cast<unsigned char*>(address) - g_base) / kPage;
+    const std::size_t pages = (length + kPage - 1) / kPage;
+    Lock lock;
+    for (std::size_t i = first; i < first + pages && i < kPages; ++i) g_used[i] = false;
+    if (first < g_hint) g_hint = first;
+}
+
+void Init() noexcept {
+    if (g_base) return;
+    void* area = mmap(nullptr, kArenaSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (area != MAP_FAILED) g_base = static_cast<unsigned char*>(area);
+}
+} // namespace heaparena
+
+extern "C" void* __mmap(void* address, std::size_t length, int protection, int flags, int fd, off_t offset) {
+    if (!address && fd == -1 && (flags & MAP_ANONYMOUS) && !(flags & MAP_FIXED) &&
+        protection == (PROT_READ | PROT_WRITE)) {
+        if (void* memory = heaparena::Allocate(length)) return memory;
+        if (heaparena::g_base && !heaparena::g_fullLogged) {
+            heaparena::g_fullLogged = true;
+            sceKernelDebugOutText(0, "[NorthstarPS4] heap arena full; falling back to mmap\n");
+        }
+    }
+    return mmap(address, length, protection, flags, fd, offset);
+}
+
+extern "C" int __munmap(void* address, std::size_t length) {
+    if (heaparena::Contains(address)) {
+        heaparena::Release(address, length);
+        return 0;
+    }
+    return munmap(address, length);
+}
 
 namespace northstar::ps4 {
 namespace {
@@ -2873,6 +2971,10 @@ bool Initialize(InitStage stage) noexcept {
     // list (2026-10-01). OpenOrbis builds __wait as a bare return, so the lock
     // this turns on is a spinlock.
     if (g_muslLibc.threadsMinus1 == 0) g_muslLibc.threadsMinus1 = 1;
+    // Before any thread of this module starts allocating (see heaparena).
+    heaparena::Init();
+    LogFormat("[NorthstarPS4] heap arena %s (%zu MiB)\n", heaparena::g_base ? "mapped" : "unavailable; using mmap",
+        heaparena::kArenaSize / (1024 * 1024));
     OrbisPthread thread{};
     const int result = scePthreadCreate(&thread, nullptr, ModuleTracker, nullptr, "NorthstarPS4");
     if (result != 0) {
