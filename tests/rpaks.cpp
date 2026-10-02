@@ -159,6 +159,22 @@ int main(int argc, char** argv) {
         platforms.textures = platforms.pc = 1;
         assert(!IsSupportedPs4TextureRpak(platforms));
     }
+    // A datatable-only pak is loadable. One with header bit 0 (HAS_MODULE:
+    // the engine would load a .prx from beside it) is refused until the
+    // converter clears the bit.
+    {
+        std::string datatablePak = texturePak;
+        std::memcpy(datatablePak.data() + assetHeader + 68, "dtbl", 4);
+        assert(InspectRpakTexturePlatforms(datatablePak.data(), datatablePak.size(), platforms));
+        assert(platforms.textures == 0 && platforms.materials == 0 && platforms.datatables == 1);
+        assert(IsSupportedPs4TextureRpak(platforms));
+        datatablePak[6] = 1;
+        assert(!InspectRpakTexturePlatforms(datatablePak.data(), datatablePak.size(), platforms));
+        std::memcpy(datatablePak.data() + assetHeader + 68, "shdr", 4);
+        datatablePak[6] = 0;
+        assert(InspectRpakTexturePlatforms(datatablePak.data(), datatablePak.size(), platforms));
+        assert(!IsSupportedPs4TextureRpak(platforms));
+    }
     texturePak.resize(texturePak.size() - 1);
     assert(!InspectRpakTexturePlatforms(texturePak.data(), texturePak.size(), platforms));
 
@@ -220,6 +236,18 @@ int main(int argc, char** argv) {
     assert(convertible[converterData + 56] == largestMipFirstByte);  // PS4 top-to-bottom order
     assert(RpakReadU64(convertible.data() + 0x18) == convertible.size());
     assert(RpakReadU64(convertible.data() + 0x28) == convertible.size());
+    // The converter takes header bit 0 and clears it; compression is still
+    // refused.
+    {
+        std::vector<std::uint8_t> flagged = convertible;
+        flagged[6] = 1;
+        assert(ConvertRpakTexturesToPs4(flagged, noStarpaks, conversion, conversionError));
+        assert(RpakReadU16(flagged.data() + 6) == 0);
+        assert(InspectRpakTexturePlatforms(flagged.data(), flagged.size(), platforms));
+        flagged[6] = 1;
+        flagged[7] = 1;
+        assert(!ConvertRpakTexturesToPs4(flagged, noStarpaks, conversion, conversionError));
+    }
 
     std::puts("rpak config tests passed.");
 

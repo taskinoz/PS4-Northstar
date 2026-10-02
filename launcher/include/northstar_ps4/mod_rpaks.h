@@ -206,18 +206,28 @@ struct RpakTexturePlatforms {
     std::size_t pc = 0;
     std::size_t ps4 = 0;
     std::size_t other = 0;
-    std::size_t materials = 0;  // 'matl' assets
+    std::size_t materials = 0;   // 'matl' assets
+    std::size_t datatables = 0;  // 'dtbl' assets
 };
 
 // Loadable on PS4: every texture is in the PS4 layout, and there is at least
-// one texture or material. A materials-only pak is common (a skin's
-// materials beside a "_preload" pak holding its textures); materials need no
-// conversion (Northstar.Custom's render on PS4). Other asset types are not
-// checked here, as before.
+// one texture, material or datatable. A materials-only pak is common (a
+// skin's materials beside a "_preload" pak holding its textures); materials
+// need no conversion (Northstar.Custom's render on PS4). Datatables (dtbl v0)
+// have the same 0x20-byte header and column layout in the PS4 game's own
+// common.rpak. Other asset types are not checked here, as before.
 inline bool IsSupportedPs4TextureRpak(const RpakTexturePlatforms& platforms) {
-    return (platforms.textures != 0 || platforms.materials != 0) && platforms.ps4 == platforms.textures &&
-        platforms.pc == 0 && platforms.other == 0;
+    return (platforms.textures != 0 || platforms.materials != 0 || platforms.datatables != 0) &&
+        platforms.ps4 == platforms.textures && platforms.pc == 0 && platforms.other == 0;
 }
+
+// Header flags at +6. 0x100 marks a compressed pak. Bit 0 (HAS_MODULE in
+// RePak's naming) makes the engine load a code module named after the pak
+// from beside it: the PS4 game's ui.rpak loads ui(11).prx this way. RePak sets
+// it on some datatable paks that ship no module. The runtime loads only paks
+// with no flags set, so a mod cannot get a .prx run through a pak; the
+// converter clears bit 0 (kRpakModuleFlag) in the paks it writes.
+constexpr std::uint16_t kRpakModuleFlag = 0x1;
 
 inline std::uint16_t RpakReadU16(const std::uint8_t* data) {
     return static_cast<std::uint16_t>(data[0]) |
@@ -304,10 +314,14 @@ inline bool InspectRpakTexturePlatformsWith(Read&& read, std::size_t size, RpakT
     constexpr std::uint32_t kMaterialType =
         static_cast<std::uint32_t>('m') | (static_cast<std::uint32_t>('a') << 8) |
         (static_cast<std::uint32_t>('t') << 16) | (static_cast<std::uint32_t>('l') << 24);
+    constexpr std::uint32_t kDatatableType =
+        static_cast<std::uint32_t>('d') | (static_cast<std::uint32_t>('t') << 8) |
+        (static_cast<std::uint32_t>('b') << 16) | (static_cast<std::uint32_t>('l') << 24);
     for (std::size_t i = 0; i < assetCount; ++i) {
         const std::size_t asset = assetsOffset + i * kAssetSize;
         const std::uint32_t type = RpakReadU32(data + asset + 68);
         if (type == kMaterialType) ++result.materials;
+        if (type == kDatatableType) ++result.datatables;
         if (type != kTextureType) continue;
         const std::size_t page = RpakReadU32(data + asset + 16);
         const std::size_t offset = RpakReadU32(data + asset + 20);

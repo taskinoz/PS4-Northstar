@@ -206,10 +206,13 @@ inline bool ConvertRpakTexturesToPs4(std::vector<std::uint8_t>& rpak,
         error = "not a Titanfall 2 v7 RPak";
         return false;
     }
-    if (RpakReadU16(rpak.data() + 6) != 0 || RpakReadU16(rpak.data() + 0x3e) != 0) {
+    const std::uint16_t headerFlags = RpakReadU16(rpak.data() + 6);
+    if ((headerFlags & ~kRpakModuleFlag) != 0 || RpakReadU16(rpak.data() + 0x3e) != 0) {
         error = "compressed and patch RPaks are not supported";
         return false;
     }
+    // No module is loaded for a mod pak (see kRpakModuleFlag).
+    RpakWriteU16(rpak.data() + 6, 0);
     const std::size_t pathSize = RpakReadU16(rpak.data() + 0x38);
     const std::size_t slabCount = RpakReadU16(rpak.data() + 0x3a);
     const std::size_t pageCount = RpakReadU16(rpak.data() + 0x3c);

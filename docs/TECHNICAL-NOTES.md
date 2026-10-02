@@ -5853,3 +5853,33 @@ this module's threads and hooks. Changes:
 Results with this build: of 13 boots, the first two after deploying it timed out and the next 11
 reached the lobby. The arena mapped every time and never filled, and a hosted match loads.
 Whether the arena also removes the rare `malloc` crash during the mod scan needs more boots.
+
+## Datatable and UI image paks, and the pak module flag (2026-10-02)
+
+**UI image atlases.** Archon's `archon.rpak` holds one 2048x2048 atlas texture and one uimg.
+Its uimg is version 10 with a 0x40-byte header in the same segments (head 0x40, CPU data 0x43)
+as the ten uimg in the PS4 game's `ui.rpak`. Only the atlas texture is platform-specific, and
+the converter already handles it. The pak loads at boot; nothing has displayed it yet.
+
+**Datatables.** The Restore mod's `startpoints.rpak` holds one dtbl v0 asset: 7 columns, 313
+rows, and a 0x20-byte header laid out like the dtbl assets in PS4 `common.rpak`. Discovery used to
+need a texture or material in a pak; it now counts dtbl assets too. Its GUID is
+`datatable/startpoints.rpak`, which Northstar.CustomServers also provides as a CSV. The CSV is
+used, as on PC, where the datatable hook checks mod CSVs before the pak asset.
+
+**Header bit 0 loads a code module.** That pak also sets header flag 0x1 (HAS_MODULE in RePak's
+naming). With the flag allowed, the engine called `sceKernelLoadStartModule` for
+`.../paks/startpoints.prx` and logged that it does not exist. The game's own `ui.rpak` carries
+the same flag and loads `ui(11).prx` this way. A mod could therefore get a `.prx` of its own run
+through a flagged pak. Changes:
+- the converter accepts bit 0 and writes 0, since a mod pak needs no module (the datatable loads
+  without one);
+- the runtime still refuses any pak with header flags set, so an unconverted flagged pak is never
+  loaded;
+- compression (0x100) and patch paks are refused as before.
+
+The in-game mod downloader does not run the converter. A downloaded mod's paks load only when
+they are already in the PS4 layout with no header flags.
+
+Boots: 3/3 to the lobby with both paks before the flag change, 3/3 after it, and 5/5 with the
+Octane knife paks on the heap-arena build. The knife paks load preload-first.
