@@ -5990,3 +5990,62 @@ collects the enabled mods first and leaves such copies out with the same warning
 to the active set, not to the listing that includes disabled mods. Verified with two versions of a
 test mod: both were left out and the lobby loaded. Unlike PC, the Mods list reads
 enabledmods.json and still shows them as enabled.
+
+## A large weapon mod, and loose materials (2026-10-02)
+
+**Test mod.** S2Mods' Resonance Rifle (Thunderstore 1.1.1) with its dependency
+S2.ClientKillCallback. It contains:
+- 11 paks (Preload/Postload pairs, ~130 MB of 2K textures);
+- loose `.mdl` models, `.vmt`/`.vtf` materials and `.pcf` particles;
+- a weapon KeyValues patch, an audio override, and a script with callbacks;
+- 43 ConVars.
+
+The paks converted in 2 s and loaded at boot with the other mods' paks (15 handles). Without the
+dependency, the CLIENT script failed to compile on `ObituaryCallbackParams` and the boot hung,
+which is the same failure PC would have. The dependency replaces the game's `cl_obituary.gnut`
+with additions only, compared against the PS4 copy.
+
+**ConVars past 32.** The catalog kept 32 ConVars per mod, and the script then failed on the 33rd
+(see the commit "keep every ConVar a mod declares").
+
+**Loose .mdl** files load through the overlay (ReadFromCache bypass, then OpenEx) and render.
+
+**Loose .vmt were never loaded.** The material system's KeyValues loader
+(materialsystem_ps4+0x9fb50) asks the VPK cache first (ReadFromCache, primary slot 97). Its
+`result` is not file data but a reference into a mounted VPK:
+- `+0` the archive index;
+- `+8` the chunk;
+- `+0x10` the directory entry, filled by filesystem_stdio+0x44d80.
+
+When the cache answers false, which the overlay does for a mod's file, the loader opens the file
+from disk only if its name ends in three numeric groups (the engine's generated
+`___%s_%d.vmt`); the check is at +0x9fcdc. So every other loose material drew the checkerboard,
+Northstar.Client's `vgui/reset.vmt` included. Two patches, in `runtime_materials.inl`, are
+preimage-checked:
+- the `jl` at +0x9fce0 is removed, so a .vmt missing from the VPKs is opened through the
+  filesystem and the overlay;
+- the first loose material then crashed at +0x4f9b2. After loading, the engine looks the .vmt up
+  in the cache again and takes a spinlock in the returned VPK entry without checking the result.
+  The 10-byte NOP at +0x4f9a6 becomes `test al, al; je +0x4f9fd`, skipping the lock and its
+  release.
+
+**Loose .vtf need no conversion.** The texture loader reads loose files through ReadFile, and a
+PC-layout VTF displays correctly: the rifle's ring sight drew as a clean ring. Converted to the
+PS4 VPK layout below, it drew as a scrambled dot grid.
+
+The PS4 VPK layout itself is now known, from comparing all 167 VTFs in PC and PS4 `mp_common`;
+151 were reproduced byte for byte:
+- the image data comes first, mips largest first, frame-major, each mip Morton-tiled in 8x8-block
+  tiles and padded like rpak textures;
+- uncompressed formats use 256-byte tiles (8x8 pixels at 32 bpp, 16x16 at 8 bpp);
+- the PC header and every resource before the image follow unchanged, with offsets shifted by
+  the image size, the image offset set to 0 and the version set to 7.5;
+- then a u32 holding the image size;
+- `NOMIP` textures keep one mip;
+- BGR888/RGB888 become RGBA8888 with flag 0x2000;
+- not reproduced: the 8 bpp element order and cubemaps.
+
+This only matters for repacking game VPKs, which the port does not do.
+
+**Not yet working.** A loose texture that overrides one that is also in a game VPK was not served
+(the cache bypass logged, but no open followed). Mod-only textures, the common case, work.

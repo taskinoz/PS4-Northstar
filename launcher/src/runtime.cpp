@@ -2413,6 +2413,7 @@ std::uint64_t ModSecondarySize(void* self, const char* fileName, const char* pat
 #include "runtime_string_commands.inl"
 #include "runtime_atlas_server.inl"
 #include "runtime_netmessage_fixes.inl"
+#include "runtime_materials.inl"
 #endif
 
 // IBaseFileSystem::ReadFile - secondary slot 14, filesystem_stdio+0xc3d0.
@@ -2896,6 +2897,10 @@ void* ModuleTracker(void*) noexcept {
                 if (infoResult == 0 && std::strstr(info.name, "rtech_game") != nullptr) {
                     rtechHandle = handles[i];
                 }
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+                if (infoResult == 0 && std::strstr(info.name, "materialsystem") != nullptr && info.segmentCount > 0)
+                    InstallLooseMaterialFallback(reinterpret_cast<std::uintptr_t>(info.segmentInfo[0].address));
+#endif
 #if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
                 if (infoResult == 0 && std::strstr(info.name, "localize") != nullptr) {
                     localizeHandle = handles[i];
