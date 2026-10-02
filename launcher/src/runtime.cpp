@@ -926,6 +926,12 @@ bool IsDirectory(const char* path) noexcept {
 
 void CollectModNamesLocked(ModDiscovery& discovery, bool includeDisabled) noexcept {
     discovery.count = 0;
+    struct Found {
+        std::string name, version, folder, dir;
+        int loadPriority;
+        bool remote;
+    };
+    std::vector<Found> found;
     static char enabled[kModJsonBufferSize];
     std::size_t size = 0;
     char path[kModDirCapacity + 16]{};
@@ -947,8 +953,7 @@ void CollectModNamesLocked(ModDiscovery& discovery, bool includeDisabled) noexce
                 remote && !g_modsReloaded ? " (downloaded; enabled per server)" : "");
             return;
         }
-        if (!InsertMod(discovery, folder, mod.loadPriority, dir, remote))
-            LogFormat("[NorthstarPS4] mod catalog capacity exceeded: %s\n", dir);
+        found.push_back({mod.name, mod.version, folder, dir, mod.loadPriority, remote});
     };
     char localDirectory[kModDirCapacity]{};
     auto collect = [&](const char* folder) {
@@ -993,22 +998,37 @@ void CollectModNamesLocked(ModDiscovery& discovery, bool includeDisabled) noexce
     if (dir != nullptr) {
         while (struct dirent* entry = readdir(dir)) collect(entry->d_name);
         closedir(dir);
-        return;
+    } else {
+        // Emulator fallback only. Normal installs discover folders at each boot.
+        LogFormat("[NorthstarPS4] opendir failed: %s; using staging index\n", kModsRoot);
+        static char buffer[kModJsonBufferSize];
+        std::snprintf(path, sizeof(path), "%s/.ns_mod_manifest", kModsRoot);
+        if (ReadFileIntoBuffer(path, buffer, sizeof(buffer), size)) {
+            char* line = buffer;
+            while (*line) {
+                char* newline = std::strchr(line, '\n');
+                if (newline) *newline = '\0';
+                const std::size_t length = std::strlen(line);
+                if (length && line[length - 1] == '\r') line[length - 1] = '\0';
+                collect(line);
+                if (!newline) break;
+                line = newline + 1;
+            }
+        }
     }
-    // Emulator fallback only. Normal installs discover folders at each boot.
-    LogFormat("[NorthstarPS4] opendir failed: %s; using staging index\n", kModsRoot);
-    static char buffer[kModJsonBufferSize];
-    std::snprintf(path, sizeof(path), "%s/.ns_mod_manifest", kModsRoot);
-    if (!ReadFileIntoBuffer(path, buffer, sizeof(buffer), size)) return;
-    char* line = buffer;
-    while (*line) {
-        char* newline = std::strchr(line, '\n');
-        if (newline) *newline = '\0';
-        const std::size_t length = std::strlen(line);
-        if (length && line[length - 1] == '\r') line[length - 1] = '\0';
-        collect(line);
-        if (!newline) break;
-        line = newline + 1;
+    // PC's ModManager::DisableMultipleModVersions: when one mod name is
+    // enabled more than once (two versions installed, or a local copy beside
+    // a downloaded one), every copy is left out rather than picking one.
+    for (const auto& mod : found) {
+        int copies = 0;
+        for (const auto& other : found) copies += other.name == mod.name;
+        if (!includeDisabled && copies > 1) {
+            LogFormat("[NorthstarPS4] mod '%s' has several versions enabled; v%s left out (%s)\n", mod.name.c_str(),
+                mod.version.c_str(), mod.dir.c_str());
+            continue;
+        }
+        if (!InsertMod(discovery, mod.folder.c_str(), mod.loadPriority, mod.dir.c_str(), mod.remote))
+            LogFormat("[NorthstarPS4] mod catalog capacity exceeded: %s\n", mod.dir.c_str());
     }
 }
 

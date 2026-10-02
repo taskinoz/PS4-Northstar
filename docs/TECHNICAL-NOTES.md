@@ -5983,3 +5983,10 @@ mod folder without it. A redirect is now registered only when the mod ships the 
 decompressed) has five textures whose platform byte is 0, which discovery treats as the PC layout.
 So the PS4 game does use linear textures in some places. Discovery still refuses them; a
 converted mod pak is unaffected.
+
+**Several versions of one mod.** PC's ModManager::DisableMultipleModVersions disables every copy
+of a mod whose name is enabled more than once, with "has several versions enabled". Discovery now
+collects the enabled mods first and leaves such copies out with the same warning. It applies only
+to the active set, not to the listing that includes disabled mods. Verified with two versions of a
+test mod: both were left out and the lobby loaded. Unlike PC, the Mods list reads
+enabledmods.json and still shows them as enabled.
