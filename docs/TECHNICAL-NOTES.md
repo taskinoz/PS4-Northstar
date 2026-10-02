@@ -5883,3 +5883,37 @@ they are already in the PS4 layout with no header flags.
 
 Boots: 3/3 to the lobby with both paks before the flag change, 3/3 after it, and 5/5 with the
 Octane knife paks on the heap-arena build. The knife paks load preload-first.
+
+## NET_ReceiveDatagram limit and the WriteBaselines overflow (2026-10-02)
+
+**Receive loop.** NET_ProcessSocket (engine+0x1a6350) reads packets with NET_GetPacket
+(engine+0x1a5500, NET_ReceiveDatagram inlined) until one returns null. A packet that fails to decode
+returns null, just as "no data" does, so the loop stops for that frame. Examples are a compressed
+packet (header -3, "LZSS") that fails to decompress, or a bad size. One such packet per frame starves
+every other client. PC (from R1Delta) retries while its `net_error` is clear.
+
+The PS4 build has no `net_error`. Its recvfrom call (engine+0x1a596e, PLT engine+0x1dd8) handles
+0, EAGAIN (35) and EMSGSIZE (40) as no data, and retries other errors itself. So:
+- that call goes through a wrapper that records, per thread, whether a datagram arrived. Threads
+  are keyed by %fs:0, because NET_ProcessSocket takes scratch buffers from a lock-free list;
+- both NET_GetPacket calls in the loop (engine+0x1a6442 and +0x1a853c) go through a guard. It
+  retries only when a datagram arrived and still no packet came out, up to
+  `ns_recvfrom_per_frame_limit` (default 1000, as on PC).
+
+Test (scratchpad `lzss_flood.py`), against a private lobby:
+- encrypted packets with a back-reference before the start of the output, about 7,000 a second;
+- one connect request ('A') every 0.25 s;
+- results: 32/32 requests answered with the limit at 1000, 1/32 at 1 (the old behaviour), and
+  32/32 back at 1000.
+
+**WriteBaselines.** PC disconnects a client whose server info overflows the string-table baselines,
+rather than letting the error stop the server. On PS4, CBaseClient::SendServerInfo is inlined into
+the server's per-client frame code (engine+0xe81a0, a 0x50000-byte local buffer). The index and
+overflow errors share one `call Host_Error` (engine+0x10d560) at engine+0xe997d. That call now goes
+to `ns_baseline_overflow_thunk` (runtime.cpp, global asm):
+- it passes on `[rbp-0x50130]` of the engine's frame, the client's byte offset into the client
+  array (engine+0x3818680, stride 0x2d738);
+- the engine carries on as after a successful write, since both paths join at engine+0xe9982;
+- the host frame then disconnects that client with PC's message.
+
+The fix installs, but no overflow has been triggered.

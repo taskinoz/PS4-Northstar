@@ -21,8 +21,11 @@ HostFrameUpdateFn g_originalHostFrameUpdate = nullptr;
 bool g_hostFrameHookInstalled = false;
 bool g_hostFrameContextSeen[3]{};
 
+void DisconnectBaselineOverflows() noexcept;  // runtime_netmessage_fixes.inl
+
 void RuntimeHostFrameUpdate(double currentTime, float frameTime) noexcept {
     g_originalHostFrameUpdate(currentTime, frameTime);
+    DisconnectBaselineOverflows();
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST) && defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && \
     defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
     AddBootModLocalisationIfMissed();

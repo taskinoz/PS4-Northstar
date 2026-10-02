@@ -21,9 +21,10 @@
 // share threads, so a message whose handler lies in the engine's client array
 // (engine+0x3818680, stride 0x2d738) is the server's.
 //
-// Not ported here: ReadUsercmd (server.prx), CL_CopyExistingEntity,
-// GetEntByIndex, the WriteBaselines overflow, NET_ReceiveDatagram, the LZSS
-// and UTF-8 parser fixes, and CNetChan::ProcessMessages limits (ns_limits).
+// ReadUsercmd and GetEntByIndex (server.prx), the LZSS rewrite, the
+// WriteBaselines overflow and the NET_ReceiveDatagram limit are further down.
+// Not ported: CL_CopyExistingEntity, the UTF-8 parser fix and
+// CNetChan::ProcessMessages limits (ns_limits).
 
 namespace netfixes {
 using MessageFn = bool (*)(void* message);
@@ -141,11 +142,15 @@ bool WriteEngineData(std::uintptr_t address, std::uintptr_t value) noexcept {
 } // namespace netfixes
 
 void InstallLzssFix(std::uintptr_t engineBase) noexcept;  // below
+void InstallBaselineOverflowFix(std::uintptr_t engineBase) noexcept;  // below
+void InstallDatagramLimit(std::uintptr_t engineBase) noexcept;  // below
 
 void InstallNetMessageFixes(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
     using namespace netfixes;
     (void)engineSize;
     InstallLzssFix(engineBase);
+    InstallBaselineOverflowFix(engineBase);
+    InstallDatagramLimit(engineBase);
     g_engineBase = engineBase;
     alignas(16) static std::uint8_t logStorage[0x90]{};
     g_logConVar = atlasserver::RegisterConVar(logStorage, "ns_exploitfixes_log", "1", "Whether to log whenever ExploitFixes.cpp blocks/corrects something");
@@ -492,4 +497,184 @@ void InstallLzssFix(std::uintptr_t engineBase) noexcept {
         LogFormat("[NorthstarPS4] LZSS fix installed\n");
     else
         LogFormat("[NorthstarPS4] LZSS fix: write failed\n");
+}
+
+// PC exploitfixes.cpp: a client can make the server overflow
+// CNetworkStringTableContainer::WriteBaselines while it is sent its server
+// info. PC patches the failure to set a flag and disconnects that client when
+// CBaseClient::SendServerInfo returns, instead of the server stopping. On PS4
+// SendServerInfo is inlined into the server's per-client frame code
+// (engine+0xe81a0), and the index and overflow errors share one
+// `call Host_Error` (engine+0x10d560) at engine+0xe997d. That call goes to
+// ns_baseline_overflow_thunk (runtime.cpp), which passes on the client, and
+// the code carries on as it does after a successful write. The client is
+// disconnected with PC's message after the host frame.
+namespace baselinefix {
+constexpr std::uintptr_t kOverflowSiteVa = 0xe9973;
+constexpr std::uintptr_t kHostErrorCallVa = 0xe997d;
+constexpr std::uintptr_t kOverflowStringVa = 0x3460a3;
+std::uintptr_t g_engine = 0;
+std::atomic<std::uint64_t> g_pending{0};
+
+void Failed(const char* format, const char* table, long clientOffset) noexcept {
+    (void)format;
+    const long count = *reinterpret_cast<const std::int32_t*>(g_engine + kEngineClientCountVa);
+    const long stride = static_cast<long>(kEngineClientStride);
+    if (clientOffset < 0 || clientOffset % stride != 0 || clientOffset / stride >= count || clientOffset / stride >= 64) {
+        LogFormat("[NorthstarPS4] exploit fix: WriteBaselines failed (%s), client unknown\n", table ? table : "?");
+        return;
+    }
+    const int client = static_cast<int>(clientOffset / stride);
+    g_pending.fetch_or(std::uint64_t(1) << client);
+    LogFormat("[NorthstarPS4] exploit fix: WriteBaselines failed for client #%d (%s); disconnecting it\n", client,
+        table ? table : "?");
+}
+} // namespace baselinefix
+
+// From the host frame, after the frame that wrote the baselines.
+void DisconnectBaselineOverflows() noexcept {
+    std::uint64_t pending = baselinefix::g_pending.exchange(0);
+    while (pending) {
+        const int client = __builtin_ctzll(pending);
+        pending &= pending - 1;
+        if (!g_disconnectClient || !g_disconnectClient(client,
+                "Overflowed CNetworkStringTableContainer::WriteBaselines, try restarting your client and reconnecting"))
+            LogFormat("[NorthstarPS4] WriteBaselines: could not disconnect client #%d\n", client);
+    }
+}
+
+void InstallBaselineOverflowFix(std::uintptr_t engineBase) noexcept {
+    using namespace baselinefix;
+    // lea rdi, [rip+0x25c729] (the overflow message); mov rsi, rcx;
+    // call Host_Error
+    constexpr std::uint8_t site[] = {0x48, 0x8d, 0x3d, 0x29, 0xc7, 0x25, 0x00, 0x48, 0x89, 0xce, 0xe8, 0xde, 0x3b, 0x02,
+        0x00};
+    constexpr char message[] = "Overflow error writing string table baseline %s\n";
+    if (std::memcmp(reinterpret_cast<const void*>(engineBase + kOverflowSiteVa), site, sizeof(site)) != 0 ||
+        std::memcmp(reinterpret_cast<const void*>(engineBase + kOverflowStringVa), message, sizeof(message)) != 0) {
+        LogFormat("[NorthstarPS4] WriteBaselines fix refused: engine profile mismatch\n");
+        return;
+    }
+    const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&ns_baseline_overflow_thunk)) -
+        static_cast<std::int64_t>(engineBase + kHostErrorCallVa + 5);
+    if (relative < -2147483648LL || relative > 2147483647LL) {
+        LogFormat("[NorthstarPS4] WriteBaselines fix refused: thunk outside rel32 range\n");
+        return;
+    }
+    g_engine = engineBase;
+    ns_baseline_overflow_target = &Failed;
+    const auto displacement = static_cast<std::int32_t>(relative);
+    if (WriteEngineCode(engineBase + kHostErrorCallVa + 1, &displacement, sizeof(displacement)))
+        LogFormat("[NorthstarPS4] WriteBaselines fix installed\n");
+    else
+        LogFormat("[NorthstarPS4] WriteBaselines fix: write failed\n");
+}
+
+// PC exploitfixes.cpp NET_ReceiveDatagram (from R1Delta): a packet that fails
+// to decode (an invalid LZSS payload, say) makes the receive return nothing,
+// and the socket loop stops reading for that frame, so one such packet per
+// frame starves everyone else's. PC retries up to ns_recvfrom_per_frame_limit
+// times while the socket had data.
+//
+// On PS4, NET_ProcessSocket (engine+0x1a6350) calls NET_GetPacket
+// (engine+0x1a5500, NET_ReceiveDatagram inlined) at engine+0x1a6442 and
+// engine+0x1a853c. NET_GetPacket's recvfrom call (engine+0x1a596e, to the PLT
+// at engine+0x1dd8) treats 0 or EAGAIN/EMSGSIZE as no data, and there is no
+// net_error to read. So both calls go through a guard that retries only when
+// recvfrom returned data on that thread and still no packet came out.
+// NET_ProcessSocket takes its scratch buffers from a lock-free list, so the
+// state is kept per thread (keyed by %fs:0, the thread's self pointer).
+namespace datagramfix {
+constexpr std::uintptr_t kRecvFromCallVa = 0x1a596e;
+constexpr std::uintptr_t kRecvFromLengthVa = 0x1a594f;
+constexpr std::uintptr_t kRecvFromPltVa = 0x1dd8;
+constexpr std::uintptr_t kGetPacketVa = 0x1a5500;
+constexpr std::uintptr_t kGetPacketCallVas[] = {0x1a6442, 0x1a853c};
+using RecvFromFn = long (*)(int fd, void* buffer, unsigned long length, int flags, void* from, void* fromLength);
+using GetPacketFn = void* (*)(int socket, void* scratch, int encrypted);
+RecvFromFn g_recvFrom = nullptr;
+GetPacketFn g_getPacket = nullptr;
+void* g_limit = nullptr;
+
+struct ThreadState {
+    std::atomic<std::uintptr_t> thread;
+    bool received;
+};
+ThreadState g_threads[16];
+
+ThreadState* CurrentThreadState() noexcept {
+    std::uintptr_t self;
+    asm volatile("movq %%fs:0, %0" : "=r"(self));
+    for (auto& state : g_threads)
+        if (state.thread.load(std::memory_order_relaxed) == self) return &state;
+    for (auto& state : g_threads) {
+        std::uintptr_t empty = 0;
+        if (state.thread.compare_exchange_strong(empty, self)) return &state;
+    }
+    return nullptr;
+}
+
+// errno is left as recvfrom set it; the engine reads it next.
+long RecvFromGuard(int fd, void* buffer, unsigned long length, int flags, void* from, void* fromLength) noexcept {
+    const long result = g_recvFrom(fd, buffer, length, flags, from, fromLength);
+    if (result > 0)
+        if (ThreadState* const state = CurrentThreadState()) state->received = true;
+    return result;
+}
+
+void* GetPacketGuard(int socket, void* scratch, int encrypted) noexcept {
+    ThreadState* const state = CurrentThreadState();
+    int limit = stringcommands::ConVarIntValue(g_limit, 1000);
+    if (limit < 1) limit = 1;
+    for (int i = 0; i < limit; ++i) {
+        if (state) state->received = false;
+        if (void* const packet = g_getPacket(socket, scratch, encrypted)) return packet;
+        if (!state || !state->received) break;
+    }
+    return nullptr;
+}
+
+bool CallTargets(std::uintptr_t engineBase, std::uintptr_t callVa, std::uintptr_t targetVa) noexcept {
+    const auto* call = reinterpret_cast<const std::uint8_t*>(engineBase + callVa);
+    std::int32_t displacement;
+    std::memcpy(&displacement, call + 1, sizeof(displacement));
+    return call[0] == 0xe8 && callVa + 5 + displacement == targetVa;
+}
+
+bool Redirect(std::uintptr_t engineBase, std::uintptr_t callVa, const void* guard) noexcept {
+    const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(guard)) -
+        static_cast<std::int64_t>(engineBase + callVa + 5);
+    if (relative < -2147483648LL || relative > 2147483647LL) return false;
+    const auto displacement = static_cast<std::int32_t>(relative);
+    return WriteEngineCode(engineBase + callVa + 1, &displacement, sizeof(displacement));
+}
+} // namespace datagramfix
+
+void InstallDatagramLimit(std::uintptr_t engineBase) noexcept {
+    using namespace datagramfix;
+    // NET_GetPacket's prologue (sub rsp, 0x15b8), and `mov edx, 0x4f0` (the
+    // receive length) in front of its recvfrom call.
+    constexpr std::uint8_t prologue[] = {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53,
+        0x48, 0x81, 0xec, 0xb8, 0x15, 0x00, 0x00};
+    constexpr std::uint8_t length[] = {0xba, 0xf0, 0x04, 0x00, 0x00};
+    bool matches =
+        std::memcmp(reinterpret_cast<const void*>(engineBase + kGetPacketVa), prologue, sizeof(prologue)) == 0 &&
+        std::memcmp(reinterpret_cast<const void*>(engineBase + kRecvFromLengthVa), length, sizeof(length)) == 0 &&
+        CallTargets(engineBase, kRecvFromCallVa, kRecvFromPltVa);
+    for (const auto callVa : kGetPacketCallVas) matches = matches && CallTargets(engineBase, callVa, kGetPacketVa);
+    if (!matches) {
+        LogFormat("[NorthstarPS4] NET_ReceiveDatagram limit refused: engine profile mismatch\n");
+        return;
+    }
+    alignas(16) static std::uint8_t limitStorage[0x90]{};
+    g_limit = atlasserver::RegisterConVar(limitStorage, "ns_recvfrom_per_frame_limit", "1000",
+        "Maximum number of recvfrom calls to process per frame");
+    g_recvFrom = reinterpret_cast<RecvFromFn>(engineBase + kRecvFromPltVa);
+    g_getPacket = reinterpret_cast<GetPacketFn>(engineBase + kGetPacketVa);
+    // The recvfrom wrapper first, so a guard never reads a flag nothing sets.
+    bool installed = Redirect(engineBase, kRecvFromCallVa, reinterpret_cast<const void*>(&RecvFromGuard));
+    for (const auto callVa : kGetPacketCallVas)
+        installed = installed && Redirect(engineBase, callVa, reinterpret_cast<const void*>(&GetPacketGuard));
+    LogFormat(installed ? "[NorthstarPS4] NET_ReceiveDatagram limit installed\n"
+                        : "[NorthstarPS4] NET_ReceiveDatagram limit: write failed\n");
 }

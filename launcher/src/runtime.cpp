@@ -166,6 +166,23 @@ extern "C" int __munmap(void* address, std::size_t length) {
     return munmap(address, length);
 }
 
+// The WriteBaselines failure call (runtime_netmessage_fixes.inl, baselinefix)
+// is pointed at this thunk instead of Host_Error. The client whose server info
+// is being written is at [rbp-0x50130] of the engine's frame, as a byte
+// offset into the client array; it is passed on as the third argument.
+extern "C" __attribute__((visibility("hidden"))) void (*ns_baseline_overflow_target)(
+    const char* format, const char* table, long clientOffset) = nullptr;
+extern "C" __attribute__((visibility("hidden"))) void ns_baseline_overflow_thunk();
+asm(".text\n"
+    ".p2align 4\n"
+    ".globl ns_baseline_overflow_thunk\n"
+    ".hidden ns_baseline_overflow_thunk\n"
+    ".type ns_baseline_overflow_thunk, @function\n"
+    "ns_baseline_overflow_thunk:\n"
+    "    movq -0x50130(%rbp), %rdx\n"
+    "    jmpq *ns_baseline_overflow_target(%rip)\n"
+    ".size ns_baseline_overflow_thunk, . - ns_baseline_overflow_thunk\n");
+
 namespace northstar::ps4 {
 namespace {
 constexpr std::size_t kMaxModules = 256;
