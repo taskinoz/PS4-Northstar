@@ -17,6 +17,14 @@
 // Only one method applies per pak, in that order, so a pak listed under both
 // Preload and Postload preloads and the Postload entry is ignored.
 //
+// Two more, applied to the engine's own requests (PC's LoadPakAsync hook):
+//   - `Aliases[<pak>] = <other>` -> a request for <pak> loads <other> instead
+//     (custom maps use it to load a campaign map's pak, e.g. "mp_s2s.rpak":
+//     "sp_s2s.rpak"). The enabled mod with the highest priority wins.
+//   - a request for a pak the game does not have loads an enabled mod's pak
+//     of that file name (PC's FixupPakPath), even one with no load rule; that
+//     is how a custom map ships its own paks.
+//
 // Mod rpaks are texture and material archives in practice: both of the ones
 // Northstar.Custom ships hold only `txtr` and `matl` assets and no models.
 namespace northstar::ps4::mods {
@@ -75,10 +83,11 @@ inline std::string RelaxJsonToStrict(const char* config) {
 // error, matching PC's member-at-a-time reading.
 struct RpakConfigVisitor {
     int depth = 0;
-    int section = 0;  // 1 = Preload, 2 = Postload
+    int section = 0;  // 1 = Preload, 2 = Postload, 3 = Aliases
     std::string pending;
     std::vector<std::pair<std::string, bool>> preload;
     std::vector<std::pair<std::string, std::string>> postload;
+    std::vector<std::pair<std::string, std::string>> aliases;
 
     bool OnObjectBegin() { ++depth; return true; }
     bool OnObjectEnd() {
@@ -92,7 +101,7 @@ struct RpakConfigVisitor {
     bool OnKey(const char* key, std::size_t size) {
         const std::string name(key, size);
         if (depth == 1) {
-            section = name == "Preload" ? 1 : name == "Postload" ? 2 : 0;
+            section = name == "Preload" ? 1 : name == "Postload" ? 2 : name == "Aliases" ? 3 : 0;
             pending.clear();
         } else if (depth == 2 && section != 0) {
             pending = name;
@@ -107,6 +116,8 @@ struct RpakConfigVisitor {
     bool OnString(const char* text, std::size_t size) {
         if (depth == 2 && section == 2 && !pending.empty())
             postload.emplace_back(pending, std::string(text, size));
+        if (depth == 2 && section == 3 && !pending.empty())
+            aliases.emplace_back(pending, std::string(text, size));
         pending.clear();
         return true;
     }
@@ -151,6 +162,50 @@ inline RpakRule ResolveRpakRule(const std::string& pak, const char* config, bool
         }
     }
     return rule;
+}
+
+struct RpakAlias {
+    std::string from, to;
+};
+struct RpakByName {
+    std::string name, path;  // file name, and the path to request it by
+};
+
+// A mod's Aliases, in file order. Both names must be bare .rpak file names:
+// the engine resolves the target under its own paks directory, or the
+// request falls through to a mod pak of that name (ResolveRpakRequest).
+inline bool ParseRpakAliases(const char* config, std::vector<RpakAlias>& aliases) {
+    aliases.clear();
+    if (!config) return false;
+    const std::string text = RelaxJsonToStrict(config);
+    if (*JsonTextSkipWs(text.c_str()) != '{') return false;
+    RpakConfigVisitor visitor;
+    if (!JsonParse(text.c_str(), visitor).ok) return false;
+    for (const auto& alias : visitor.aliases)
+        if (IsRpakFileName(alias.first.c_str()) && IsRpakFileName(alias.second.c_str()))
+            aliases.push_back({alias.first, alias.second});
+    return true;
+}
+
+// What an engine pak request should load, following PC's LoadPakAsync hook:
+// the alias of the highest-priority mod (`aliases` is in ascending priority,
+// so the last match wins), then, when the game has no pak of that name, the
+// first mod pak with that file name. Returns `requested` unchanged otherwise.
+// `vanillaHas` (a file check) runs only when a mod has a pak of that name.
+template <typename VanillaHas>
+inline std::string ResolveRpakRequest(const std::string& requested, const std::vector<RpakAlias>& aliases,
+    const std::vector<RpakByName>& modPaks, VanillaHas&& vanillaHas) {
+    std::string result = requested;
+    for (auto it = aliases.rbegin(); it != aliases.rend(); ++it) {
+        if (it->from == requested) {
+            result = it->to;
+            break;
+        }
+    }
+    if (!IsRpakFileName(result.c_str())) return result;
+    for (const auto& pak : modPaks)
+        if (pak.name == result) return vanillaHas(result) ? result : pak.path;
+    return result;
 }
 
 // The pak worker has a `/app0/r2/paks/PS4/%s` format string, but it is not

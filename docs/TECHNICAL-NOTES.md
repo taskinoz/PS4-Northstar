@@ -5940,3 +5940,46 @@ On PS4:
 
 The hook installs (netmessage fixes 7/7) and the lobby loads. Only a remote server reaches the
 restricted path, so it is untested in play.
+
+## Script entries, pak aliases and on-request mod paks (2026-10-02)
+
+**Script entries.** PC's Mod::ParseScripts skips a `Scripts` entry that lacks `Path` or `RunOn`,
+with a warning. The runtime manifest builder used to return failure instead, and the game then
+read the stock scripts.rson: every mod's scripts, Northstar's own included, were dropped. Such an
+entry is now skipped with a log line. So is one whose text would break the generated rson
+(a quote, newline or bracket). `RunOn` is written verbatim as PC does, so compound expressions are
+evaluated by the engine. Verified with a test mod holding three bad entries: the manifest built
+(11 mods, 116 scripts) and the lobby loaded.
+
+**rpak.json Aliases and FixupPakPath.** PC's LoadPakAsync hook does two things to the game's own
+requests:
+- it redirects a request through the highest-priority mod's `Aliases`. Custom maps built from
+  campaign levels use this, e.g. `"mp_s2s.rpak": "sp_s2s.rpak"`;
+- when the game has no pak of the requested name, it loads an enabled mod's pak of that name. PC
+  registers every mod pak for this, with or without a load rule, which is how a custom map ships
+  its own paks (e.g. a loading-screen pak listed as `false`).
+
+The PS4 hook (`ModLoadPakAsync`) now does both (`ResolveRpakRequest` in mod_rpaks.h,
+host-tested):
+- alias names must be bare `.rpak` file names;
+- the game's paks directory (`/app0/r2/paks/PS4/`) is checked only when a mod has a pak of that
+  name;
+- discovery keeps paks with no rule, still checked for the PS4 layout, as on-request paks.
+
+Verified live with the lobby's loading screen:
+- an alias to `sp_s2s_loadscreen.rpak` made the game open that pak instead;
+- an alias to a converted mod pak with no rule went through the missing-pak check to the mod's
+  path, and the game's pak thread opened it.
+
+The legacy `"<pak>": "<map regex>"` form is not supported; GitHub code search found it only in
+old templates.
+
+**Game STARPaks named by a mod pak.** A pak may stream from the game's own STARPaks; a decompressed
+campaign loading screen refers to `paks\PS4\ps4_all.starpak`. Discovery used to register a
+redirect for every streamed name, which would have sent every game stream of that file to a
+mod folder without it. A redirect is now registered only when the mod ships the file.
+
+**Linear textures in game paks.** The game's own loading-screen pak (`sp_s2s_loadscreen.rpak`,
+decompressed) has five textures whose platform byte is 0, which discovery treats as the PC layout.
+So the PS4 game does use linear textures in some places. Discovery still refuses them; a
+converted mod pak is unaffected.

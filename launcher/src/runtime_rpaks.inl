@@ -83,6 +83,11 @@ struct RuntimeModStarpak {
     std::string request;
 };
 std::vector<RuntimeModStarpak> g_modStarpaks;
+// For the engine's own requests (ResolveRpakRequest): every enabled mod's
+// Aliases in ascending priority, and every loadable mod pak by file name,
+// with or without a load rule.
+std::vector<RpakAlias> g_rpakAliases;
+std::vector<RpakByName> g_modPaksByName;
 std::atomic_flag g_loadingModRpaks = ATOMIC_FLAG_INIT;
 
 bool ReadRpakStarpaks(const std::string& path, std::vector<std::string>& references) {
@@ -129,6 +134,8 @@ bool ReadRpakTexturePlatforms(const std::string& path, RpakTexturePlatforms& pla
 void DiscoverModRpaks() {
     g_modRpaks.clear();
     g_modStarpaks.clear();
+    g_rpakAliases.clear();
+    g_modPaksByName.clear();
     static ModDiscovery mods;
     CollectModNames(mods);
     for (int i = 0; i < mods.count; ++i) {
@@ -145,20 +152,67 @@ void DiscoverModRpaks() {
         }
         closedir(dir);
         std::sort(names.begin(), names.end());
+        if (readConfig) {
+            std::vector<RpakAlias> aliases;
+            if (ParseRpakAliases(config, aliases)) {
+                for (auto& alias : aliases) {
+                    LogFormat("[NorthstarPS4] mod rpak alias: %s %s -> %s\n", mods.names[i], alias.from.c_str(),
+                        alias.to.c_str());
+                    g_rpakAliases.push_back(std::move(alias));
+                }
+            }
+        }
         for (const auto& name : names) {
             bool configUsable = false;
             const RpakRule rule = ResolveRpakRule(name, readConfig ? config : nullptr, configUsable);
-            if (!configUsable) {
-                // PC warns and leaves the pak alone rather than guessing when
-                // it should load. Loading at the wrong time is worse than not
-                // loading at all.
-                LogFormat("[NorthstarPS4] mod rpak skipped, no usable rpak.json: %s/%s\n",
+            std::vector<std::string> references;
+            const std::string rpakPath = directory + "/" + name;
+            if (!ReadRpakStarpaks(rpakPath, references)) {
+                LogFormat("[NorthstarPS4] mod rpak header refused: %s/%s\n",
                     mods.names[i], name.c_str());
                 continue;
             }
+            RpakTexturePlatforms platforms;
+            if (ReadRpakTexturePlatforms(rpakPath, platforms)) {
+                LogFormat("[NorthstarPS4] mod rpak textures: %s total=%zu pc=%zu ps4=%zu other=%zu%s\n",
+                    name.c_str(), platforms.textures, platforms.pc, platforms.ps4, platforms.other,
+                    platforms.pc ? " conversion-required" : "");
+            } else {
+                LogFormat("[NorthstarPS4] mod rpak refused, unsupported archive: %s\n",
+                    name.c_str());
+                continue;
+            }
+            if (!IsSupportedPs4TextureRpak(platforms)) {
+                LogFormat("[NorthstarPS4] mod rpak refused, PS4 texture conversion required: %s\n",
+                    name.c_str());
+                continue;
+            }
+            for (const auto& reference : references) {
+                RuntimeModStarpak stream;
+                stream.embedded = reference;
+                stream.request = directory + "/" + reference;
+                // A pak may stream from one of the game's own STARPaks (a
+                // campaign pak reused by a map refers to paks\PS4\ps4_all).
+                // Redirecting that name to a mod folder without the file
+                // would break every game texture streamed from it.
+                const int fd = open(stream.request.c_str(), O_RDONLY);
+                if (fd < 0) {
+                    LogFormat("[NorthstarPS4] mod starpak not in the mod, left to the game: %s\n",
+                        stream.embedded.c_str());
+                    continue;
+                }
+                close(fd);
+                LogFormat("[NorthstarPS4] mod starpak registered: %s -> %s\n",
+                    stream.embedded.c_str(), stream.request.c_str());
+                g_modStarpaks.push_back(std::move(stream));
+            }
+            g_modPaksByName.push_back({name, ModRpakRequestPath(mods.dirs[i], name)});
             if (rule.kind == RpakLoadKind::None) {
-                LogFormat("[NorthstarPS4] mod rpak skipped, no load rule: %s/%s\n",
-                    mods.names[i], name.c_str());
+                // PC registers it anyway: without a rule (or a usable
+                // rpak.json) it loads only when the game asks for a pak of
+                // that name that it does not have, as a custom map's paks are.
+                LogFormat("[NorthstarPS4] mod rpak on request only (%s): %s/%s\n",
+                    configUsable ? "no load rule" : "no usable rpak.json", mods.names[i], name.c_str());
                 continue;
             }
             RuntimeModRpak entry;
@@ -171,40 +225,6 @@ void DiscoverModRpaks() {
                 entry.request.c_str(), entry.preload ? 1 : 0,
                 entry.after.empty() ? "(none)" : entry.after.c_str());
             g_modRpaks.push_back(std::move(entry));
-
-            std::vector<std::string> references;
-            const std::string rpakPath = directory + "/" + name;
-            if (!ReadRpakStarpaks(rpakPath, references)) {
-                LogFormat("[NorthstarPS4] mod rpak header refused: %s/%s\n",
-                    mods.names[i], name.c_str());
-                g_modRpaks.pop_back();
-                continue;
-            }
-            RpakTexturePlatforms platforms;
-            if (ReadRpakTexturePlatforms(rpakPath, platforms)) {
-                LogFormat("[NorthstarPS4] mod rpak textures: %s total=%zu pc=%zu ps4=%zu other=%zu%s\n",
-                    name.c_str(), platforms.textures, platforms.pc, platforms.ps4, platforms.other,
-                    platforms.pc ? " conversion-required" : "");
-            } else {
-                LogFormat("[NorthstarPS4] mod rpak refused, unsupported archive: %s\n",
-                    name.c_str());
-                g_modRpaks.pop_back();
-                continue;
-            }
-            if (!IsSupportedPs4TextureRpak(platforms)) {
-                LogFormat("[NorthstarPS4] mod rpak refused, PS4 texture conversion required: %s\n",
-                    name.c_str());
-                g_modRpaks.pop_back();
-                continue;
-            }
-            for (const auto& reference : references) {
-                RuntimeModStarpak stream;
-                stream.embedded = reference;
-                stream.request = directory + "/" + reference;
-                LogFormat("[NorthstarPS4] mod starpak registered: %s -> %s\n",
-                    stream.embedded.c_str(), stream.request.c_str());
-                g_modStarpaks.push_back(std::move(stream));
-            }
         }
     }
     LogFormat("[NorthstarPS4] mod rpaks discovered=%zu\n", g_modRpaks.size());
@@ -276,6 +296,15 @@ bool ModRpaksPending() noexcept {
     return false;
 }
 
+// Whether the game has a pak of this name (PC's VanillaHasPak).
+bool VanillaHasPak(const std::string& name) noexcept {
+    const std::string path = "/app0/r2/paks/PS4/" + name;
+    const int fd = open(path.c_str(), O_RDONLY);
+    if (fd < 0) return false;
+    close(fd);
+    return true;
+}
+
 // Every mod pak is loaded here, on the thread making the engine's own request
 // and after that request returns, as PC loads its Postload paks. The module
 // tracker used to load overdue ones from its own thread; the pak system is not
@@ -285,8 +314,17 @@ std::int32_t ModLoadPakAsync(const char* path, void* allocator, std::int32_t fla
     // The engine hands us a working allocator on every call, so mod paks never
     // need one located independently.
     if (allocator) g_rpakAllocator = allocator;
-    const std::int32_t result = g_originalLoadPak(path, allocator, flags);
-    LoadModRpaks(path, allocator);
+    std::string resolved;
+    const char* request = path;
+    if (path && (!g_rpakAliases.empty() || !g_modPaksByName.empty())) {
+        resolved = ResolveRpakRequest(path, g_rpakAliases, g_modPaksByName, VanillaHasPak);
+        if (resolved != path) {
+            LogFormat("[NorthstarPS4] pak request %s -> %s\n", path, resolved.c_str());
+            request = resolved.c_str();
+        }
+    }
+    const std::int32_t result = g_originalLoadPak(request, allocator, flags);
+    LoadModRpaks(request, allocator);
     if (ModRpaksPending()) LoadOverdueModRpaks(allocator);
     return result;
 }

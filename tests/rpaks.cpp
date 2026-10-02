@@ -121,6 +121,41 @@ int main(int argc, char** argv) {
     assert(!ParseRpakStarpakReferences(traversal.data(), traversal.size(), references));
     assert(!ParseRpakStarpakReferences("bad", 3, references));
 
+    // --- Aliases and requests for paks the game does not have ---------------
+    {
+        std::vector<RpakAlias> aliases;
+        assert(ParseRpakAliases(R"({
+            "Aliases": { "mp_s2s.rpak": "sp_s2s.rpak", "../x.rpak": "y.rpak", "a.rpak": "b/c.rpak", },
+            // a comment, as PC allows
+            "Preload": { "mp_s2s_loadscreen": false }
+        })", aliases));
+        assert(aliases.size() == 1 && aliases[0].from == "mp_s2s.rpak" && aliases[0].to == "sp_s2s.rpak");
+        assert(ParseRpakAliases(R"({"Aliases": {}})", aliases) && aliases.empty());
+        assert(!ParseRpakAliases("not json", aliases));
+
+        std::vector<RpakAlias> all = {{"mp_s2s.rpak", "sp_s2s.rpak"}, {"mp_s2s.rpak", "sp_skyway_v1.rpak"},
+            {"mp_box.rpak", "mp_box_pak.rpak"}};
+        const std::vector<RpakByName> modPaks = {{"mp_box_pak.rpak", "/mods/Box/paks/mp_box_pak.rpak"},
+            {"common.rpak", "/mods/Bad/paks/common.rpak"}, {"mp_mine.rpak", "/mods/Map/paks/mp_mine.rpak"}};
+        int checks = 0;
+        auto vanilla = [&](const std::string& name) {
+            ++checks;
+            return name == "common.rpak" || name == "sp_s2s.rpak" || name == "sp_skyway_v1.rpak";
+        };
+        // The highest-priority mod's alias wins (the last in the list).
+        assert(ResolveRpakRequest("mp_s2s.rpak", all, modPaks, vanilla) == "sp_skyway_v1.rpak");
+        // An alias to a mod pak the game does not have loads the mod's pak.
+        assert(ResolveRpakRequest("mp_box.rpak", all, modPaks, vanilla) == "/mods/Box/paks/mp_box_pak.rpak");
+        // A missing game pak loads a mod pak of that name; a game pak is kept.
+        assert(ResolveRpakRequest("mp_mine.rpak", all, modPaks, vanilla) == "/mods/Map/paks/mp_mine.rpak");
+        assert(ResolveRpakRequest("common.rpak", all, modPaks, vanilla) == "common.rpak");
+        // No mod pak of that name: the game's files are not even checked.
+        checks = 0;
+        assert(ResolveRpakRequest("mp_lobby.rpak", all, modPaks, vanilla) == "mp_lobby.rpak" && checks == 0);
+        assert(ResolveRpakRequest("/mods/Map/paks/mp_mine.rpak", all, modPaks, vanilla) ==
+            "/mods/Map/paks/mp_mine.rpak");
+    }
+
     // --- bounded texture-platform inspection -------------------------------
     // One slab, one page and one txtr descriptor. The texture header starts
     // at page offset zero and carries the PS4 layout marker at +0x1c.
