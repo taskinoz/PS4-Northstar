@@ -1,58 +1,50 @@
 # PS4 Northstar
 
-Experimental PS4 native port of Northstar for Titanfall 2 under shadPS4, targeting `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM`.
+[Northstar](https://northstar.tf), the Titanfall 2 multiplayer mod platform, for the PS4 version of Titanfall 2 running in the [shadPS4](https://shadps4.net) emulator (`CUSA04013`, final patch `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM`).
 
-The project now targets the PC Northstar install layout. Mods retain their original `mod.json`, `mod/`, `keyvalues/`, and other content; PS4 differences belong in the native launcher/runtime. **No VPK repacking, baked script manifests, or edits to mod scripts are part of setup.**
+It runs Northstar's own, unchanged mods through a native PS4 runtime. You get:
+- **Northstar's server browser:** join PC and PS4 servers, with your Northstar account and progress.
+- **Hosting:** host matches that appear in the browser.
+- **Mods:** install mods as on PC, and join servers that download their mods.
 
-**Status: alpha, tested under shadPS4 only.** The Northstar lobby, the server browser, joining public servers (with an Atlas identity exported from PC Northstar), hosting private matches, leaving back to the lobby, custom map mods and live mod reload all work. Joining a server downloads its verified mods, as on PC (tested by joining a Parkour server). Converted texture/material RPaks and their streamed STARPaks load and render, including Thunderstore weapon skin packs; unsupported PC-layout archives are refused safely. Releases, with the shadPS4 build to use, are on the [releases page](https://github.com/taskinoz/PS4-Northstar/releases); the current tracker is [docs/GOALS.md](docs/GOALS.md).
+**Status:** tested in shadPS4 only, not on a real PS4.
 
-For the current feature-completeness roadmap and agent handoff, use [docs/GOALS.md](docs/GOALS.md). The [native API inventory](docs/NATIVE-API-INVENTORY.md) maps the pinned PC registrations to PS4 handlers and can be regenerated from source. Historical technical notes do not override the current tracker.
+## Guides
 
-## Layout
+- **[Installing](docs/INSTALL.md):** what you need, installing, signing in, updating and uninstalling.
+- **[Using](docs/USING.md):** signing in with the token helper, mods, controller menus, joining and hosting, chat, launch options.
+- **[Building from source](docs/BUILDING.md):** for developers.
+
+Downloads, with notes and known issues for each version, are on the [releases page](https://github.com/taskinoz/PS4-Northstar/releases).
+
+## How it works
+
+- **The runtime:** a PS4 module, `bin/ps4_retail/northstar_ps4.prx`. A few bytes added to the game's `eboot.bin` make it load the runtime.
+- **What the runtime does:**
+  - serves mod files from `R2Northstar/mods` through the game's own filesystem;
+  - hooks the UI, CLIENT and SERVER script VMs to run Northstar's scripts and natives;
+  - talks to Northstar's master server.
+- **Unchanged files:** the retail archives (`vpk_ps4/`) and Northstar's mods stay byte-for-byte unchanged. Platform differences live in the runtime, or as overrides in this port's own `Northstar.PS4` mod.
+- **Signing in:** a PS4 has no EA app, so the **token helper**, a small app for Windows, macOS and Linux, signs the game in to Northstar through the EA app on a computer and keeps it signed in.
 
 ```text
-Titanfall2 PS4/
-  eboot.bin                         # hash-locked PS4 bootstrap
-  bin/ps4_retail/northstar_ps4.prx    # PS4 native runtime
+<game folder>/
+  eboot.bin                             with the bootstrap
+  bin/ps4_retail/northstar_ps4.prx      the runtime
   R2Northstar/
-    enabledmods.json                # PC Name -> Version -> bool format
-    mods/
-      Author.Mod/
-        mod.json
-        mod/
-        keyvalues/                  # native merged overrides
-        vpk/                        # original mod VPKs, mounted by runtime
-  vpk_ps4/                          # original retail archives
+    mods/                               Northstar's mods, Northstar.PS4, your mods
+  vpk_ps4/                              retail archives, unchanged
 ```
 
-Add/remove mod folders in `R2Northstar/mods` and restart the game. No mod list is compiled into the PRX. Discovery uses each mod's metadata `Name` and `Version` for enabled state. New mods default enabled; lower `LoadPriority` loads first and higher priority wins file overrides. Equal priorities use folder-name ordering for deterministic PS4 behavior. Current bounds: 128 mod folders, folder/metadata names below 64 bytes and metadata below 16 KiB. Other prototype limits are described in the catalog header.
+## Repository
 
-See [the shadPS4 installation guide](docs/INSTALL.md) for exact build/deploy commands, runtime identification and rollback.
+| Path | What it is |
+| --- | --- |
+| `launcher/` | The PS4 runtime (C++). Portable logic is in `launcher/include/northstar_ps4`, with host tests in `tests/`. |
+| `mods/` | This port's mods: `Northstar.PS4` (required), `Northstar.DirectConnect`, and the development `AI.Harness`. |
+| `token-helper/` | The token helper app (Tauri: Rust and a web page). |
+| `scripts/` | Build, packaging, deploy, test and diagnostic scripts. |
+| `vendor/` | Northstar's mods and navmeshes at v1.31.13, as submodules. |
+| `docs/` | The guides, plus [GOALS.md](docs/GOALS.md) (the feature tracker), [TECHNICAL-NOTES.md](docs/TECHNICAL-NOTES.md) (findings, in date order) and the [native API inventory](docs/NATIVE-API-INVENTORY.md). |
 
-## Setup and build
-
-1. Run `git submodule update --init --depth 1` and `python scripts/Build-NorthstarMods.py` to assemble the pinned Northstar 1.31.13 mods, then copy `config/project.example.json` to `config/local.json` and set `northstarModsRoot` to `work/northstar-release/1.31.13/mods` (see [docs/INSTALL.md](docs/INSTALL.md)). Packaging only needs this source, not a PC executable or extracted game content.
-2. Run `.\scripts\New-NorthstarProfile.ps1 -IncludePs4CompatibilityMods`. It discovers every immediate mod folder, copies files byte-for-byte, verifies their hashes, and preserves the source profile's `enabledmods.json`. The switch adds this repository's `Northstar.PS4` (required by the runtime) and `Northstar.DirectConnect`. Output is `dist/northstar-profile/R2Northstar`; supply a fresh `-Output` for later packages. `.\scripts\Sync-NorthstarProfile.ps1` keeps an installed profile in sync instead.
-3. Install the toolchain in [tools/README.md](tools/README.md) and run `.\scripts\Build-Northstar.ps1 -EnableRuntimeManifest -Output .\dist\northstar-runtime-manifest`. That is the supported build; the default and `-EnableExperimentalScriptLoading` builds are older experiments.
-
-For RPAK texture/material mods, create or sync the profile with `-ConvertRpaksForPs4`. Normal runtime builds include the safe loader. The converter writes only profile copies: it never modifies the PC mod source or retail game archives. It currently accepts uncompressed, non-patch Titanfall 2 v7 texture RPaks and refuses unsupported layouts instead of deploying them; the runtime also refuses archives that are not fully PS4-formatted.
-4. On a clean matching retail install, copy the generated `R2Northstar` folder beside `eboot.bin`, install the runtime with `Deploy-Stage2Poc.ps1 -Source .\dist\northstar-runtime-manifest\northstar_ps4.prx` (it keeps a backup), and patch the eboot once with `Enable-Stage2Bootstrap.ps1`. [docs/INSTALL.md](docs/INSTALL.md) has the details, the shadPS4 build to use, and signing in.
-
-The PRX reads `/app0/R2Northstar`; it does not import an old `/app0/mods` or flattened `r2` overlay. A generated `.ns_mod_manifest` is only an emulator fallback when directory enumeration fails; refresh the package if using that fallback after adding/removing folders.
-
-Existing installations with Stage 1 patched VPKs or staged `r2` scripts must be returned to a verified clean retail baseline before testing this architecture. The setup does not guess which old game files are safe to delete or restore. Historical VPK entry points now stop with an error. UI startup with vanilla archives now passes; full script/API parity remains outstanding.
-
-`mods/` holds this port's own mods: `Northstar.PS4` (PS4 fixes as overrides of Northstar files, such as the save layout and controller-friendly menus; required), `Northstar.DirectConnect`, and the opt-in development `AI.Harness`. None of them edit the PC mods. Windows plugin DLLs and platform-specific assets are not made PS4-compatible by copying them. Packaging preserves files; the PS4 runtime supplies the supported services.
-
-## Development
-
-The supported build is `Build-Northstar.ps1 -EnableRuntimeManifest`. It builds the guest script manifest from the vanilla one and enabled mod metadata, serves mod files through the PS4 filesystem, and hooks the UI, CLIENT and SERVER script VMs (constants, Northstar natives, lifecycle callbacks). It also registers the console commands PC Northstar adds (such as `setplaylist`, `ns_start_reauth_and_leave_to_lobby`, `say`, `ban` and `unban`) and mods' own `ConCommands`. The older `-EnableExperimentalScriptLoading` is a separate late-injection experiment.
-
-UI mod-setting changes are saved under guest `/data/northstar_ps4/enabledmods.json`, which takes precedence over the original profile on subsequent boots, and `NSReloadMods` applies them live. Downloaded mods live under guest `/data/northstar_ps4/runtime/remote/mods`.
-
-
-`launcher/include/northstar_ps4/mod_catalog.h` contains portable metadata, enabled-state and ordering policy. `launcher/src/runtime.cpp` contains PS4 module/ABI discovery and engine adapters. `Build-Stage2Poc.ps1` remains available for isolated diagnostic builds. `Invoke-Stage2Iteration.ps1` builds/deploys the PRX and observes emulator logs; it no longer generates script manifests. `token-helper/` is the token helper (a Tauri app for Windows, macOS and Linux), which signs the game in to Northstar through the EA app; `scripts\Build-TokenHelper.ps1` builds it (see [INSTALL](docs/INSTALL.md#signing-in-to-atlas)).
-
-Run `.\scripts\Test-NorthstarProfile.ps1` for host catalog and package tests. Game data, extracted archives, downloaded reference sources, toolchains and generated output stay outside Git (`tools/`, `work/`, `dist/`).
-
-Development automation: [AI.Harness installation and commands](docs/AI-HARNESS.md), plus `scripts/Send-PadInput.ps1` (pad buttons) and `scripts/Capture-GameWindow.ps1` (screenshots) for testing menus and rendering without a person at the controller.
+Game data, extracted archives, toolchains and build output stay out of Git (`tools/`, `work/`, `dist/`). The repository never contains Titanfall 2 files, Northstar release binaries, or extracted or repacked game archives.
