@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NorthstarPS4 Token Helper</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23d9541e'/%3E%3Ctext x='16' y='23' font-family='Segoe UI,Arial' font-weight='700' font-size='20' fill='white' text-anchor='middle'%3EN%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f4f3f1; --card: #ffffff; --text: #1d1c1a; --muted: #6b6862; --line: #e3e0db;
+    --accent: #d9541e; --accent-text: #ffffff; --ok: #1f7a4a; --error: #b3261e; --field: #ffffff;
+    --log: #f8f7f5; --focus: #d9541e55;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161514; --card: #201f1d; --text: #ecebe8; --muted: #a29e97; --line: #34322f;
+      --accent: #ec6a32; --accent-text: #1a0d07; --ok: #5cc98d; --error: #ff8a80; --field: #2a2826;
+      --log: #1a1918; --focus: #ec6a3255;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+  main { max-width: 600px; margin: 0 auto; padding: 32px 16px 48px; }
+  header { display: flex; gap: 14px; align-items: center; margin-bottom: 8px; }
+  .logo {
+    width: 44px; height: 44px; border-radius: 10px; flex: none; display: grid; place-items: center;
+    background: linear-gradient(#e86020, #b02c14); color: #fff; font-weight: 700; font-size: 26px;
+  }
+  h1 { font-size: 21px; line-height: 1.25; margin: 0; }
+  .lead { color: var(--muted); margin: 6px 0 22px; }
+  section {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 18px; margin-bottom: 14px;
+  }
+  h2 { font-size: 15px; margin: 0 0 10px; display: flex; gap: 10px; align-items: center; }
+  .step {
+    width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; flex: none;
+    background: var(--accent); color: var(--accent-text); font-size: 12px; font-weight: 700;
+  }
+  .row { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  .status { display: flex; gap: 8px; align-items: baseline; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; transform: translateY(-1px); }
+  .ok { color: var(--ok); } .ok .dot { background: var(--ok); }
+  .error { color: var(--error); } .error .dot { background: var(--error); }
+  .choice {
+    display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line);
+    border-radius: 9px; margin-bottom: 8px; cursor: pointer;
+  }
+  .choice:has(input:checked) { border-color: var(--accent); }
+  .choice input { margin-top: 4px; accent-color: var(--accent); }
+  .choice small { display: block; color: var(--muted); }
+  .fields { display: grid; grid-template-columns: 1fr 110px; gap: 10px; margin: 4px 0 4px 34px; }
+  .fields[hidden] { display: none; }
+  label.field { font-size: 13px; color: var(--muted); }
+  input[type=text] {
+    width: 100%; padding: 8px 10px; margin-top: 3px; border: 1px solid var(--line); border-radius: 7px;
+    background: var(--field); color: var(--text); font: inherit;
+  }
+  input[type=text]:focus, button:focus-visible { outline: 3px solid var(--focus); outline-offset: 1px; }
+  .actions { display: flex; gap: 14px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  button {
+    font: inherit; font-weight: 600; border-radius: 8px; padding: 8px 18px; cursor: pointer;
+    border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text);
+  }
+  button.secondary { background: transparent; color: var(--text); border-color: var(--line); font-weight: 500; }
+  button:disabled { opacity: .5; cursor: default; }
+  #result { flex: 1 1 240px; min-height: 1.5em; }
+  #activity {
+    list-style: none; margin: 0; padding: 8px 10px; max-height: 180px; overflow: auto; border-radius: 8px;
+    background: var(--log); border: 1px solid var(--line); font: 13px/1.6 ui-monospace, Consolas, Menlo, monospace;
+  }
+  #activity:empty::before { content: "Nothing yet."; color: var(--muted); font-family: inherit; }
+  footer { display: flex; justify-content: space-between; gap: 12px; align-items: center; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+  .banner { padding: 12px 14px; border-radius: 9px; margin-bottom: 14px; border: 1px solid var(--error); color: var(--error); }
+  .banner[hidden] { display: none; }
+  @media (max-width: 480px) { .fields { grid-template-columns: 1fr; margin-left: 0; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo" aria-hidden="true">N</div>
+    <h1>Sign Northstar in through the EA app</h1>
+  </header>
+  <p class="lead">Lets Northstar on your PS4, or in shadPS4, use the EA account signed in on this computer.
+    You can close this page, but keep the token helper's window open while you play: Northstar asks it
+    for a new sign-in when the old one expires.</p>
+
+  <div class="banner" id="gone" hidden></div>
+
+  <section aria-labelledby="ea-title">
+    <h2 id="ea-title"><span class="step">1</span>EA account</h2>
+    <div class="row">
+      <div class="status" id="ea"><span class="dot"></span><span id="ea-text">Connecting to the token helper...</span></div>
+      <button class="secondary" id="retry" hidden>Try again</button>
+    </div>
+  </section>
+
+  <section aria-labelledby="game-title">
+    <h2 id="game-title"><span class="step">2</span>Where is Northstar running?</h2>
+    <form id="signin">
+      <label class="choice"><input type="radio" name="mode" value="local">
+        <span>In shadPS4 on this computer<small>Found by itself when it's running; otherwise it picks up the sign-in when it starts.</small></span></label>
+      <label class="choice"><input type="radio" name="mode" value="remote">
+        <span>On a PS4, or in shadPS4 on another computer<small>In the game, select Launch Northstar. It shows an address and a 4-digit code.</small></span></label>
+      <div class="fields" id="fields">
+        <label class="field">Address<input type="text" id="address" autocomplete="off" spellcheck="false" placeholder="192.168.1.20"></label>
+        <label class="field">Code<input type="text" id="code" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="0000"></label>
+      </div>
+      <div class="actions">
+        <button type="submit" id="submit" disabled>Sign in</button>
+        <div id="result" role="status"></div>
+      </div>
+    </form>
+  </section>
+
+  <section aria-labelledby="activity-title">
+    <h2 id="activity-title"><span class="step">3</span>Activity</h2>
+    <ul id="activity"></ul>
+  </section>
+
+  <footer>
+    <span id="version">NorthstarPS4 token helper</span>
+    <button class="secondary" id="stop">Stop the helper</button>
+  </footer>
+</main>
+<script>
+"use strict";
+const session = new URLSearchParams(location.search).get("s") || "";
+const $ = (id) => document.getElementById(id);
+let form = -1, lastSeq = 0, stopped = false;
+
+async function api(path, body) {
+  const options = { headers: { "X-Session": session }, cache: "no-store" };
+  if (body !== undefined) {
+    options.method = "POST";
+    options.headers["Content-Type"] = "application/json";
+    options.body = JSON.stringify(body);
+  }
+  const response = await fetch(path, options);
+  if (response.status === 403) throw new Error("forbidden");
+  return response.json();
+}
+
+function setMessage(element, message) {
+  element.className = element.id === "ea" ? "status " + (message.kind || "") : (message.kind || "");
+  (element.id === "ea" ? $("ea-text") : element).textContent = message.text || "";
+}
+
+function mode() {
+  const checked = document.querySelector("input[name=mode]:checked");
+  return checked ? checked.value : "local";
+}
+
+function showFields() { $("fields").hidden = mode() !== "remote"; }
+
+function render(state) {
+  $("gone").hidden = true;
+  $("version").textContent = "NorthstarPS4 token helper " + state.version;
+  setMessage($("ea"), state.ea);
+  $("retry").hidden = !state.retry;
+  $("retry").disabled = state.busy;
+  if (state.form !== form) {
+    form = state.form;
+    document.querySelector(`input[name=mode][value=${state.mode === "remote" ? "remote" : "local"}]`).checked = true;
+    if (state.address) $("address").value = state.address;
+    showFields();
+  }
+  $("submit").disabled = !state.ready || state.busy;
+  setMessage($("result"), state.result);
+  const list = $("activity");
+  const atBottom = list.scrollTop + list.clientHeight >= list.scrollHeight - 4;
+  for (const event of state.events) {
+    const item = document.createElement("li");
+    item.textContent = event.text;
+    list.appendChild(item);
+    lastSeq = event.seq;
+  }
+  while (list.children.length > 300) list.firstChild.remove();
+  if (atBottom) list.scrollTop = list.scrollHeight;
+  document.body.style.cursor = state.busy ? "progress" : "";
+}
+
+function gone(text) {
+  $("gone").textContent = text;
+  $("gone").hidden = false;
+  for (const button of document.querySelectorAll("button")) button.disabled = true;
+}
+
+async function poll() {
+  if (stopped) return;
+  try {
+    render(await api("/api/state?since=" + lastSeq));
+  } catch (error) {
+    gone(error.message === "forbidden"
+      ? "This page is out of date. Open the address shown in the token helper's window."
+      : "The token helper is not running. Start it again; it opens a new page.");
+  }
+  if (!stopped) setTimeout(poll, 600);
+}
+
+for (const radio of document.querySelectorAll("input[name=mode]")) radio.addEventListener("change", showFields);
+$("code").addEventListener("input", () => { $("code").value = $("code").value.replace(/\D/g, "").slice(0, 4); });
+$("signin").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  $("submit").disabled = true;
+  try {
+    await api("/api/signin", { mode: mode(), address: $("address").value, code: $("code").value });
+    if (mode() === "remote") $("code").value = "";
+  } catch (error) { /* the next poll says what happened */ }
+});
+$("retry").addEventListener("click", () => api("/api/retry", {}).catch(() => {}));
+$("stop").addEventListener("click", async () => {
+  if (!confirm("Stop the token helper? Northstar can't get a new sign-in until you start it again.")) return;
+  stopped = true;
+  try { await api("/api/quit", {}); } catch (error) { }
+  gone("The token helper has stopped. You can close this page.");
+});
+
+if (!session) gone("Open this page from the token helper's window.");
+else poll();
+</script>
+</body>
+</html>

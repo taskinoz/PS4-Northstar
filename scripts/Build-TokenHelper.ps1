@@ -1,72 +1,86 @@
 <#
 .SYNOPSIS
-Builds the token helper: NorthstarPS4TokenHelper.exe (window) and NorthstarPS4TokenHelperCli.exe (terminal).
+Builds the token helper (token-helper/, Go) for Windows, macOS and Linux.
 
 .DESCRIPTION
-Compiles token-helper/src with the C# compiler of the .NET Framework 4.x that
-ships with Windows 10 and 11 (C# 5), so nothing needs installing to build it
-or to run it. The CLI build defines CLI (see Program.cs). The icon is drawn
-here and written to the output folder, not kept in the repository.
+Cross-compiles with the Go toolchain in tools/go-portable (or `go` on PATH),
+with cgo off, so every platform builds here and needs nothing installed to run:
+- NorthstarPS4TokenHelper.exe          Windows x64
+- NorthstarPS4TokenHelper-macOS        macOS, one universal binary (Apple Silicon + Intel)
+- NorthstarPS4TokenHelper-linux        Linux x64
+Go's linker gives the Apple Silicon build the ad-hoc signature macOS requires;
+the two macOS builds are joined into a universal ("fat") binary here, as lipo
+would. Runs the Go tests first unless -SkipTests.
 #>
 [CmdletBinding()]
-param([string] $Output = (Join-Path (Split-Path $PSScriptRoot) 'dist\token-helper'))
+param(
+    [string] $Output = (Join-Path (Split-Path $PSScriptRoot) 'dist\token-helper'),
+    [string] $Version = '1.0.0',
+    [switch] $SkipTests
+)
 $ErrorActionPreference = 'Stop'
-$root = Join-Path (Split-Path $PSScriptRoot) 'token-helper'
-$csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-if (-not (Test-Path $csc)) { $csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe' }
-if (-not (Test-Path $csc)) { throw 'The .NET Framework 4 C# compiler (csc.exe) was not found.' }
+$repo = Split-Path $PSScriptRoot
+$source = Join-Path $repo 'token-helper'
+$go = Join-Path $repo 'tools\go-portable\go\bin\go.exe'
+if (-not (Test-Path $go)) { $go = (Get-Command go -ErrorAction Stop).Source }
 New-Item -ItemType Directory -Force -Path $Output | Out-Null
 $Output = (Resolve-Path $Output).Path
 
-# The icon: an "N" on a rounded square, as PNG images in an .ico container.
-Add-Type -AssemblyName System.Drawing
-$icon = Join-Path $Output 'NorthstarPS4TokenHelper.ico'
-$images = foreach ($size in 16, 24, 32, 48, 64, 256) {
-    $bitmap = New-Object Drawing.Bitmap $size, $size
-    $g = [Drawing.Graphics]::FromImage($bitmap)
-    $g.SmoothingMode = 'AntiAlias'
-    $g.TextRenderingHint = 'AntiAliasGridFit'
-    $radius = [Math]::Max(2, [int]($size * 0.2))
-    $path = New-Object Drawing.Drawing2D.GraphicsPath
-    $d = $radius * 2; $e = $size - 1
-    $path.AddArc(0, 0, $d, $d, 180, 90); $path.AddArc($e - $d, 0, $d, $d, 270, 90)
-    $path.AddArc($e - $d, $e - $d, $d, $d, 0, 90); $path.AddArc(0, $e - $d, $d, $d, 90, 90); $path.CloseFigure()
-    $brush = New-Object Drawing.Drawing2D.LinearGradientBrush((New-Object Drawing.Point 0, 0), (New-Object Drawing.Point 0, $size),
-        [Drawing.Color]::FromArgb(232, 96, 32), [Drawing.Color]::FromArgb(176, 44, 20))
-    $g.FillPath($brush, $path)
-    $font = New-Object Drawing.Font('Segoe UI', [float]($size * 0.62), [Drawing.FontStyle]::Bold, [Drawing.GraphicsUnit]::Pixel)
-    $format = New-Object Drawing.StringFormat
-    $format.Alignment = 'Center'; $format.LineAlignment = 'Center'
-    $g.DrawString('N', $font, [Drawing.Brushes]::White, (New-Object Drawing.RectangleF(0, ($size * 0.02), $size, $size)), $format)
-    $g.Dispose()
-    $stream = New-Object IO.MemoryStream
-    $bitmap.Save($stream, [Drawing.Imaging.ImageFormat]::Png)
-    $bitmap.Dispose()
-    , @($size, $stream.ToArray())
+Push-Location $source
+$saved = @{ GOOS = $env:GOOS; GOARCH = $env:GOARCH; CGO_ENABLED = $env:CGO_ENABLED }
+try {
+    if (-not $SkipTests) {
+        & $go test ./... | Out-Host
+        if ($LASTEXITCODE) { throw 'Go tests failed' }
+    }
+    $env:CGO_ENABLED = '0'
+    $ldflags = "-s -w -X main.version=$Version"
+    $builds = @(
+        @{ os = 'windows'; arch = 'amd64'; out = 'NorthstarPS4TokenHelper.exe' },
+        @{ os = 'darwin'; arch = 'arm64'; out = 'macos-arm64.tmp' },
+        @{ os = 'darwin'; arch = 'amd64'; out = 'macos-x64.tmp' },
+        @{ os = 'linux'; arch = 'amd64'; out = 'NorthstarPS4TokenHelper-linux' })
+    foreach ($build in $builds) {
+        $env:GOOS = $build.os; $env:GOARCH = $build.arch
+        & $go build -trimpath -ldflags $ldflags -o (Join-Path $Output $build.out) .
+        if ($LASTEXITCODE) { throw "go build failed for $($build.os)/$($build.arch)" }
+    }
+} finally {
+    foreach ($name in $saved.Keys) { Set-Item "env:$name" $saved[$name] }
+    Pop-Location
 }
-$file = New-Object IO.MemoryStream
-$writer = New-Object IO.BinaryWriter($file)
-$writer.Write([uint16]0); $writer.Write([uint16]1); $writer.Write([uint16]$images.Count)
-$offset = 6 + 16 * $images.Count
-foreach ($image in $images) {
-    $side = if ($image[0] -ge 256) { 0 } else { $image[0] }
-    $writer.Write([byte]$side); $writer.Write([byte]$side); $writer.Write([byte]0); $writer.Write([byte]0)
-    $writer.Write([uint16]1); $writer.Write([uint16]32); $writer.Write([uint32]$image[1].Length); $writer.Write([uint32]$offset)
-    $offset += $image[1].Length
-}
-foreach ($image in $images) { $writer.Write([byte[]]$image[1]) }
-$writer.Flush()
-[IO.File]::WriteAllBytes($icon, $file.ToArray())
 
-$sources = Get-ChildItem (Join-Path $root 'src') -Filter *.cs | ForEach-Object { $_.FullName }
-$common = @('/nologo', '/optimize+', '/warnaserror+', '/platform:anycpu', "/win32manifest:$(Join-Path $root 'app.manifest')",
-    "/win32icon:$icon", '/r:System.dll', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll', '/r:System.Xml.dll')
-foreach ($build in @(
-        @{ name = 'NorthstarPS4TokenHelper.exe'; options = @('/target:winexe') },
-        @{ name = 'NorthstarPS4TokenHelperCli.exe'; options = @('/target:exe', '/define:CLI') })) {
-    $out = Join-Path $Output $build.name
-    & $csc @common @($build.options) "/out:$out" @sources
-    if ($LASTEXITCODE) { throw "csc failed for $($build.name)" }
+# Universal macOS binary: a big-endian fat header, then each Mach-O slice
+# aligned to 2^14 bytes, with the CPU type and subtype from its own header.
+function Read-UInt32LE([byte[]] $data, [int] $at) { [BitConverter]::ToUInt32($data, $at) }
+function Write-UInt32BE($stream, [uint32] $value) {
+    $bytes = [BitConverter]::GetBytes($value); [Array]::Reverse($bytes); $stream.Write($bytes, 0, 4)
 }
-Remove-Item -LiteralPath $icon
-Get-ChildItem $Output -Filter *.exe | ForEach-Object { '{0}  {1:N0} bytes' -f $_.Name, $_.Length }
+$slices = foreach ($name in 'macos-arm64.tmp', 'macos-x64.tmp') {
+    $data = [IO.File]::ReadAllBytes((Join-Path $Output $name))
+    # MH_MAGIC_64, 0xfeedfacf (PowerShell reads hex literals that large as negative)
+    if ((Read-UInt32LE $data 0) -ne 4277009103) { throw "$name is not a 64-bit Mach-O file" }
+    , @($data, (Read-UInt32LE $data 4), (Read-UInt32LE $data 8))
+}
+$align = 14
+$fat = New-Object IO.MemoryStream
+Write-UInt32BE $fat 3405691582  # FAT_MAGIC, 0xcafebabe
+Write-UInt32BE $fat ([uint32]$slices.Count)
+$offset = [uint32](1 -shl $align)
+$offsets = @()
+foreach ($slice in $slices) {
+    Write-UInt32BE $fat $slice[1]; Write-UInt32BE $fat $slice[2]
+    Write-UInt32BE $fat $offset; Write-UInt32BE $fat ([uint32]$slice[0].Length); Write-UInt32BE $fat ([uint32]$align)
+    $offsets += $offset
+    $offset = [uint32]([Math]::Ceiling(($offset + $slice[0].Length) / (1 -shl $align)) * (1 -shl $align))
+}
+for ($i = 0; $i -lt $slices.Count; $i++) {
+    $fat.SetLength($offsets[$i])
+    $fat.Position = $offsets[$i]
+    $fat.Write($slices[$i][0], 0, $slices[$i][0].Length)
+}
+[IO.File]::WriteAllBytes((Join-Path $Output 'NorthstarPS4TokenHelper-macOS'), $fat.ToArray())
+Remove-Item -LiteralPath (Join-Path $Output 'macos-arm64.tmp'), (Join-Path $Output 'macos-x64.tmp')
+
+Get-ChildItem $Output -File | Where-Object Name -like 'NorthstarPS4TokenHelper*' |
+    ForEach-Object { '{0,-36} {1,12:N0} bytes' -f $_.Name, $_.Length }

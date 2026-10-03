@@ -10,6 +10,7 @@ network service is involved.
 """
 import json, os, secrets, socket, sys, threading
 import xml.etree.ElementTree as ET
+import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 from cryptography.hazmat.primitives import padding
@@ -97,11 +98,23 @@ def serve_lsx(conn, state_file):
         conn.sendall((encrypt_hex(key, f'<LSX><Response id="{rid}" sender="EbisuSDK">{out}</Response></LSX>') + '\0').encode())
 
 
-def lsx_server(port, state_file):
+class QuickServer(ThreadingHTTPServer):
+    # HTTPServer.server_bind looks up the host name of the address, which on
+    # Windows can take seconds for 127.0.0.2; nothing here needs it.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
+def lsx_socket(port):
     srv = socket.socket()
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(('127.0.0.1', port))
     srv.listen()
+    return srv
+
+
+def lsx_server(srv, state_file):
     while True:
         conn, _ = srv.accept()
         def run(c=conn):
@@ -164,7 +177,7 @@ def atlas_server(port, state_file):
                                                                     'msg': 'Invalid or expired masterserver token'}})
             self.reply(200, {'success': False, 'error': {'enum': 'FAKE_ATLAS', 'msg': 'fake Atlas keeps no save'}})
 
-    ThreadingHTTPServer(('127.0.0.1', port), Handler).serve_forever()
+    return QuickServer(('127.0.0.1', port), Handler)
 
 
 def console_server(host, port, state_file, paired):
@@ -199,18 +212,23 @@ def console_server(host, port, state_file, paired):
             paired['key'] = push.get('refreshKey')
             self.reply(200, {'ok': True})
 
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+    return QuickServer((host, port), Handler)
 
 
 if __name__ == '__main__':
     lsx_port, atlas_port, state = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
     assert list(lsx_key(1337)) == [251, 135, 22, 197, 214, 181, 148, 115, 149, 93, 40, 78, 123, 141, 60, 108]
-    threading.Thread(target=lsx_server, args=(lsx_port, state), daemon=True).start()
+    # Everything is bound before 'ready' is noted, so a test never races it.
+    lsx = lsx_socket(lsx_port)
+    servers = [atlas_server(atlas_port, state)]
     if len(sys.argv) > 4:
         # Two addresses, one console: 127.0.0.2 is not where the helper looks
         # for a game on its own PC, so it has to ask.
         paired = {'key': None}
-        threading.Thread(target=console_server, args=('127.0.0.1', int(sys.argv[4]), state, paired), daemon=True).start()
-        threading.Thread(target=console_server, args=('127.0.0.2', int(sys.argv[4]) + 2, state, paired), daemon=True).start()
+        servers.append(console_server('127.0.0.1', int(sys.argv[4]), state, paired))
+        servers.append(console_server('127.0.0.2', int(sys.argv[4]) + 2, state, paired))
+    threading.Thread(target=lsx_server, args=(lsx, state), daemon=True).start()
+    for server in servers[1:]:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
     note(state, event='ready')
-    atlas_server(atlas_port, state)
+    servers[0].serve_forever()

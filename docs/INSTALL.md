@@ -181,31 +181,45 @@ Mods can make web requests through Northstar's HTTP functions, as on PC. The sam
 
 The PS4 build has no EA (Origin) session of its own, so it cannot get an Atlas token the way Northstar does on PC. A PC signed in to the EA app gets the token for it. No EA credential ever reaches the console: only the account uid and the Northstar player token are copied.
 
-**Token helper (recommended).** The token helper is a small Windows program, `NorthstarPS4TokenHelper.exe`. It signs the game in to Northstar through the EA app on your PC, and gets the game a new token whenever Atlas refuses the old one, so you never copy files around. It needs nothing installed: it runs on the .NET Framework that comes with Windows 10 and 11. Releases include it; to build it from a checkout, run `scripts\Build-TokenHelper.ps1`, which puts it in `dist\token-helper\`.
+**Token helper (recommended).** The token helper is a small program for Windows, macOS and Linux. It signs the game in to Northstar through the EA app on your computer, and gets the game a new token whenever Atlas refuses the old one, so you never copy files around. It needs nothing installed besides the EA app. Releases include it:
 
-1. On the PC, open the EA app and sign in with the account that owns Titanfall 2. PC Northstar does not need to be running.
-2. Open `NorthstarPS4TokenHelper.exe`. It shows the EA account it found, or what to fix (with **Try again**). It isn't signed, so Windows may warn about it the first time: select **More info**, then **Run anyway**.
+| System | File |
+| --- | --- |
+| Windows | `NorthstarPS4TokenHelper.exe` |
+| macOS (Apple Silicon and Intel) | `NorthstarPS4TokenHelper-macOS` |
+| Linux | `NorthstarPS4TokenHelper-linux` |
+
+To build them from a checkout, run `scripts\Build-TokenHelper.ps1` (it uses the Go toolchain in `tools\go-portable`); they go to `dist\token-helper\`.
+
+1. Open the EA app and sign in with the account that owns Titanfall 2. PC Northstar does not need to be running.
+2. Open the token helper. A small window opens with what the helper is doing, and its page opens in your browser. The page shows the EA account it found, or what to fix (with **Try again**).
+   - Windows: double-click it. It isn't signed, so Windows may warn about it the first time: select **More info**, then **Run anyway**.
+   - macOS: double-click it; it opens in Terminal. The first time, macOS refuses to open it because it isn't from an identified developer. Open **System Settings → Privacy & Security**, select **Open Anyway** next to its name, and confirm.
 3. Under **Where is Northstar running?**:
-   - **In shadPS4 on this PC:** if the game is already running, the helper finds it and signs it in by itself. Otherwise select **Sign in**, and the game picks up the sign-in when it starts.
+   - **In shadPS4 on this computer:** if the game is already running, the helper finds it and signs it in by itself. Otherwise select **Sign in**, and the game picks up the sign-in when it starts.
    - **On a PS4, or in shadPS4 on another computer:** start the game and select Launch Northstar. The error message shows this console's address and a 4-digit code, for example `enter 192.168.1.20 4821`. Type them into **Address** and **Code** and select **Sign in**. The game signs in at once, so select Launch Northstar again.
-4. Leave the window open while you play. When Atlas refuses the game's token (it expires after about 24 hours), the game asks the helper for a new one, saves it, and retries. Each time, a line appears under **Activity**, but never the token.
+4. Leave the helper's window open while you play; you can close the browser page. When Atlas refuses the game's token (it expires after about 24 hours), the game asks the helper for a new one, saves it, and retries. Each time, a line appears under **Activity** and in the helper's window, but never the token. Close the window, or select **Stop the helper** on the page, to stop it.
 
-Next time, the helper remembers the console and signs it in again without the code; just have the game running when you open it. Signing in also pairs the game with the helper: the game stores a key, and the helper only gives tokens to a game that sends it. The key is kept in `%APPDATA%\NorthstarPS4\token-helper.json` on the PC and in `atlas_identity.json` in the game. The game and the helper talk over plain HTTP: the game listens on port 37012 and the helper on 37011. Use the helper on a network you trust. Windows may ask whether to let the token helper or shadPS4 use the network: allow it on private networks.
+Next time, the helper remembers the console and signs it in again without the code; just have the game running when you open it. Signing in also pairs the game with the helper: the game stores a key, and the helper only gives tokens to a game that sends it. The key is kept in `token-helper.json` (in `%APPDATA%\NorthstarPS4` on Windows, `~/Library/Application Support/NorthstarPS4` on macOS) and in `atlas_identity.json` in the game. The game and the helper talk over plain HTTP: the game listens on port 37012 and the helper on 37011. Use the helper on a network you trust. Your system may ask whether to let the token helper or shadPS4 use the network: allow it on private networks.
+
+The helper's page is served only to this computer, and it only accepts requests that come from the page the helper opened, so another website cannot use it to send your token anywhere.
 
 Each new token ends the previous session for the account. Starting PC Northstar, or Northstar on any other machine, therefore signs the game out, and the game then asks the helper again. Using the helper ends a PC Northstar session in the same way.
 
-**From a terminal.** `NorthstarPS4TokenHelperCli.exe`, next to the window version, does the same in a command prompt or PowerShell. With no options it finds a running game or the console paired last time, and otherwise asks for the address and code; Enter writes `atlas_identity.json` for shadPS4 on this PC. It keeps serving new tokens until Ctrl+C. Both programs take these options (`--help` lists them):
+**From a terminal.** The same program takes options, and with any of these it runs in the terminal instead of the browser (`--help` lists them all):
 
 | Option | What it does |
 | --- | --- |
 | `--console "192.168.1.20 4821"` | Signs that console in. Use just the address for a console already paired. |
-| `--local` | Signs in Northstar in shadPS4 on this PC. |
-| `--once` | Signs the game in and exits, without serving new tokens (terminal only). |
+| `--local` | Signs in Northstar in shadPS4 on this computer. |
+| `--cli` | Runs in the terminal without a target: finds a running game or the console paired last time, otherwise asks for the address and code. Enter writes `atlas_identity.json` for shadPS4 on this computer. |
+| `--once` | Signs the game in and exits, without serving new tokens. |
 | `--output <file>` | Where `atlas_identity.json` goes when the game is not running here. Defaults to the shadPS4 data folder. |
 | `--port <n>` / `--console-port <n>` | The helper's port (37011) and the game's (37012). |
-| `--advertise-host <address>` | The address the game uses to reach this PC, when the one picked automatically is wrong (for example, with a VPN). |
+| `--advertise-host <address>` | The address the game uses to reach this computer, when the one picked automatically is wrong (for example, with a VPN). |
+| `--no-browser` | Browser mode, but print the page's address instead of opening it. |
 
-Given `--console` or `--local`, the window starts signing in as soon as it has a token. The terminal version exits with 0 when signed in, 1 when signing in failed, and 2 for a bad option. `-nopcsignin` in the game's `ns_startup_args.txt` turns its sign-in listener off.
+In the terminal it keeps serving new tokens until Ctrl+C, and exits with 0 when signed in, 1 when signing in failed, and 2 for a bad option. `-nopcsignin` in the game's `ns_startup_args.txt` turns its sign-in listener off.
 
 **Export from PC Northstar.** Without the helper, copy the token from a running PC Northstar. It is not renewed, so repeat this when it expires.
 

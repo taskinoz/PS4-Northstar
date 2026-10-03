@@ -6354,3 +6354,64 @@ The token helper is now a C# program in `token-helper/`, replacing the PowerShel
 - `scripts/Test-AtlasTokenHelperWindow.ps1`: the window exe, 7/7, plus `-EaDown`.
 - In game (shadPS4, fakes, no identity file, real identity set aside and restored): the window exe
   found the running game, signed it in, and Launch Northstar then authenticated.
+
+## Token helper in Go, for Windows, macOS and Linux (2026-10-04)
+
+The token helper is now one Go program (`token-helper/`), replacing the C# version above. Only the
+PC side changed: the game still uses `runtime_signin.inl` and `RefreshAtlasToken`, so it is the
+same protocol. It uses only the standard library and builds with cgo off, so
+`scripts/Build-TokenHelper.ps1` cross-compiles every platform from Windows with `tools/go-portable`:
+- `NorthstarPS4TokenHelper.exe`: Windows x64, about 7 MB, console subsystem.
+- `NorthstarPS4TokenHelper-macOS`: one universal binary (arm64 + x86_64).
+  - The build joins the two slices itself, as `lipo` would: big-endian fat header, slices aligned
+    to 2^14, CPU type and subtype copied from each Mach-O header.
+  - Go's internal linker gives the arm64 slice the ad-hoc signature (`LC_CODE_SIGNATURE`) that
+    Apple Silicon needs. `debug/macho` confirms both slices and that signature.
+- `NorthstarPS4TokenHelper-linux`: Linux x64.
+
+**One program, two modes** (`main.go`):
+- With `--console`, `--local`, `--once` or `--cli` it runs in the terminal (`cli.go`), with the old
+  flow and messages.
+- Otherwise it serves its page (`ui.go`, `ui/index.html` embedded) on 127.0.0.1 at a random port
+  and opens it in the default browser. A console window stays open as the "keep this open"
+  indicator: on Windows the console subsystem gives it one, and on macOS a double-clicked binary
+  runs in Terminal.
+
+**The page's API** is the dangerous part, because a sign-in sends the player's token to the address
+given. Requests must:
+- name the helper's own address in `Host`, which stops DNS rebinding;
+- carry the session key from the page's URL in `X-Session`;
+- for posts, be JSON, which a form on another site cannot send without CORS (and the helper sends
+  no CORS headers).
+
+The page has a strict Content-Security-Policy and refuses framing. The work runs in the helper:
+the page polls `/api/state` and posts `signin`, `retry` and `quit`.
+
+**Paths:**
+- The pairing file is `os.UserConfigDir()/NorthstarPS4/token-helper.json`, which is `%APPDATA%` on
+  Windows (unchanged, so pairings carry over) and `~/Library/Application Support` on macOS.
+- shadPS4's data folder is the same base plus `shadPS4`. On Linux it is
+  `$XDG_DATA_HOME/shadPS4` (`~/.local/share`).
+
+**Tests.**
+- `go test` in `token-helper/`, 11 tests, with a Go fake EA app, Atlas and console:
+  - the LSX key vector, AES/PKCS7 round trip, XML lookup, target splitting, options;
+  - the state file, including the PowerShell helper's `"console": null`;
+  - mint, sign-in and serving end to end;
+  - the EA app being unreachable;
+  - the page API refusing other hosts, missing or wrong sessions, form posts and GETs;
+  - a UI sign-in with short, wrong and right codes;
+  - help and bad options.
+- `scripts/Test-AtlasTokenHelper.ps1`: 18/18 against the Python fakes, an independent
+  implementation of the protocol. The fakes now bind every server before reporting ready and skip
+  `getfqdn`; a 127.0.0.2 server could come up seconds late.
+- In the built-in browser: the page in dark and light mode, at desktop and phone widths, a wrong
+  code, the right code, activity, and Stop.
+- In game (shadPS4, fakes, no identity file, real identity set aside and restored):
+  - the browser mode found the running game and signed it in, and Launch Northstar authenticated;
+  - `--local --once` signed it in from the terminal.
+
+**Open.**
+- Whether the macOS EA app serves the same LSX on 127.0.0.1:3216 is untested; it needs a Mac.
+- Unsigned binaries: SmartScreen warns on Windows, and Gatekeeper needs "Open Anyway" on macOS.
+- The Windows exe has no icon or version resource yet.

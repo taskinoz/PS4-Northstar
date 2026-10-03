@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-Tests the token helper's terminal build (NorthstarPS4TokenHelperCli.exe) against a fake EA app, Atlas and console.
+Tests the token helper (token-helper/, Go) in the terminal against a fake EA app, Atlas and console.
 
 .DESCRIPTION
 Nothing here touches a real account: tests/token_helper/fake_services.py plays
 the EA app's LSX server, Atlas's /client/origin_auth and a console's sign-in
 listener on local ports, and the helper writes its identity and pairing key
-into a temporary folder. Both exes are built from token-helper/src first
+into a temporary folder. The Windows build is made from token-helper/ first
 (Build-TokenHelper.ps1). Checks:
 - the LSX key schedule against origin-sdk's published vector, the handshake
   and GetAuthCode;
@@ -39,8 +39,8 @@ function LastToken { @(Events | Where-Object event -eq 'token')[-1].token }
 # Start-Process joins its arguments without quoting them, and the repository
 # path may contain spaces.
 function Quote([string] $text) { '"' + $text + '"' }
-& (Join-Path $PSScriptRoot 'Build-TokenHelper.ps1') -Output (Join-Path $work 'bin') | Out-Null
-$exe = Join-Path (Join-Path $work 'bin') 'NorthstarPS4TokenHelperCli.exe'
+& (Join-Path $PSScriptRoot 'Build-TokenHelper.ps1') -Output (Join-Path $work 'bin') -SkipTests | Out-Null
+$exe = Join-Path (Join-Path $work 'bin') 'NorthstarPS4TokenHelper.exe'
 $fakes = Start-Process python -ArgumentList @((Quote (Join-Path $root 'tests\token_helper\fake_services.py')), $LsxPort, $AtlasPort,
     (Quote $state), $ConsolePort) -PassThru -WindowStyle Hidden
 $helper = $null
@@ -81,12 +81,12 @@ try {
     $printed += $run.output
     Check ($run.exit -eq 0 -and (LastSignIn).ok -and (LastSignIn).byKey) 'a paired console is signed in again without a code'
     $before = @(Events | Where-Object event -eq 'signin').Count
-    $run = Run @('--once', '--console-port', $ConsolePort)
+    $run = Run @('--once', '--cli', '--console-port', $ConsolePort)
     $printed += $run.output
     Check ($run.exit -eq 0 -and @(Events | Where-Object event -eq 'signin').Count -eq $before + 1 -and (LastSignIn).ok) 'a running game is found and signed in without asking'
     # A console the helper has to ask about (127.0.0.2, ConsolePort + 2), typed at the prompt.
     Remove-Item -LiteralPath $keyFile
-    $run = Run @('--once', '--console-port', ($ConsolePort + 2)) '127.0.0.2 4821'
+    $run = Run @('--once', '--cli', '--console-port', ($ConsolePort + 2)) '127.0.0.2 4821'
     $printed += $run.output
     Check ($run.exit -eq 0 -and $run.output -match 'Type the address and code' -and (LastSignIn).ok -and -not (LastSignIn).byKey) 'the address and code typed at the prompt sign the console in'
     $run = Run @('--help')
