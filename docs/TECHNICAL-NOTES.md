@@ -6199,4 +6199,11 @@ PC has this as a convar; the PS4 build registers none, and `ApplyStartupConVars`
   - the log showed "asking the token helper" and "refreshed";
   - the retry carried the newly minted token and was accepted;
   - the identity file held that token.
-- The run against the real EA app and Atlas is the user's.
+- With the real EA app and Atlas (2026-10-03, run with the user's permission; no token or key was
+  read or logged):
+  - the LSX handshake and GetAuthCode worked, and Atlas minted a token for the account;
+  - at the next boot, about two minutes later, Atlas refused that token. The cause is unknown: no
+    PC Titanfall or Northstar was running;
+  - the game asked the helper, got a new token, and `auth_with_self` succeeded with 56,306 bytes of
+    pdata;
+  - the boot after that was accepted straight from the identity file the helper had rewritten.
