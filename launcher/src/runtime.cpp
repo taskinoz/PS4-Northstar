@@ -2904,8 +2904,10 @@ void* ModuleTracker(void*) noexcept {
                     rtechHandle = handles[i];
                 }
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
-                if (infoResult == 0 && std::strstr(info.name, "materialsystem") != nullptr && info.segmentCount > 0)
+                if (infoResult == 0 && std::strstr(info.name, "materialsystem") != nullptr && info.segmentCount > 0) {
                     InstallLooseMaterialFallback(reinterpret_cast<std::uintptr_t>(info.segmentInfo[0].address));
+                    InstallLooseTextureOverride(reinterpret_cast<std::uintptr_t>(info.segmentInfo[0].address));
+                }
 #endif
 #if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
                 if (infoResult == 0 && std::strstr(info.name, "localize") != nullptr) {

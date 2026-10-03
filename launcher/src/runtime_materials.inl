@@ -11,7 +11,7 @@
 // missing and drew the checkerboard. With the jump removed, a .vmt that is not
 // in a mounted VPK is opened through the filesystem (and so the mod overlay);
 // a material missing everywhere still fails, after one more open attempt.
-// .vtf files are read through ReadFile first and need no change here.
+// .vtf files have their own loader; see InstallLooseTextureOverride below.
 //
 // A loaded material is then looked up in the VPK cache again (+0x4eb60, at
 // +0x4f98e) to record it in its VPK entry, under a spinlock at entry+0x14.
@@ -45,4 +45,41 @@ void InstallLooseMaterialFallback(std::uintptr_t materialSystemBase) noexcept {
         LogFormat("[NorthstarPS4] loose material fallback installed\n");
     else
         LogFormat("[NorthstarPS4] loose material fallback: write failed\n");
+}
+
+// Loose textures (.vtf) that replace one of the game's own.
+//
+// The VTF loader (+0x6b140, called from +0x69db6) asks the VPK cache about
+// "materials/<name>.vtf" first (ReadFromCache at +0x6b228). Its fourth
+// argument, when set, is a buffer the texture system already filled by
+// reading the game's copy ahead from the VPK. With that buffer the loader
+// unserializes from memory (+0x6b25b on) and never opens a file; without it,
+// it opens the file through OpenEx (+0x6b2ca), which the overlay serves.
+// A mod-only texture has nothing read ahead and loads from the mod. A
+// texture the game also has came from the read-ahead buffer, so the mod's
+// copy was never used, although the overlay had answered false for it.
+//
+// The cache answers false for a file in a mounted VPK only when the overlay
+// has a mod copy of it, so its false branch (+0x6b24c) now goes straight to
+// the open path, ignoring any read-ahead data. Any other miss reopens a file
+// that was read ahead anyway, which is slower but loads the same texture.
+constexpr std::uintptr_t kVtfCacheMissVa = 0x6b24c;
+
+void InstallLooseTextureOverride(std::uintptr_t materialSystemBase) noexcept {
+    static bool done = false;
+    if (!materialSystemBase || done) return;
+    done = true;
+    // mov dword [rbx+0xb0], 0; test r14, r14; je +0x6b2ca (rel8 0x6f)
+    constexpr std::uint8_t miss[] = {0xc7, 0x83, 0xb0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4d, 0x85, 0xf6,
+        0x74, 0x6f};
+    if (std::memcmp(reinterpret_cast<const void*>(materialSystemBase + kVtfCacheMissVa), miss, sizeof(miss)) != 0) {
+        LogFormat("[NorthstarPS4] loose texture override refused: materialsystem profile mismatch\n");
+        return;
+    }
+    // and dword [rbx+0xb0], 0; jmp +0x6b2ca; nop
+    constexpr std::uint8_t open[] = {0x83, 0xa3, 0xb0, 0x00, 0x00, 0x00, 0x00, 0xeb, 0x75, 0x90};
+    if (WriteEngineCode(materialSystemBase + kVtfCacheMissVa, open, sizeof(open)))
+        LogFormat("[NorthstarPS4] loose texture override installed\n");
+    else
+        LogFormat("[NorthstarPS4] loose texture override: write failed\n");
 }

@@ -92,7 +92,7 @@ Mods go in `<game folder>\R2Northstar\mods`, one folder each, exactly as on PC; 
 - mod VPKs (models and textures inside), custom maps, particle manifests;
 - sound replacements (`audio/` folders); `ns_print_played_sounds 1` in the console logs the sound events that play, to find their names;
 - `Dependencies` constants for optional mods;
-- loose materials and textures (`.vmt`, `.vtf`) in their normal PC format;
+- loose materials and textures (`.vmt`, `.vtf`) in their normal PC format, including ones that replace the game's own;
 - web requests (see [Launch options](#launch-options));
 - per-mod save data (Northstar's Safe I/O), with PC's rules: `.txt` and `.json` files only, up to 50 MB per mod.
 

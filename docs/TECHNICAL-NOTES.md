@@ -6467,3 +6467,46 @@ shadPS4 here and names `--console`. Ctrl+C is handled with `SetConsoleCtrlHandle
 - In game (shadPS4, fakes, no identity file, real identity set aside and restored):
   - the window found the running game and signed it in, and Launch Northstar authenticated;
   - `--local --once` signed it in from the terminal.
+
+## Loose textures that replace the game's (2026-10-04)
+
+**The gap.** A loose `.vtf` in a mod was used when the game had no texture of that name, but not
+when it replaced one of the game's. The overlay answered "not cached" for it, yet the mod file was
+never opened.
+
+**The test.** A temporary mod shipped a solid green PC-layout VTF as
+`materials/particle/muzzleflash/flash_core.vtf`, which `englishclient_mp_common` also has (512x256,
+format A8, flags 0x200c). In a hosted `mp_glitch` match, two diagnostics showed what happened:
+- **OpenEx:** logging every `.vtf` request showed 22 opens, all with path ID null (so the overlay's
+  `GAME`-or-null path-ID rule was not the problem). They were the mod-only textures and the
+  cubemaps; `flash_core` was not among them.
+- **The cache lookup's caller:** `__builtin_return_address` in the hook gave
+  materialsystem_ps4+0x6b22e for every texture, `flash_core` included. That is inside the VTF
+  loader at +0x6b140, the only caller of which is +0x69db6.
+- **Straight after the bypass**, shadPS4's FIOS thread opened `client_mp_common.bsp.pak000_001` and
+  `_002`: the texture data came from the VPK.
+
+**The loader** (+0x6b140) takes `(texture, "materials/<name>.vtf", out, CUtlBuffer* data)`:
+1. It asks the VPK cache (ReadFromCache, primary slot 97, at +0x6b228).
+2. Then, at +0x6b256:
+   - If `data` is null, it opens the file through OpenEx (slot 76, at +0x6b2ca: mode `rb`,
+     path ID null). The overlay serves that, which is why mod-only textures worked.
+   - If `data` is set, it wraps the buffer (+0x6b53b on) and unserializes the VTF from memory
+     without opening anything.
+
+The texture system fills `data` ahead of time by reading the game's copy from the VPK, so for a
+texture the game has, the mod's file was never used.
+
+**The fix** (`InstallLooseTextureOverride`, `runtime_materials.inl`). The cache's false branch at
++0x6b24c was `mov dword [rbx+0xb0], 0; test r14, r14; je +0x6b2ca`. It is now
+`and dword [rbx+0xb0], 0; jmp +0x6b2ca`, checked against all 15 original bytes.
+- The cache answers false for a file in a mounted VPK only when the overlay has a mod copy, so in
+  that case the loader now always opens the file, and the overlay serves the mod's.
+- Any other miss just reopens a file that had been read ahead, which is slower but loads the same
+  texture.
+- After the fix, the log shows `open ... Test.LooseVtfOverride/.../flash_core.vtf` and
+  `mod file served` for it. This is the same open-and-read path that mod-only PC-layout textures
+  take, and those render correctly.
+- A screenshot did not catch the muzzle flash itself: the gun fired a single round, and the flash
+  is too short.
+- Profile tests pass, and 4/4 boots reached the lobby.
