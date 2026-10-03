@@ -32,7 +32,7 @@ if ($settings) {
 $pdefArgs = @()
 $pdefFile = Join-Path $repositoryRoot 'mods\Northstar.PS4\mod\cfg\server\persistent_player_data_version_929.pdef'
 if (Test-Path -LiteralPath $pdefFile -PathType Leaf) { $pdefArgs = @($pdefFile) }
-foreach ($suite in @('mod_catalog', 'json_text', 'keyvalues', 'particle_manifest', 'datatable_csv', 'localisation_language', 'pdef_diff', 'sq_value', 'rpaks', 'server_list', 'main_menu_promos', 'mod_download', 'persistence_owner', 'persistence_write_state', 'atlas_server', 'audio_override', 'banlist', 'chat_text', 'host_options', 'http_request', 'mod_concommands', 'mod_dependencies', 'pdata_convert', 'regex_lite', 'startup_args', 'lzss')) {
+foreach ($suite in @('mod_catalog', 'json_text', 'keyvalues', 'particle_manifest', 'datatable_csv', 'localisation_language', 'pdef_diff', 'sq_value', 'rpaks', 'server_list', 'main_menu_promos', 'mod_download', 'persistence_owner', 'persistence_write_state', 'atlas_server', 'audio_override', 'banlist', 'chat_text', 'host_options', 'http_request', 'mod_concommands', 'mod_dependencies', 'pdata_convert', 'regex_lite', 'startup_args', 'lzss', 'atlas_refresh')) {
     $exe = Join-Path $testRoot ($suite + '.exe')
     & clang++.exe -std=c++17 -D_CRT_SECURE_NO_WARNINGS -I (Join-Path $repositoryRoot 'launcher\include') (Join-Path $repositoryRoot ('tests\' + $suite + '.cpp')) -o $exe
     if ($LASTEXITCODE) { throw "Host compilation failed: $suite" }

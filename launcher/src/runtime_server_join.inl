@@ -21,6 +21,69 @@
 // Nothing secret is logged: the player token and the per-connection auth token
 // stay out of the log, the server id and address are fine.
 
+// Atlas token refresh through the PC token helper (atlas_refresh.h,
+// scripts/Start-AtlasTokenHelper.ps1). PC re-authenticates with Origin when
+// Atlas refuses its token; a PS4 cannot, so when atlas_identity.json names a
+// helper, the refused token is replaced by one the helper mints and the
+// request is tried once more. The helper's key and both tokens stay out of
+// the log. `usedToken` is the token the caller just had refused: when another
+// worker has already replaced it, that replacement is used instead.
+std::atomic_flag g_atlasRefreshBusy = ATOMIC_FLAG_INIT;
+constexpr const char* kAtlasIdentityTemp = "/data/northstar_ps4/atlas_identity.json.tmp";
+
+bool RefreshAtlasToken(const std::string& usedToken, std::string& reason) noexcept {
+    if (!g_atlasRefreshUrl[0] || !g_atlasRefreshKey[0]) {
+        reason = "no token helper is set up";
+        return false;
+    }
+    while (g_atlasRefreshBusy.test_and_set(std::memory_order_acquire)) sceKernelUsleep(1000);
+    bool ok = false;
+    if (usedToken != g_atlasToken) {
+        ok = true;  // already refreshed by another request
+    } else {
+        char reply[1024];
+        int status = 0;
+        LogFormat("[NorthstarPS4] atlas token refused; asking the token helper at %s\n", g_atlasRefreshUrl);
+        if (!HttpGetWithHeader(g_atlasRefreshUrl, "X-NorthstarPS4-Key", g_atlasRefreshKey, reply, sizeof(reply),
+                status)) {
+            reason = std::string("the token helper could not be reached at ") + g_atlasRefreshUrl;
+        } else if (status != 200) {
+            std::string message;
+            if (!DecodeJsonString(JsonFindMember(reply, "error"), message) || message.empty())
+                message = "status " + std::to_string(status);
+            reason = "the token helper reported: " + message;
+        } else {
+            atlas::IdentityFields fields;
+            if (!atlas::ParseIdentity(reply, fields)) {
+                reason = "the token helper sent an unreadable reply";
+            } else if (atlas::AcceptRefreshedToken(fields, g_atlasUid, usedToken, reason)) {
+                std::snprintf(g_atlasToken, sizeof(g_atlasToken), "%s", fields.token.c_str());
+                ok = true;
+                // Kept on disk, so a restart starts with the new token.
+                const std::string json = atlas::BuildIdentityJson({g_atlasUid, fields.token, g_atlasRefreshUrl,
+                    g_atlasRefreshKey});
+                FILE* file = std::fopen(kAtlasIdentityTemp, "wb");
+                const bool written = file && std::fwrite(json.data(), 1, json.size(), file) == json.size();
+                if (file && std::fclose(file) != 0) file = nullptr;
+                if (!written || !file || std::rename(kAtlasIdentityTemp, kAtlasIdentityFile) != 0)
+                    LogFormat("[NorthstarPS4] atlas token refreshed, but atlas_identity.json was not updated\n");
+                LogFormat("[NorthstarPS4] atlas token refreshed through the token helper\n");
+            }
+        }
+        if (!ok) LogFormat("[NorthstarPS4] atlas token refresh failed: %s\n", reason.c_str());
+    }
+    g_atlasRefreshBusy.clear(std::memory_order_release);
+    return ok;
+}
+
+// What to tell the player when Atlas refuses the token and no refresh helped.
+std::string AtlasTokenAdvice(const std::string& refreshReason) {
+    if (!g_atlasRefreshUrl[0])
+        return ". Run scripts/Start-AtlasTokenHelper.ps1 on a PC signed in to the EA app to renew it, or re-export "
+               "atlas_identity.json with scripts/Export-AtlasCredentials.ps1.";
+    return ". Token refresh failed: " + refreshReason + ".";
+}
+
 std::atomic<int> joinState{kFetchIdle};
 std::string joinServerId, joinPassword;  // set before the worker starts
 ServerAuthResponse joinResult;           // worker-owned while requesting
@@ -32,14 +95,24 @@ struct PendingConnection { bool ready = false; std::string ip, authToken; int po
 PendingConnection pendingConnection;
 
 void* ServerJoinWorker(void*) noexcept {
-    const std::string url = std::string(kMasterServerUrl) + "/client/auth_with_server?id=" +
-        PercentEncode(g_atlasUid) + "&playerToken=" + PercentEncode(g_atlasToken) +
-        "&server=" + PercentEncode(joinServerId) + "&password=" + PercentEncode(joinPassword);
     LogFormat("[NorthstarPS4] authenticating with server %s\n", joinServerId.c_str());
-
-    joinResult = ServerAuthResponse{};
+    std::string refreshReason;
     int status = 0;
-    const bool got = HttpPost(url.c_str(), joinBuffer, sizeof(joinBuffer), status);
+    bool got = false;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        const std::string usedToken = g_atlasToken;
+        const std::string url = std::string(MasterServerUrl()) + "/client/auth_with_server?id=" +
+            PercentEncode(g_atlasUid) + "&playerToken=" + PercentEncode(usedToken) +
+            "&server=" + PercentEncode(joinServerId) + "&password=" + PercentEncode(joinPassword);
+        joinResult = ServerAuthResponse{};
+        status = 0;
+        got = HttpPost(url.c_str(), joinBuffer, sizeof(joinBuffer), status);
+        if (!got || attempt == 1 || std::strlen(joinBuffer) >= sizeof(joinBuffer) - 1) break;
+        ServerAuthResponse probe;
+        ParseServerAuthResponse(joinBuffer, probe);
+        if (probe.success || probe.errorEnum != "INVALID_MASTERSERVER_TOKEN") break;
+        if (!RefreshAtlasToken(usedToken, refreshReason)) break;
+    }
     if (!got) {
         joinResult.failureReason = "Could not reach the Northstar master server";
     } else if (std::strlen(joinBuffer) >= sizeof(joinBuffer) - 1) {
@@ -52,8 +125,7 @@ void* ServerJoinWorker(void*) noexcept {
         // PC answers these by re-authenticating with Origin and retrying; the
         // PS4 has only the imported token, so the dialog says how to renew it.
         if (joinResult.errorEnum == "INVALID_MASTERSERVER_TOKEN" || joinResult.errorEnum == "PLAYER_NOT_FOUND")
-            joinResult.failureReason += ". Re-export atlas_identity.json with scripts/Export-AtlasCredentials.ps1 "
-                "while PC Northstar is signed in.";
+            joinResult.failureReason += AtlasTokenAdvice(refreshReason);
     }
     if (joinResult.success)
         LogFormat("[NorthstarPS4] server auth succeeded: %s:%d\n", joinResult.ip.c_str(), joinResult.port);
@@ -134,14 +206,26 @@ SelfAuthResponse selfAuthResult;  // worker-owned while requesting
 std::string selfAuthToken;        // UI thread: set by a successful attempt
 
 void* SelfAuthWorker(void*) noexcept {
-    const std::string url = std::string(kMasterServerUrl) + "/client/auth_with_self?id=" + PercentEncode(g_atlasUid) +
-        "&playerToken=" + PercentEncode(g_atlasToken);
     LogFormat("[NorthstarPS4] authenticating with own server\n");
-    selfAuthResult = SelfAuthResponse{};
     constexpr std::size_t kCapacity = 1 << 20;  // the save arrives as a JSON array of bytes (~225 KB)
     auto* buffer = new char[kCapacity];
     int status = 0;
-    if (!HttpPost(url.c_str(), buffer, kCapacity, status)) {
+    bool got = false;
+    std::string refreshReason;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        const std::string usedToken = g_atlasToken;
+        const std::string url = std::string(MasterServerUrl()) + "/client/auth_with_self?id=" +
+            PercentEncode(g_atlasUid) + "&playerToken=" + PercentEncode(usedToken);
+        selfAuthResult = SelfAuthResponse{};
+        status = 0;
+        got = HttpPost(url.c_str(), buffer, kCapacity, status);
+        if (!got || attempt == 1 || std::strlen(buffer) >= kCapacity - 1) break;
+        SelfAuthResponse probe;
+        ParseSelfAuthResponse(buffer, probe);
+        if (probe.success || probe.errorEnum != "INVALID_MASTERSERVER_TOKEN") break;
+        if (!RefreshAtlasToken(usedToken, refreshReason)) break;
+    }
+    if (!got) {
         selfAuthResult.failureReason = "Could not reach the Northstar master server";
     } else if (std::strlen(buffer) >= kCapacity - 1) {
         selfAuthResult.failureReason = "Authentication Failed";

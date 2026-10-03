@@ -6135,3 +6135,68 @@ lobby loading-screen pak, and the overlay test above did the same to every load.
 
 RSPNVPK's chunk terminator fix is on taskinoz/RSPNVPK `feature/vpk-expansion` (fed912e, not built
 here: no .NET SDK).
+
+## Atlas token refresh through a PC helper (2026-10-03)
+
+**Why a helper.** Atlas mints a player token only at `/client/origin_auth?id=<uid>&token=<EA
+code>`, in exchange for an EA authorization code. A token lasts 24 hours, and minting a new one
+invalidates the account's previous token. PC Northstar gets a new code from Origin/EA app and
+re-authenticates. A PS4 has no EA session, so `scripts/Start-AtlasTokenHelper.ps1` does that part
+on a PC and the runtime asks it for a token when Atlas refuses its own.
+
+**Getting the EA code (LSX).** The EA app serves Origin's SDK protocol on TCP 127.0.0.1:3216.
+Messages are XML, ended by a NUL byte. Protocol details are from the MIT-licensed
+`ploxxxy/origin-sdk`:
+- The app opens with `<LSX><Event><Challenge key=…/>`.
+- The client answers with a plain `ChallengeResponse`:
+  - `response` is the key AES-128-ECB encrypted under the default key 00..0f, as hex;
+  - ContentId 1039093 and Title Titanfall2, which tier0 passes to OriginStartup.
+- The app replies with `ChallengeAccepted`.
+- The session key comes from the response's first two hex characters: `seed = c0<<8 | c1`, then
+  16 bytes from MSVC `rand()` (state 7, `state = rand() + seed`, `rand() & 0xff`). Test vector:
+  seed 1337 gives 251,135,22,197,…; `tests/token_helper/fake_services.py` asserts it.
+- Later messages are encrypted under that key and sent as hex, to recipient `EbisuSDK`:
+  - `GetProfile` returns the account's `UserId`;
+  - `GetAuthCode` with ClientId `TITANFALL2-PC-SERVER` (the game's own) returns
+    `<AuthCode value=…>`.
+- Unrelated events may arrive at any time, and the helper skips them.
+
+**The helper:**
+- exchanges the code at Atlas, with a User-Agent starting `R2Northstar/`, which Atlas requires;
+- writes `atlas_identity.json` with `uid`, `playerToken`, `refreshUrl` and `refreshKey`, through a
+  `.tmp` file and a rename;
+- serves `GET /atlas/token`, checking the `X-NorthstarPS4-Key` header in constant time, and
+  answers with `{uid, playerToken}`, or 403, 404, or 502 with `{"error": …}`;
+- caches a token for 60 s, so a burst of requests mints only one;
+- never prints the code, the token or the key.
+
+**Runtime** (`atlas_refresh.h`, `runtime_server_join.inl`):
+- `refreshUrl` and `refreshKey` in the identity file are used only if they are valid: an http(s)
+  URL, and a 32-hex key.
+- When `auth_with_self` or `auth_with_server` returns `INVALID_MASTERSERVER_TOKEN`,
+  `RefreshAtlasToken` GETs the helper with the key header.
+- The reply is checked by `AcceptRefreshedToken`: same uid, a 32-hex token, and not the one just
+  refused.
+- If it passes, the runtime stores the token, rewrites the identity file (`.tmp` and a rename),
+  and retries the request once.
+- Refreshes are serialised. A worker whose refused token was already replaced by another worker
+  uses the replacement instead of asking again.
+- On failure, the join dialog and the log give the reason: no helper set up, helper unreachable,
+  helper error, or a bad reply.
+
+**Master server override.** `+ns_masterserver_hostname <url>` in `ns_startup_args.txt` replaces
+`https://northstar.tf` for every master server request. It is read once, at the first request.
+PC has this as a convar; the PS4 build registers none, and `ApplyStartupConVars` skips the name.
+
+**Tests.**
+- `tests/atlas_refresh.cpp` covers identity parsing and token acceptance.
+- `scripts/Test-AtlasTokenHelper.ps1` runs 11 checks of the helper against the fakes: handshake,
+  auth code, identity file, served endpoint, wrong key, unknown path, nothing secret printed.
+- In game, against the fake EA app and fake Atlas, using `+ns_masterserver_hostname` and a test
+  identity whose token was made stale (the real identity file was renamed aside unread and put
+  back unchanged):
+  - `auth_with_self` was refused;
+  - the log showed "asking the token helper" and "refreshed";
+  - the retry carried the newly minted token and was accepted;
+  - the identity file held that token.
+- The run against the real EA app and Atlas is the user's.

@@ -28,6 +28,7 @@
 #include "northstar_ps4/persistence_owner.h"
 #include "northstar_ps4/persistence_write_state.h"
 #include "northstar_ps4/server_list.h"
+#include "northstar_ps4/atlas_refresh.h"
 #include "northstar_ps4/main_menu_promos.h"
 #include "northstar_ps4/mod_archive.h"
 #include "northstar_ps4/mod_download.h"
@@ -2069,6 +2070,8 @@ bool g_runtimeManifestGenerated = false;
 bool InitHttpTransport() noexcept;
 bool HttpGet(const char* url, char* out, std::size_t capacity, int& status) noexcept;
 bool HttpPost(const char* url, char* out, std::size_t capacity, int& status) noexcept;
+bool HttpGetWithHeader(const char* url, const char* headerName, const char* headerValue, char* out,
+    std::size_t capacity, int& status) noexcept;
 using HttpChunkFn = bool (*)(const void* data, std::size_t size, void* user);
 bool HttpStream(const char* url, HttpChunkFn onChunk, void* user, std::uint64_t& contentLength,
     int& status, const std::atomic<bool>* cancel) noexcept;

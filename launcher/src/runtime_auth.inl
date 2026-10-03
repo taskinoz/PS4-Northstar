@@ -225,6 +225,9 @@ char g_atlasUid[32]{};
 // ApplyAtlasIdentity has found it.
 void* g_platformUserIdConVar = nullptr;
 char g_atlasToken[40]{};
+// The PC token helper, when atlas_identity.json names one (atlas_refresh.h).
+char g_atlasRefreshUrl[260]{};
+char g_atlasRefreshKey[40]{};
 
 // Shown in the UI when authentication is unavailable, so the message has to say
 // what to actually do rather than just that it failed.
@@ -258,6 +261,7 @@ struct AtlasIdentityVisitor {
     std::string pending;
     std::string uid;
     std::string token;
+    std::string refreshUrl, refreshKey;
     bool OnObjectBegin() { ++depth; return true; }
     bool OnObjectEnd() { --depth; pending.clear(); return true; }
     bool OnArrayBegin() { ++depth; return true; }
@@ -269,6 +273,8 @@ struct AtlasIdentityVisitor {
     bool OnString(const char* text, std::size_t size) {
         if (depth == 1 && pending == "uid") uid.assign(text, size);
         else if (depth == 1 && pending == "playerToken") token.assign(text, size);
+        else if (depth == 1 && pending == "refreshUrl") refreshUrl.assign(text, size);
+        else if (depth == 1 && pending == "refreshKey") refreshKey.assign(text, size);
         pending.clear();
         return true;
     }
@@ -319,6 +325,13 @@ void ApplyAtlasIdentity(void* cvar, ModFindVarFn findVar) noexcept {
         std::snprintf(g_atlasToken, sizeof(g_atlasToken), "%s", visitor.token.c_str());
     }
     std::snprintf(g_atlasUid, sizeof(g_atlasUid), "%s", visitor.uid.c_str());
+    if (atlas::IsRefreshUrl(visitor.refreshUrl) && atlas::IsHex32(visitor.refreshKey)) {
+        std::snprintf(g_atlasRefreshUrl, sizeof(g_atlasRefreshUrl), "%s", visitor.refreshUrl.c_str());
+        std::snprintf(g_atlasRefreshKey, sizeof(g_atlasRefreshKey), "%s", visitor.refreshKey.c_str());
+        LogFormat("[NorthstarPS4] atlas identity: token helper at %s\n", g_atlasRefreshUrl);
+    } else if (!visitor.refreshUrl.empty() || !visitor.refreshKey.empty()) {
+        LogFormat("[NorthstarPS4] atlas identity: token helper entry ignored (bad refreshUrl or refreshKey)\n");
+    }
     LogFormat("[NorthstarPS4] atlas identity state=%s (%s)\n",
         AtlasIdentityCode(), AtlasIdentityMessage());
     if (!cvar || !findVar || !g_authConVarWriteReady) {

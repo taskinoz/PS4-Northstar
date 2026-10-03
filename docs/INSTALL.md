@@ -158,7 +158,7 @@ Set the name and password in **Host Options → Server browser**. PC-style launc
 
 shadPS4 writes web requests to `shad_log.txt` when its `Lib.Http` log level is Info or lower, and the listing request carries the server password (Northstar's API takes it in the address). Keep `Lib.Http:Warning` in the log filter, or don't share that log, if the password matters.
 
-Players who join through the server browser play with their own Northstar progress, and what they earn is saved back to their account when a match ends or they leave, as on a PC server. To host without saving players' progress, add `+ns_ps4_write_remote_persistence 0` to `ns_startup_args.txt`. As the host you play with your own Northstar progress too, and it is saved to your account the same way. If Northstar can't be reached or your exported token has expired, the lobby still opens, but with a fresh local profile, and nothing from that session is saved to your account.
+Players who join through the server browser play with their own Northstar progress, and what they earn is saved back to their account when a match ends or they leave, as on a PC server. To host without saving players' progress, add `+ns_ps4_write_remote_persistence 0` to `ns_startup_args.txt`. As the host you play with your own Northstar progress too, and it is saved to your account the same way. If Northstar can't be reached, or your token has expired and the token helper can't replace it, the lobby still opens, but with a fresh local profile, and nothing from that session is saved to your account.
 
 PC players can connect to a PS4 host: it no longer sends the PS4 client module's checksum, which a PC always rejected with "Your .dll [..\bin\x64_retail\client.dll] differs from the server\'s."
 
@@ -179,7 +179,19 @@ Mods can make web requests through Northstar's HTTP functions, as on PC. The sam
 
 ### Signing in to Atlas
 
-The PS4 build has no Origin session of its own, so it cannot perform the Origin exchange Northstar uses on PC. Instead it reads an identity exported from a PC that is already signed in. No EA credential ever reaches the console: only the account uid and the Northstar player token are copied.
+The PS4 build has no EA (Origin) session of its own, so it cannot get an Atlas token the way Northstar does on PC. A PC signed in to the EA app gets the token for it. No EA credential ever reaches the console: only the account uid and the Northstar player token are copied.
+
+**Token helper (recommended).** The helper gets a token through the EA app and gives the console a new one whenever Atlas refuses the old one, so you do not have to re-export every day.
+
+1. On the PC, open the EA app and sign in with the account that owns Titanfall 2. PC Northstar does not need to be running.
+2. Run `scripts\Start-AtlasTokenHelper.ps1`. It asks the EA app for an authorization code, as Titanfall 2 does, exchanges it with Atlas for a token, and writes `atlas_identity.json` into the emulator's `/data/northstar_ps4/`.
+3. Leave its window open while you play. When Atlas refuses the console's token (it expires after about 24 hours), the console asks the helper for a new one, saves it, and retries the request. The helper prints a line each time it does this, but never the token.
+
+The helper only answers requests that carry the pairing key it writes into `atlas_identity.json` (the key is kept in `%APPDATA%\NorthstarPS4\token-helper.json`). By default it listens on this PC only, which is all shadPS4 needs. For a real PS4, run it with `-Lan -Output .\atlas_identity.json` and copy the file to the console once. The console then reaches the helper over your network using plain HTTP, so use `-Lan` only on a network you trust. `-Once` writes one token and exits without serving.
+
+Each new token ends the previous session for the account. Starting PC Northstar therefore signs the console out, and the console then asks the helper again. Running the helper ends a PC Northstar session in the same way.
+
+**Export from PC Northstar.** Without the helper, copy the token from a running PC Northstar. It is not renewed, so repeat this when it expires.
 
 1. On the PC, start Northstar and wait for its log to say `Northstar origin authentication completed successfully`.
 2. Run `scripts\Export-AtlasCredentials.ps1`. It reads the uid and player token out of the running client, cross-checks the uid against the client's own log, and refuses to export on a mismatch. Add `-WhatIf` to see what it would write without writing it.
@@ -194,9 +206,11 @@ The console picks the file up at startup, applies the uid to `platform_user_id`,
 | `PS4_AUTH_NO_TOKEN` | The file has a uid but no `playerToken`. Re-export it from a signed-in PC client. |
 | `PS4_AUTH_BAD_IDENTITY` | The file could not be read, or the token is not 32 hex characters. Re-export it. |
 
-**The exported file is a live credential.** Anyone holding it can authenticate to Atlas as that account. It expires after 24 hours, and sooner if the PC client authenticates again, which mints a replacement and invalidates the copy. Do not commit or share it; re-export when it stops working.
+**`atlas_identity.json` is a live credential.** Anyone holding it can authenticate to Atlas as that account, and with the helper's key they can also ask the helper for new tokens. A token expires after 24 hours, and sooner when another token is minted for the account. Do not commit or share the file.
 
-Joining uses the imported identity to request a per-connection token from Atlas (`auth_with_server`), as PC does, so verified servers accept the connection. If the token has expired, the join dialog says to re-export it.
+Joining uses the imported identity to request a per-connection token from Atlas (`auth_with_server`), as PC does, so verified servers accept the connection. If Atlas refuses the token and the helper cannot replace it, the join dialog says why: for example, the helper is not running, or the EA app is signed out.
+
+`+ns_masterserver_hostname <url>` in `ns_startup_args.txt` points the session at another master server, as the convar does on PC (default `https://northstar.tf`). It is read once per session, at the first master server request, so changing it in the console has no effect.
 
 Mods that use Northstar's Safe I/O API keep their data under guest `/data/northstar_ps4/save_data/<mod folder>`, one folder per mod, with the same rules PC applies: ASCII-only paths that cannot leave the mod's own folder, `.txt` and `.json` writes only, and a 50 MiB per-mod cap. As with enabled settings, the host location of that guest path depends on the emulator's data mount.
 

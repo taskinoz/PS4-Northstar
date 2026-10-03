@@ -12,7 +12,7 @@ char promoBuffer[kPromoBufferSize];
 
 void* MainMenuPromoWorker(void*) noexcept {
     char url[256];
-    std::snprintf(url, sizeof(url), "%s/client/mainmenupromos", kMasterServerUrl);
+    std::snprintf(url, sizeof(url), "%s/client/mainmenupromos", MasterServerUrl());
     int status = 0;
     promoFetchOk = false;
     *fetchedPromos = MainMenuPromoData{};

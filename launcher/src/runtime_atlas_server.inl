@@ -232,7 +232,7 @@ AddResult ReportPresence(const std::string& id) {
         LogFormat("[NorthstarPS4] presence port=%d name=%s map=%s playlist=%s players=%d/%d password=%zu chars\n",
             presence.port, presence.name.c_str(), presence.map.c_str(), presence.playlist.c_str(), presence.playerCount,
             presence.maxPlayers, presence.password.size());
-    const std::string url = std::string(uiapi::kMasterServerUrl) + (id.empty() ? "/server/add_server?" : "/server/update_values?") +
+    const std::string url = std::string(uiapi::MasterServerUrl()) + (id.empty() ? "/server/add_server?" : "/server/update_values?") +
         atlas::PresenceQuery(presence, id);
     if (ConVarInt(g_debugAtlasPacket, 0)) {
         const std::string escaped = http::UrlEscape(presence.password);
@@ -292,7 +292,7 @@ AddResult ReportPresence(const std::string& id) {
 void RemovePresence(const std::string& id) {
     std::string response;
     int status = 0;
-    AtlasHttp("DELETE", std::string(uiapi::kMasterServerUrl) + "/server/remove_server?id=" + http::UrlEscape(id), nullptr, "",
+    AtlasHttp("DELETE", std::string(uiapi::MasterServerUrl()) + "/server/remove_server?id=" + http::UrlEscape(id), nullptr, "",
         response, status);
     LogFormat("[NorthstarPS4] removed the local server from the master server (status %d)\n", status);
 }
@@ -434,7 +434,7 @@ void* ProcessSigreq1(void* argument) {
             Lock lock;
             ownId = g_serverId;
         }
-        const std::string url = std::string(uiapi::kMasterServerUrl) + "/server/connect?serverId=" +
+        const std::string url = std::string(uiapi::MasterServerUrl()) + "/server/connect?serverId=" +
             http::UrlEscape(ownId) + "&token=" + http::UrlEscape(token) + "&reject=" +
             http::UrlEscape("Banned from this server.");
         if (!AtlasHttp("POST", url, nullptr, "", reply, rejectStatus) || rejectStatus != 200)
@@ -449,7 +449,7 @@ void* ProcessSigreq1(void* argument) {
     }
     LogFormat("[NorthstarPS4] getting pdata for connection %s (uid=%llu username=%s)\n", token.c_str(),
         static_cast<unsigned long long>(uid), username.c_str());
-    const std::string base = std::string(uiapi::kMasterServerUrl) + "/server/connect?serverId=" + http::UrlEscape(serverId) +
+    const std::string base = std::string(uiapi::MasterServerUrl()) + "/server/connect?serverId=" + http::UrlEscape(serverId) +
         "&token=" + http::UrlEscape(token);
     std::string pdata;
     int status = 0;
@@ -614,7 +614,7 @@ void* WritePdataWorker(void* argument) {
         "Content-Type: application/octet-stream\r\n\r\n";
     body += write->pdata;
     body += "\r\n--" + boundary + "--\r\n";
-    const std::string url = std::string(uiapi::kMasterServerUrl) + "/accounts/write_persistence?id=" +
+    const std::string url = std::string(uiapi::MasterServerUrl()) + "/accounts/write_persistence?id=" +
         std::to_string(write->uid) + "&serverId=" + http::UrlEscape(serverId);
     std::string response;
     int status = 0;
@@ -956,6 +956,7 @@ void ApplyStartupConVars() noexcept {
         std::size_t size = 0;
         if (!ReadFileIntoBuffer(file, text, sizeof(text), size)) continue;
         for (const auto& assignment : startup::ConVarAssignments(startup::SplitArgs(text))) {
+            if (assignment.first == "ns_masterserver_hostname") continue;  // read by uiapi::MasterServerUrl()
             void* convar = g_modConVarFindVar ? g_modConVarFindVar(g_modConVarCvar, assignment.first.c_str()) : nullptr;
             const bool secret = assignment.first.find("password") != std::string::npos;
             if (!convar) {

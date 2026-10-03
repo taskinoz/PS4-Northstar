@@ -91,7 +91,8 @@ constexpr int kSceHttpMethodPost = 1;
 // is the HTTP status when the request completed at all. A response that fills
 // `out` is returned as success with `out` truncated, so callers that parse the
 // body must check the length themselves.
-bool HttpRequest(int method, const char* url, char* out, std::size_t capacity, int& status) noexcept {
+bool HttpRequest(int method, const char* url, char* out, std::size_t capacity, int& status,
+    const char* headerName = nullptr, const char* headerValue = nullptr) noexcept {
     status = 0;
     if (!out || capacity == 0) return false;
     out[0] = '\0';
@@ -108,6 +109,7 @@ bool HttpRequest(int method, const char* url, char* out, std::size_t capacity, i
         sceHttpDeleteConnection(connection);
         return false;
     }
+    if (headerName && headerValue) sceHttpAddRequestHeader(request, headerName, headerValue, 0);  // overwrite
 
     bool ok = false;
     const int sent = sceHttpSendRequest(request, nullptr, 0);
@@ -188,6 +190,11 @@ bool HttpStream(const char* url, HttpChunkFn onChunk, void* user, std::uint64_t&
 
 bool HttpGet(const char* url, char* out, std::size_t capacity, int& status) noexcept {
     return HttpRequest(kSceHttpMethodGet, url, out, capacity, status);
+}
+
+bool HttpGetWithHeader(const char* url, const char* headerName, const char* headerValue, char* out,
+    std::size_t capacity, int& status) noexcept {
+    return HttpRequest(kSceHttpMethodGet, url, out, capacity, status, headerName, headerValue);
 }
 
 // Atlas's /client/* endpoints take their arguments in the query string and a

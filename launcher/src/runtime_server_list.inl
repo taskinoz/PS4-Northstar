@@ -25,9 +25,36 @@
 // times that. HttpGet reports a full buffer as success, so a response that
 // fills it is rejected here as truncated rather than handed to the parser.
 
-// PC's default for `ns_masterserver_hostname`. This port registers no such
-// convar yet, and nothing else here talks to the master server by URL.
-constexpr const char* kMasterServerUrl = "https://northstar.tf";
+// PC's `ns_masterserver_hostname`, default https://northstar.tf. This port
+// registers no such convar: "+ns_masterserver_hostname <url>" in
+// ns_startup_args.txt (the user data folder's copy wins) sets it for the whole
+// session, for a self-hosted Atlas or a local test one. Read once, at the
+// first master server request.
+constexpr const char* kDefaultMasterServerUrl = "https://northstar.tf";
+
+const char* MasterServerUrl() noexcept {
+    static const std::string url = [] {
+        std::string chosen = kDefaultMasterServerUrl;
+        for (const char* file : {"/app0/ns_startup_args.txt", "/data/northstar_ps4/ns_startup_args.txt"}) {
+            char text[2048];
+            std::size_t size = 0;
+            if (!ReadFileIntoBuffer(file, text, sizeof(text), size)) continue;
+            for (const auto& assignment : startup::ConVarAssignments(startup::SplitArgs(text))) {
+                if (assignment.first != "ns_masterserver_hostname") continue;
+                std::string value = assignment.second;
+                while (!value.empty() && value.back() == '/') value.pop_back();
+                if (atlas::IsRefreshUrl(value) && value.find('?') == std::string::npos) {
+                    chosen = value;
+                    LogFormat("[NorthstarPS4] master server %s (from %s)\n", chosen.c_str(), file);
+                } else {
+                    LogFormat("[NorthstarPS4] +ns_masterserver_hostname in %s ignored: not an http(s) URL\n", file);
+                }
+            }
+        }
+        return chosen;
+    }();
+    return url.c_str();
+}
 constexpr std::size_t kServerListBufferSize = 512 * 1024;
 
 constexpr int kFetchIdle = 0, kFetchRequesting = 1, kFetchReady = 2;
@@ -41,8 +68,8 @@ char listBuffer[kServerListBufferSize];
 
 void* ServerListWorker(void*) noexcept {
     char url[256];
-    std::snprintf(url, sizeof(url), "%s/client/servers", kMasterServerUrl);
-    LogFormat("[NorthstarPS4] requesting server list from %s\n", kMasterServerUrl);
+    std::snprintf(url, sizeof(url), "%s/client/servers", MasterServerUrl());
+    LogFormat("[NorthstarPS4] requesting server list from %s\n", MasterServerUrl());
 
     fetched.clear();
     fetchOk = false;
