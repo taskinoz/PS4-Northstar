@@ -1,4 +1,4 @@
-// Signing in from a PC (atlas_refresh.h, scripts/Start-AtlasTokenHelper.ps1).
+// Signing in from a PC (atlas_refresh.h, token-helper/, NorthstarPS4TokenHelper.exe).
 //
 // The PC token helper gets the Atlas token. To hand it over without copying
 // files, this runtime listens on TCP kSignInPort for the helper's one-time

@@ -6315,3 +6315,42 @@ loopback one: a test console on 127.0.0.2 first lost its code that way.
 - In game with fakes (shadPS4, no identity file, real identity set aside and restored):
   - the window found the running game and signed it in without asking;
   - Launch Northstar then authenticated with that token.
+
+## Token helper as an exe (2026-10-04)
+
+The token helper is now a C# program in `token-helper/`, replacing the PowerShell scripts and the
+`.cmd` from the sections above. `scripts/Build-TokenHelper.ps1` builds it into
+`dist/token-helper/`:
+- It uses the .NET Framework 4 compiler that ships with Windows (C# 5, `/warnaserror+`), so
+  neither building nor running needs anything installed.
+- One source makes two programs:
+  - `NorthstarPS4TokenHelper.exe` (`/target:winexe`), the window;
+  - `NorthstarPS4TokenHelperCli.exe` (`/target:exe /define:CLI`), the terminal version.
+  A window-subsystem exe cannot hold a console properly: the shell does not wait for it, and
+  prompts and Ctrl+C misbehave. So the terminal mode is a separate console build rather than a
+  switch.
+- The manifest declares Windows 10/11, `asInvoker`, system DPI awareness and Common Controls 6.
+- The build draws the icon (an "N" on an orange rounded square, as PNG images in an `.ico`)
+  instead of keeping a binary in the repository.
+- Each exe is about 60 KB and unsigned, so SmartScreen may warn on first run (INSTALL says what to
+  do).
+
+**Source files:**
+- `Lsx.cs`: the EA app protocol.
+- `TokenService.cs`: getting tokens, finding and signing in the game, serving tokens on a
+  background thread.
+- `Options.cs`: options and `HelperState`. Options are matched ignoring case, leading `-`/`/` and
+  inner dashes, so the old `-ConsolePort` still works. The state file `token-helper.json` keeps the
+  same format, so existing pairings carry over.
+- `Cli.cs`: the terminal flow, same messages as before.
+- `MainWindow.cs`: the window, with `async`/`await` on the UI thread. Local or remote follows the
+  selected option, and `--console`/`--local` start signing in once the token arrives.
+- `Program.cs`: picks the build. A named mutex keeps a second window from opening; it would fail
+  on port 37011 anyway.
+
+**Tests.** Both test scripts build the exes from source first.
+- `scripts/Test-AtlasTokenHelper.ps1`: the terminal exe, 18/18, now including `--help` and a bad
+  option.
+- `scripts/Test-AtlasTokenHelperWindow.ps1`: the window exe, 7/7, plus `-EaDown`.
+- In game (shadPS4, fakes, no identity file, real identity set aside and restored): the window exe
+  found the running game, signed it in, and Launch Northstar then authenticated.

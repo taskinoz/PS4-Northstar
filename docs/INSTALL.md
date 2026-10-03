@@ -181,32 +181,31 @@ Mods can make web requests through Northstar's HTTP functions, as on PC. The sam
 
 The PS4 build has no EA (Origin) session of its own, so it cannot get an Atlas token the way Northstar does on PC. A PC signed in to the EA app gets the token for it. No EA credential ever reaches the console: only the account uid and the Northstar player token are copied.
 
-**Token helper (recommended).** The token helper is a small program for the PC. It signs the game in to Northstar through the EA app, and gets the game a new token whenever Atlas refuses the old one, so you never copy files around.
+**Token helper (recommended).** The token helper is a small Windows program, `NorthstarPS4TokenHelper.exe`. It signs the game in to Northstar through the EA app on your PC, and gets the game a new token whenever Atlas refuses the old one, so you never copy files around. It needs nothing installed: it runs on the .NET Framework that comes with Windows 10 and 11. Releases include it; to build it from a checkout, run `scripts\Build-TokenHelper.ps1`, which puts it in `dist\token-helper\`.
 
 1. On the PC, open the EA app and sign in with the account that owns Titanfall 2. PC Northstar does not need to be running.
-2. Double-click `NorthstarPS4-TokenHelper.cmd`. In a repository checkout it is in `scripts\`, next to `Start-AtlasTokenHelper.ps1`. A window opens and shows the EA account it found, or what to fix (with **Try again**).
+2. Open `NorthstarPS4TokenHelper.exe`. It shows the EA account it found, or what to fix (with **Try again**). It isn't signed, so Windows may warn about it the first time: select **More info**, then **Run anyway**.
 3. Under **Where is Northstar running?**:
-   - **In shadPS4 on this PC:** if the game is already running, the window finds it and signs it in by itself. Otherwise select **Sign in**, and the game picks up the sign-in when it starts.
+   - **In shadPS4 on this PC:** if the game is already running, the helper finds it and signs it in by itself. Otherwise select **Sign in**, and the game picks up the sign-in when it starts.
    - **On a PS4, or in shadPS4 on another computer:** start the game and select Launch Northstar. The error message shows this console's address and a 4-digit code, for example `enter 192.168.1.20 4821`. Type them into **Address** and **Code** and select **Sign in**. The game signs in at once, so select Launch Northstar again.
 4. Leave the window open while you play. When Atlas refuses the game's token (it expires after about 24 hours), the game asks the helper for a new one, saves it, and retries. Each time, a line appears under **Activity**, but never the token.
 
-Next time, the window remembers the console and signs it in again without the code; just have the game running when you open the window. Signing in also pairs the game with the helper: the game stores a key, and the helper only gives tokens to a game that sends it. The key is kept in `%APPDATA%\NorthstarPS4\token-helper.json` on the PC and in `atlas_identity.json` in the game. The game and the helper talk over plain HTTP: the game listens on port 37012 and the helper on 37011. Use the helper on a network you trust. Windows may ask whether to let PowerShell or shadPS4 use the network: allow it on private networks.
+Next time, the helper remembers the console and signs it in again without the code; just have the game running when you open it. Signing in also pairs the game with the helper: the game stores a key, and the helper only gives tokens to a game that sends it. The key is kept in `%APPDATA%\NorthstarPS4\token-helper.json` on the PC and in `atlas_identity.json` in the game. The game and the helper talk over plain HTTP: the game listens on port 37012 and the helper on 37011. Use the helper on a network you trust. Windows may ask whether to let the token helper or shadPS4 use the network: allow it on private networks.
 
 Each new token ends the previous session for the account. Starting PC Northstar, or Northstar on any other machine, therefore signs the game out, and the game then asks the helper again. Using the helper ends a PC Northstar session in the same way.
 
-**Without the window.** Give `NorthstarPS4-TokenHelper.cmd` any option, or run `scripts\Start-AtlasTokenHelper.ps1`, and the helper runs in the terminal instead:
+**From a terminal.** `NorthstarPS4TokenHelperCli.exe`, next to the window version, does the same in a command prompt or PowerShell. With no options it finds a running game or the console paired last time, and otherwise asks for the address and code; Enter writes `atlas_identity.json` for shadPS4 on this PC. It keeps serving new tokens until Ctrl+C. Both programs take these options (`--help` lists them):
 
 | Option | What it does |
 | --- | --- |
-| *(none)* | Finds a running game or the console paired last time, otherwise asks for the address and code. Enter writes `atlas_identity.json` for shadPS4 on this PC. |
-| `-Console "192.168.1.20 4821"` | Signs that console in without asking. Use just the address for a console already paired, or `local` for shadPS4 on this PC. |
-| `-Once` | Signs the game in and exits, without serving new tokens. |
-| `-Gui` | Opens the window (what double-clicking does). |
-| `-Output <file>` | Where `atlas_identity.json` goes when the game is not running here. Defaults to the shadPS4 data folder. |
-| `-Port <n>` / `-ConsolePort <n>` | The helper's port (37011) and the game's (37012). |
-| `-AdvertiseHost <address>` | The address the game uses to reach this PC, when the one picked automatically is wrong (for example, with a VPN). |
+| `--console "192.168.1.20 4821"` | Signs that console in. Use just the address for a console already paired. |
+| `--local` | Signs in Northstar in shadPS4 on this PC. |
+| `--once` | Signs the game in and exits, without serving new tokens (terminal only). |
+| `--output <file>` | Where `atlas_identity.json` goes when the game is not running here. Defaults to the shadPS4 data folder. |
+| `--port <n>` / `--console-port <n>` | The helper's port (37011) and the game's (37012). |
+| `--advertise-host <address>` | The address the game uses to reach this PC, when the one picked automatically is wrong (for example, with a VPN). |
 
-`-nopcsignin` in the game's `ns_startup_args.txt` turns its sign-in listener off.
+Given `--console` or `--local`, the window starts signing in as soon as it has a token. The terminal version exits with 0 when signed in, 1 when signing in failed, and 2 for a bad option. `-nopcsignin` in the game's `ns_startup_args.txt` turns its sign-in listener off.
 
 **Export from PC Northstar.** Without the helper, copy the token from a running PC Northstar. It is not renewed, so repeat this when it expires.
 

@@ -1,4 +1,4 @@
-"""Fake EA app (LSX) and fake Atlas for testing scripts/Start-AtlasTokenHelper.ps1.
+"""Fake EA app (LSX) and fake Atlas for testing token-helper/, NorthstarPS4TokenHelper.exe.
 
 usage: fake_services.py <lsx port> <atlas port> <state file> [<console port>]
 Serves until killed. With a console port, also plays a console's sign-in

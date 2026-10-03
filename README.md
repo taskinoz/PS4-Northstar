@@ -51,7 +51,7 @@ The supported build is `Build-Northstar.ps1 -EnableRuntimeManifest`. It builds t
 UI mod-setting changes are saved under guest `/data/northstar_ps4/enabledmods.json`, which takes precedence over the original profile on subsequent boots, and `NSReloadMods` applies them live. Downloaded mods live under guest `/data/northstar_ps4/runtime/remote/mods`.
 
 
-`launcher/include/northstar_ps4/mod_catalog.h` contains portable metadata, enabled-state and ordering policy. `launcher/src/runtime.cpp` contains PS4 module/ABI discovery and engine adapters. `Build-Stage2Poc.ps1` remains available for isolated diagnostic builds. `Invoke-Stage2Iteration.ps1` builds/deploys the PRX and observes emulator logs; it no longer generates script manifests.
+`launcher/include/northstar_ps4/mod_catalog.h` contains portable metadata, enabled-state and ordering policy. `launcher/src/runtime.cpp` contains PS4 module/ABI discovery and engine adapters. `Build-Stage2Poc.ps1` remains available for isolated diagnostic builds. `Invoke-Stage2Iteration.ps1` builds/deploys the PRX and observes emulator logs; it no longer generates script manifests. `token-helper/` is the PC token helper (`NorthstarPS4TokenHelper.exe`), which signs the game in to Northstar through the EA app; `scripts\Build-TokenHelper.ps1` builds it (see [INSTALL](docs/INSTALL.md#signing-in-to-atlas)).
 
 Run `.\scripts\Test-NorthstarProfile.ps1` for host catalog and package tests. Game data, extracted archives, downloaded reference sources, toolchains and generated output stay outside Git (`tools/`, `work/`, `dist/`).
 

@@ -22,7 +22,7 @@
 // stay out of the log, the server id and address are fine.
 
 // Atlas token refresh through the PC token helper (atlas_refresh.h,
-// scripts/Start-AtlasTokenHelper.ps1). PC re-authenticates with Origin when
+// token-helper/, NorthstarPS4TokenHelper.exe). PC re-authenticates with Origin when
 // Atlas refuses its token; a PS4 cannot, so when atlas_identity.json names a
 // helper, the refused token is replaced by one the helper mints and the
 // request is tried once more. The helper's key and both tokens stay out of

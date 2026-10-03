@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string>
 
-// Atlas token refresh through the PC token helper (scripts/Start-AtlasTokenHelper.ps1).
+// Atlas token refresh through the PC token helper (token-helper/, NorthstarPS4TokenHelper.exe).
 //
 // Atlas mints a player token only from an EA authorization code
 // (/client/origin_auth), which a PS4 cannot obtain. The helper runs on a PC

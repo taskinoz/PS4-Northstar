@@ -1,19 +1,21 @@
 <#
 .SYNOPSIS
-Tests Start-AtlasTokenHelper.ps1 against a fake EA app, a fake Atlas and a fake console.
+Tests the token helper's terminal build (NorthstarPS4TokenHelperCli.exe) against a fake EA app, Atlas and console.
 
 .DESCRIPTION
 Nothing here touches a real account: tests/token_helper/fake_services.py plays
 the EA app's LSX server, Atlas's /client/origin_auth and a console's sign-in
 listener on local ports, and the helper writes its identity and pairing key
-into a temporary folder. Checks:
+into a temporary folder. Both exes are built from token-helper/src first
+(Build-TokenHelper.ps1). Checks:
 - the LSX key schedule against origin-sdk's published vector, the handshake
   and GetAuthCode;
 - the identity file when no game is running;
 - signing a console in: a wrong code, the right code, typed at the prompt,
   again by the paired key, and finding a running game by itself;
+- --help and a bad option;
 - the served endpoint with the right key, a wrong key and an unknown path;
-- that nothing secret is printed, and that Windows PowerShell 5.1 runs it.
+- that nothing secret is printed.
 Needs Python with the `cryptography` package.
 #>
 [CmdletBinding()]
@@ -37,15 +39,16 @@ function LastToken { @(Events | Where-Object event -eq 'token')[-1].token }
 # Start-Process joins its arguments without quoting them, and the repository
 # path may contain spaces.
 function Quote([string] $text) { '"' + $text + '"' }
+& (Join-Path $PSScriptRoot 'Build-TokenHelper.ps1') -Output (Join-Path $work 'bin') | Out-Null
+$exe = Join-Path (Join-Path $work 'bin') 'NorthstarPS4TokenHelperCli.exe'
 $fakes = Start-Process python -ArgumentList @((Quote (Join-Path $root 'tests\token_helper\fake_services.py')), $LsxPort, $AtlasPort,
     (Quote $state), $ConsolePort) -PassThru -WindowStyle Hidden
 $helper = $null
-$script = Join-Path $root 'scripts\Start-AtlasTokenHelper.ps1'
-$common = @('-LsxPort', $LsxPort, '-MasterServer', "http://127.0.0.1:$AtlasPort", '-Output', $identity, '-KeyFile', $keyFile,
-    '-Port', $HelperPort, '-MinSecondsBetweenTokens', '0')
-function Run([string] $shell, [string[]] $extra, [string] $stdin = '') {
-    $arguments = @('-NoProfile', '-File', $script) + $common + $extra
-    if ($stdin) { $output = $stdin | & $shell @arguments 2>&1 | Out-String } else { $output = & $shell @arguments 2>&1 | Out-String }
+$common = @('--lsx-port', $LsxPort, '--master-server', "http://127.0.0.1:$AtlasPort", '--output', $identity, '--key-file', $keyFile,
+    '--port', $HelperPort, '--min-seconds-between-tokens', '0')
+function Run([string[]] $extra, [string] $stdin = '') {
+    $arguments = $common + $extra
+    if ($stdin) { $output = $stdin | & $exe @arguments 2>&1 | Out-String } else { $output = & $exe @arguments 2>&1 | Out-String }
     return @{ output = $output; exit = $LASTEXITCODE }
 }
 $printed = ''
@@ -55,7 +58,7 @@ try {
     Check ([bool](Events | Where-Object event -eq 'ready')) 'fake services started (LSX key vector checked)'
 
     # No game running: the identity file.
-    $run = Run pwsh @('-Once', '-Console', 'local', '-ConsolePort', $NoConsolePort)
+    $run = Run @('--once', '--local', '--console-port', $NoConsolePort)
     $printed += $run.output
     $events = @(Events)
     Check ([bool]($events | Where-Object { $_.event -eq 'handshake' -and $_.ok })) 'LSX challenge handshake accepted'
@@ -66,35 +69,36 @@ try {
     Check ($file.refreshUrl -eq "http://127.0.0.1:$HelperPort/atlas/token" -and $file.refreshKey -eq $pair.key) 'the identity file names the helper and its key'
 
     # A console: wrong code, right code, prompt, paired key, found by itself.
-    $run = Run pwsh @('-Once', '-Console', '127.0.0.1 1111', '-ConsolePort', $ConsolePort)
+    $run = Run @('--once', '--console', '127.0.0.1 1111', '--console-port', $ConsolePort)
     $printed += $run.output
-    Check ($run.exit -ne 0 -and $run.output -match 'wrong code' -and -not (LastSignIn).ok) 'a wrong code is refused and reported'
-    $run = Run pwsh @('-Once', '-Console', '127.0.0.1 4821', '-ConsolePort', $ConsolePort)
+    Check ($run.exit -eq 1 -and $run.output -match 'wrong code' -and -not (LastSignIn).ok) 'a wrong code is refused and reported'
+    $run = Run @('--once', '--console', '127.0.0.1 4821', '--console-port', $ConsolePort)
     $printed += $run.output
     $signin = LastSignIn
     Check ($run.exit -eq 0 -and $signin.ok -and -not $signin.byKey -and $signin.token -eq (LastToken) -and $signin.uid -eq '1012345678901') 'the right code signs the console in with the minted token'
     Check ($signin.refreshUrl -eq "http://127.0.0.1:$HelperPort/atlas/token") 'the sign-in names this helper'
-    $run = Run pwsh @('-Once', '-ConsolePort', $ConsolePort, '-Console', '127.0.0.1')
+    $run = Run @('--once', '--console-port', $ConsolePort, '--console', '127.0.0.1')
     $printed += $run.output
     Check ($run.exit -eq 0 -and (LastSignIn).ok -and (LastSignIn).byKey) 'a paired console is signed in again without a code'
     $before = @(Events | Where-Object event -eq 'signin').Count
-    $run = Run pwsh @('-Once', '-ConsolePort', $ConsolePort)
+    $run = Run @('--once', '--console-port', $ConsolePort)
     $printed += $run.output
     Check ($run.exit -eq 0 -and @(Events | Where-Object event -eq 'signin').Count -eq $before + 1 -and (LastSignIn).ok) 'a running game is found and signed in without asking'
     # A console the helper has to ask about (127.0.0.2, ConsolePort + 2), typed at the prompt.
     Remove-Item -LiteralPath $keyFile
-    $run = Run pwsh @('-Once', '-ConsolePort', ($ConsolePort + 2)) '127.0.0.2 4821'
+    $run = Run @('--once', '--console-port', ($ConsolePort + 2)) '127.0.0.2 4821'
     $printed += $run.output
     Check ($run.exit -eq 0 -and $run.output -match 'Type the address and code' -and (LastSignIn).ok -and -not (LastSignIn).byKey) 'the address and code typed at the prompt sign the console in'
-    $run = Run powershell @('-Once', '-Console', "127.0.0.1 4821", '-ConsolePort', $ConsolePort)
-    $printed += $run.output
-    Check ($run.exit -eq 0 -and (LastSignIn).ok -and (LastSignIn).token -eq (LastToken)) 'Windows PowerShell 5.1 runs the helper'
+    $run = Run @('--help')
+    Check ($run.exit -eq 0 -and $run.output -match '--console') '--help prints the options'
+    $run = Run @('--nonsense')
+    Check ($run.exit -eq 2 -and $run.output -match 'Unknown option') 'a bad option is refused (exit 2)'
 
     # Serve mode.
     $pair = Get-Content $keyFile -Raw | ConvertFrom-Json
-    $helper = Start-Process pwsh -ArgumentList (@('-NoProfile', '-File', (Quote $script), '-LsxPort', $LsxPort, '-MasterServer',
-        "http://127.0.0.1:$AtlasPort", '-Output', (Quote $identity), '-KeyFile', (Quote $keyFile), '-Port', $HelperPort,
-        '-MinSecondsBetweenTokens', '0', '-Console', 'local', '-ConsolePort', $NoConsolePort)) -PassThru -WindowStyle Hidden
+    $helper = Start-Process $exe -ArgumentList (@('--lsx-port', $LsxPort, '--master-server', "http://127.0.0.1:$AtlasPort",
+        '--output', (Quote $identity), '--key-file', (Quote $keyFile), '--port', $HelperPort, '--min-seconds-between-tokens', '0',
+        '--local', '--console-port', $NoConsolePort)) -PassThru -WindowStyle Hidden
     $url = "http://127.0.0.1:$HelperPort/atlas/token"
     $deadline = (Get-Date).AddSeconds(20)
     $reply = $null
@@ -115,7 +119,9 @@ try {
 } finally {
     if ($helper -and -not $helper.HasExited) { Stop-Process -Id $helper.Id -Force }
     if ($fakes -and -not $fakes.HasExited) { Stop-Process -Id $fakes.Id -Force }
+    Start-Sleep -Milliseconds 500
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 if ($failures) { throw "$failures token helper check(s) failed" }
 Write-Host 'Token helper tests passed.'
+exit 0

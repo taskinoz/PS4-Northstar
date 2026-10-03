@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-Tests the token helper window (Start-AtlasTokenHelper.ps1 -Gui) against a fake EA app, Atlas and console.
+Tests the token helper window (NorthstarPS4TokenHelper.exe) against a fake EA app, Atlas and console.
 
 .DESCRIPTION
-Opens the window as NorthstarPS4-TokenHelper.cmd does, against
-tests/token_helper/fake_services.py, and drives it: the EA account shown,
+Builds the exes from token-helper/src (Build-TokenHelper.ps1), opens the window
+against tests/token_helper/fake_services.py, and drives it: the EA account shown,
 nothing found, a wrong code, the right code, and a token served to the paired
 game. -EaDown checks the message when the EA app cannot be reached instead.
 WinForms controls show up to UI Automation here as plain panes, so they are
@@ -63,14 +63,16 @@ function Check([bool] $ok, [string] $what) { if ($ok) { Write-Host "ok   $what" 
 
 # The fake console listens on 127.0.0.1:39219 and 127.0.0.2:39221; the window
 # looks for a game on 127.0.0.1:39221, finds none, and is pointed at 127.0.0.2.
+$gui = $null
+& (Join-Path $PSScriptRoot 'Build-TokenHelper.ps1') -Output (Join-Path $work 'bin') | Out-Null
+$exe = Join-Path (Join-Path $work 'bin') 'NorthstarPS4TokenHelper.exe'
 $fakes = Start-Process python -ArgumentList @((Q "$root\tests\token_helper\fake_services.py"), 39216, 39217, (Q $state), 39219) -PassThru -WindowStyle Hidden
 try {
     Start-Sleep 2
     $lsx = if ($EaDown) { 39299 } else { 39216 }
-    # As NorthstarPS4-TokenHelper.cmd starts it.
-    $line = "start `"`" powershell -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$root\scripts\Start-AtlasTokenHelper.ps1`" -Gui " +
-        "-LsxPort $lsx -MasterServer http://127.0.0.1:39217 -Output `"$work\id.json`" -KeyFile `"$work\k.json`" -Port 39218 -ConsolePort 39221 -MinSecondsBetweenTokens 0"
-    cmd /c $line
+    $gui = Start-Process $exe -PassThru -ArgumentList @('--lsx-port', $lsx, '--master-server', 'http://127.0.0.1:39217',
+        '--output', (Q "$work\id.json"), '--key-file', (Q "$work\k.json"), '--port', 39218, '--console-port', 39221,
+        '--min-seconds-between-tokens', 0)
     $window = $null
     $deadline = (Get-Date).AddSeconds(30)
     $cond = New-Object Windows.Automation.PropertyCondition($AE::NameProperty, 'NorthstarPS4 Token Helper')
@@ -112,9 +114,9 @@ try {
         Shot $window '3-signed-in'
     }
 } finally {
-    Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -match 'Start-AtlasTokenHelper.ps1' -and $_.CommandLine -match '-Gui' } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+    if ($gui -and -not $gui.HasExited) { Stop-Process -Id $gui.Id -Force }
     if ($fakes -and -not $fakes.HasExited) { Stop-Process -Id $fakes.Id -Force }
+    Start-Sleep -Milliseconds 500
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 if ($failed) { throw "$failed token helper window check(s) failed" }
