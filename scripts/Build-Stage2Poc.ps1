@@ -126,9 +126,9 @@ $buildInfo = [ordered]@{
     modRpaks = [bool]$EnableM6FsOverlay
     filesystemOverrides = [bool]$EnableM6FsOverlay
     lateScriptInjection = [bool]$EnableM6ScriptInject
-    authentication = 'atlas-imported-identity'
+    authentication = 'atlas-token-helper'
     fullNorthstarCompatibility = $false
-    knownBlocker = 'Atlas identity imported from a PC Northstar client (Export-AtlasCredentials.ps1); server browser, joining and PS4-hosted private matches work. Runs on shadPS4 nightly 2b5666b3 (2026-09-25). Builds before ca89b01 crash when leaving a loaded map; builds from c6fa48c7 (#5110) until f6cd16e8 (#5133) render matches black. Enable the pipeline cache for CUSA04013, or remote matches can time out while shaders compile. Mod RPaks must be staged with -ConvertRpaksForPs4; unsupported archives are refused.'
+    knownBlocker = 'Signed in to Atlas through the NorthstarPS4 Token Helper (EA app on a PC; renews the token in game), or with an identity exported from PC Northstar. Server browser, joining and PS4-hosted matches work under shadPS4; untested on PS4 hardware. Documented shadPS4 build: nightly 2b5666b3 (2026-09-25); builds before ca89b01 crash when leaving a loaded map, and builds from c6fa48c7 (#5110) until f6cd16e8 (#5133) render matches black. Enable the pipeline cache for CUSA04013. Mod RPaks must be converted to the PS4 layout; unsupported archives are refused.'
 }
 $buildInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputRoot 'northstar_ps4.build.json') -Encoding UTF8
 [pscustomobject]@{ File=$file.FullName; Bytes=$file.Length; SHA256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); Toolchain=$toolchainRoot }
