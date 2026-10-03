@@ -6119,3 +6119,19 @@ removed for this test:
   this. Whether VPK textures must be in that layout needs a visible test.
 
 The rifle was put back to its shipped loose layout afterwards.
+
+**Textures in a mod VPK (2026-10-03).** The Resonance Rifle's 19 `.vtf` were packed into a mod VPK
+(RSPNVPK, `-n 0`) with its `.vmt` and models left loose; no loose `.vtf` remained:
+- in PC layout, the ring sight drew as a clean ring, with the neon glow and crystals;
+- converted to the PS4 VPK layout, the sight drew as a scrambled dot grid.
+
+So mod textures stay in PC layout whether loose or in a mod VPK, and nothing converts `.vtf`. The
+game's own VPK entries for textures carry texture flags 0x80000 and RSPNVPK writes 0; the texture
+loader branches on a flag in the VPK entry, which is the likely reason. A vgui `ImagePanel` image
+(for example the loading screen's overlay) is a UI image asset, not a `materials/vgui` file, so a
+mod VPK cannot supply one; overriding it gives a full-screen checkerboard. The checkerboard
+loading screens the user saw match test mods installed at the time. Test.PakAlias aliased the
+lobby loading-screen pak, and the overlay test above did the same to every load.
+
+RSPNVPK's chunk terminator fix is on taskinoz/RSPNVPK `feature/vpk-expansion` (fed912e, not built
+here: no .NET SDK).
