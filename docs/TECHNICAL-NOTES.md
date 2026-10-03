@@ -6207,3 +6207,71 @@ PC has this as a convar; the PS4 build registers none, and `ApplyStartupConVars`
   - the game asked the helper, got a new token, and `auth_with_self` succeeded with 56,306 bytes of
     pdata;
   - the boot after that was accepted straight from the identity file the helper had rewritten.
+
+## Signing in from the PC token helper over the network (2026-10-03)
+
+The first token helper wrote `atlas_identity.json` on the PC. A real PS4, or shadPS4 on another
+computer, needed that file copied over once. Now the helper hands the token to the running game
+instead, and the game asks it for later tokens as before.
+
+**Game side** (`runtime_signin.inl`, checks in `atlas_refresh.h`):
+- At boot (after the identity file is read) a thread listens on TCP 37012. `-nopcsignin` in
+  `ns_startup_args.txt` turns it off.
+- It reads the console's address from `sceNetCtlGetInfo(IP_ADDRESS)` (shadPS4 reports the host's
+  LAN address) and picks a 4-digit code. While the game is not signed in, the Launch Northstar
+  error shows both: "enter 192.168.1.20 4821 when it asks". The code is also logged.
+- `GET /northstar/hello` answers `{"app":"NorthstarPS4","signedIn":…}`, so the helper can find a
+  running game. `POST /northstar/signin` takes `{uid, playerToken, refreshUrl, refreshKey, code}`.
+- `CheckSignInPush` accepts a push:
+  - from this machine (peer 127.x): shadPS4 on the helper's own PC;
+  - with the right code;
+  - with the `refreshKey` of the helper already paired.
+  After 5 wrong codes, only the last two are accepted until the game restarts. All four values
+  are validated: digits, 32 hex, an http(s) URL, 32 hex.
+- An accepted push sets the uid, token and helper entry, sets the state to signed in (the state is
+  now atomic), and saves `atlas_identity.json`. No restart is needed:
+  - `platform_user_id` is now found at boot even without an identity file;
+  - `EnsureConnectUid` re-applies the uid before each connect.
+- **Non-blocking sockets.** The first build used a blocking `sceNetAccept`. A boot with no
+  identity file then stalled at "UI VM probe attempt=0". shadPS4's `PosixSocket::Accept` holds the
+  socket's mutex for the whole blocking `accept`, and `sceNetGetSockInfo` locks every socket. Both
+  sockets now use `SO_NBIO` (0x1200) and are polled: accept every 250 ms, recv for up to 3 s.
+  After that, no-identity and normal boots both completed.
+
+**Helper side** (`Start-AtlasTokenHelper.ps1`, `NorthstarPS4-TokenHelper.cmd` to double-click). It
+now runs in Windows PowerShell 5.1 too: `System.Xml` is referenced, and `-UserAgent` replaces a
+`User-Agent` header. After getting the token it hands it over, in this order:
+1. `-Console "<address> [code]"`, or `-Console local`;
+2. a game answering on 127.0.0.1:37012, with no code;
+3. the console paired last time, by key;
+4. otherwise a prompt for "<address> <code>". Enter there writes `atlas_identity.json` locally,
+   for shadPS4 that hasn't started yet.
+
+The `refreshUrl` it sends uses the local end of a route to the console, so the game reaches this PC
+on the right interface. It listens on all interfaces only when the console is remote.
+
+**Tests.**
+- `tests/atlas_refresh.cpp`: request-head parsing, push checks, codes.
+- `scripts/Test-AtlasTokenHelper.ps1` (17 checks), adding a fake console to
+  `tests/token_helper/fake_services.py`: identity file, wrong code, right code, prompt, paired key,
+  finding a running game, Windows PowerShell 5.1, the served endpoint, nothing secret printed.
+- In game, with fakes and no identity file at boot (real identity renamed aside and restored
+  unchanged):
+  - a wrong code from the PC's LAN address (192.168.0.126) was refused;
+  - the right code was accepted;
+  - a second push was accepted by the paired key;
+  - a push from 127.0.0.1 was accepted without a code;
+  - Launch Northstar straight afterwards authenticated with the pushed token (`auth_with_self`
+    accepted), without a restart.
+  - With no identity, the harness's Launch Northstar returned "Not signed in to Northstar. On a PC
+    signed in to the EA app, run the NorthstarPS4 token helper and enter 192.168.0.126 4898 when it
+    asks".
+- 4/4 boots to the lobby with the user's identity.
+- Not yet tried: a real PS4 (the port runs on shadPS4).
+
+**Token lifetime seen live.** Atlas refuses a token once the account has a newer one, or after
+`ATLAS_API0_TOKEN_EXPIRY_TIME`, which defaults to 24 h but is set per deployment
+(Atlas-reference `client.go`). Both the token minted at 18:32 (refused at 18:34) and the one
+minted at 18:34 (refused by about 20:15) went before 24 h. Something else signing the account in,
+such as another machine, is the likely cause. The game renews through the helper, but only while
+the helper runs; otherwise the lobby falls back to the local save.

@@ -78,10 +78,16 @@ bool RefreshAtlasToken(const std::string& usedToken, std::string& reason) noexce
 
 // What to tell the player when Atlas refuses the token and no refresh helped.
 std::string AtlasTokenAdvice(const std::string& refreshReason) {
-    if (!g_atlasRefreshUrl[0])
-        return ". Run scripts/Start-AtlasTokenHelper.ps1 on a PC signed in to the EA app to renew it, or re-export "
-               "atlas_identity.json with scripts/Export-AtlasCredentials.ps1.";
-    return ". Token refresh failed: " + refreshReason + ".";
+    if (!g_atlasRefreshUrl[0]) {
+        if (g_pcSignInReady.load(std::memory_order_acquire)) return std::string(". ") + g_pcSignInHint + ".";
+        return ". On a PC signed in to the EA app, run the NorthstarPS4 token helper to renew it.";
+    }
+    std::string advice = ". Token refresh failed: " + refreshReason + ".";
+    if (refreshReason.find("could not be reached") != std::string::npos)
+        advice += " Start the NorthstarPS4 token helper on your PC and try again.";
+    else if (g_pcSignInReady.load(std::memory_order_acquire))
+        advice += std::string(" ") + g_pcSignInHint + ".";
+    return advice;
 }
 
 std::atomic<int> joinState{kFetchIdle};

@@ -35,6 +35,7 @@
 
 #include <orbis/libkernel.h>
 #include <orbis/Net.h>
+#include <orbis/NetCtl.h>
 #include <orbis/Ssl.h>
 #include <orbis/Http.h>
 #include <orbis/SystemService.h>
@@ -2418,6 +2419,7 @@ std::uint64_t ModSecondarySize(void* self, const char* fileName, const char* pat
 #include "runtime_netmessage_fixes.inl"
 #include "runtime_materials.inl"
 #include "runtime_script_errors.inl"
+#include "runtime_signin.inl"
 #endif
 
 // IBaseFileSystem::ReadFile - secondary slot 14, filesystem_stdio+0xc3d0.
@@ -2994,6 +2996,7 @@ void* ModuleTracker(void*) noexcept {
     if (vstdlibHandle != static_cast<OrbisKernelModule>(-1)) {
         ProbeCvarInterface(vstdlibHandle, engineBase, engineSize);
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+        StartPcSignIn();  // after the identity file is read
         RegisterNativeConCommands(engineBase, engineSize);
 #endif
         if (engineHandle != static_cast<OrbisKernelModule>(-1)) {

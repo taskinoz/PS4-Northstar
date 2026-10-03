@@ -16,6 +16,14 @@
 //                               console with that helper)
 //
 // The helper answers {"uid":"<digits>","playerToken":"<32 hex>"}.
+//
+// Pairing goes the other way once: the runtime listens on kSignInPort and the
+// helper POSTs the identity (all four members, plus "code") to kSignInPath.
+// The menu shows this console's address and a 4-digit code to type into the
+// helper. A push is accepted from this machine (shadPS4 on the helper's PC),
+// with the code, or with the key of the helper already paired.
+#include <cstdint>
+#include <cstdio>
 namespace northstar::ps4::atlas {
 
 inline bool IsHex32(const std::string& text) {
@@ -46,6 +54,7 @@ inline bool IsRefreshUrl(const std::string& url) {
 
 struct IdentityFields {
     std::string uid, token, refreshUrl, refreshKey;
+    std::string code;  // pairing pushes only
 };
 
 struct IdentityVisitor {
@@ -63,6 +72,7 @@ struct IdentityVisitor {
             else if (pending == "playerToken") fields.token.assign(text, size);
             else if (pending == "refreshUrl") fields.refreshUrl.assign(text, size);
             else if (pending == "refreshKey") fields.refreshKey.assign(text, size);
+            else if (pending == "code") fields.code.assign(text, size);
         }
         pending.clear();
         return true;
@@ -111,6 +121,81 @@ inline std::string BuildIdentityJson(const IdentityFields& fields) {
         json += ",\n  \"refreshKey\": \"" + fields.refreshKey + "\"";
     }
     return json + "\n}\n";
+}
+
+constexpr int kSignInPort = 37012;
+constexpr const char* kSignInPath = "/northstar/signin";
+constexpr const char* kHelloPath = "/northstar/hello";
+constexpr int kMaxWrongCodes = 5;
+constexpr std::size_t kMaxSignInRequest = 4096;
+
+inline std::string FormatSignInCode(std::uint32_t random) {
+    char code[8];
+    std::snprintf(code, sizeof(code), "%04u", static_cast<unsigned>(random % 10000));
+    return code;
+}
+
+// The request line and Content-Length of an HTTP/1.x request head (the text
+// before the blank line). False for anything malformed.
+struct RequestHead {
+    std::string method, path;
+    std::size_t contentLength = 0;
+};
+
+inline bool ParseRequestHead(const std::string& head, RequestHead& out) {
+    out = RequestHead{};
+    const std::size_t lineEnd = head.find("\r\n");
+    const std::string line = head.substr(0, lineEnd);
+    const std::size_t space1 = line.find(' ');
+    const std::size_t space2 = space1 == std::string::npos ? std::string::npos : line.find(' ', space1 + 1);
+    if (space2 == std::string::npos || line.compare(space2 + 1, 7, "HTTP/1.") != 0) return false;
+    out.method = line.substr(0, space1);
+    out.path = line.substr(space1 + 1, space2 - space1 - 1);
+    if (out.method.empty() || out.path.empty() || out.path[0] != '/') return false;
+    std::size_t at = lineEnd;
+    while (at != std::string::npos && at < head.size()) {
+        const std::size_t start = at + 2;
+        const std::size_t end = head.find("\r\n", start);
+        const std::string header = head.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        const std::size_t colon = header.find(':');
+        if (colon != std::string::npos) {
+            std::string name = header.substr(0, colon);
+            for (char& c : name) c = static_cast<char>(c >= 'A' && c <= 'Z' ? c + 32 : c);
+            if (name == "content-length") {
+                std::size_t i = colon + 1;
+                while (i < header.size() && header[i] == ' ') ++i;
+                std::size_t value = 0;
+                bool digits = false;
+                for (; i < header.size() && header[i] >= '0' && header[i] <= '9'; ++i) {
+                    value = value * 10 + static_cast<std::size_t>(header[i] - '0');
+                    if (value > kMaxSignInRequest) return false;
+                    digits = true;
+                }
+                if (!digits) return false;
+                out.contentLength = value;
+            }
+        }
+        at = end;
+    }
+    return true;
+}
+
+// Whether a pairing push may replace this console's identity. Empty when it
+// may; otherwise the reason, which is sent back to the helper. `wrongCodes`
+// counts refused codes; after kMaxWrongCodes, only this machine and the
+// paired helper can sign in until the game restarts.
+inline std::string CheckSignInPush(const IdentityFields& push, bool fromThisMachine, const std::string& code,
+    const std::string& pairedKey, int& wrongCodes) {
+    if (!IsDigits(push.uid) || !IsHex32(push.token) || !IsRefreshUrl(push.refreshUrl) || !IsHex32(push.refreshKey))
+        return "the sign-in is incomplete or malformed";
+    if (fromThisMachine) return "";
+    if (!pairedKey.empty() && push.refreshKey == pairedKey) return "";
+    if (wrongCodes >= kMaxWrongCodes) return "too many wrong codes; restart the game to get a new one";
+    if (code.empty() || push.code != code) {
+        ++wrongCodes;
+        return "wrong code; type the code shown on the PS4";
+    }
+    return "";
 }
 
 } // namespace northstar::ps4::atlas

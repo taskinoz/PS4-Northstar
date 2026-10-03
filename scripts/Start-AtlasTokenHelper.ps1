@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Renews the PS4 build's Atlas token from a PC signed in to the EA app.
+Signs the PS4 build in to Northstar from a PC signed in to the EA app, and keeps it signed in.
 
 .DESCRIPTION
 Atlas gives out a player token only in exchange for an EA authorization code
@@ -13,44 +13,48 @@ this helper does it on the PC:
    handshake as content 1039093 (Titanfall2), then GetProfile for the account
    id and GetAuthCode for client TITANFALL2-PC-SERVER.
 2. It exchanges the code with Atlas at /client/origin_auth.
-3. It writes atlas_identity.json (uid, playerToken, refreshUrl, refreshKey)
-   and, unless -Once is given, keeps serving fresh tokens at
-   http://<host>:<port>/atlas/token to the console it is paired with.
+3. It hands the token to the game:
+   - Northstar running in shadPS4 on this PC is found by itself;
+   - for a PS4 (or shadPS4 on another computer), type the address and code
+     that Northstar shows in its sign-in message. The helper sends the token
+     to the game over the network (port 37012), and the game applies it at
+     once;
+   - if the game is not running here and no address is given, the helper
+     writes atlas_identity.json into the shadPS4 data folder instead.
+4. Unless -Once is given, it keeps running and gives the game a new token
+   whenever Atlas refuses the old one (http://<this PC>:37011/atlas/token).
 
-The PS4 runtime asks for a new token by itself whenever Atlas refuses the one
-it has, so after the first run nothing needs copying again while the helper
-runs. Pairing: requests must carry the random key stored in
-%APPDATA%\NorthstarPS4\token-helper.json, which is also written into
-atlas_identity.json. Anyone holding that key could ask this helper for a token
-for your account, so keep the identity file private.
+Pairing: the game only asks this helper for tokens with the random key in
+%APPDATA%\NorthstarPS4\token-helper.json, which the sign-in hands over. A
+console that is already paired is signed in again without a code. The console
+talks to the helper over plain HTTP, so on a LAN the key and the tokens cross
+the network unencrypted: use it on a network you trust.
 
 Neither the EA code, the Atlas token nor the key is ever printed.
 
-Minting a token signs out any PC Northstar session on the same account, as
-starting PC Northstar does to the PS4 today.
+Minting a token signs out any PC Northstar session on the same account.
 
+.PARAMETER Console
+Where the game is, instead of asking: "<address> <code>" as the PS4 shows
+it, "<address>" for a console already paired, or "local" for shadPS4 on this
+PC.
 .PARAMETER Once
-Get one token, write atlas_identity.json and exit.
-.PARAMETER Lan
-Listen on all interfaces and advertise this PC's LAN address, for a real PS4.
-Without it the helper listens on 127.0.0.1 only, which is what shadPS4 on
-this PC needs. The console talks to the helper over plain HTTP, so on a LAN
-the key and the tokens cross the network unencrypted: use -Lan only on a
-network you trust.
+Sign the game in once and exit, without serving new tokens.
 .PARAMETER Output
-Where atlas_identity.json goes. Defaults to the shadPS4 data folder, which the
-PS4 build sees as /data/northstar_ps4. For a real PS4, copy the file to the
-console once; refreshes after that arrive over the network.
+Where atlas_identity.json is written when the game is not running on this
+PC. Defaults to the shadPS4 data folder, which the PS4 build sees as
+/data/northstar_ps4.
 .EXAMPLE
 ./scripts/Start-AtlasTokenHelper.ps1
 .EXAMPLE
-./scripts/Start-AtlasTokenHelper.ps1 -Lan -Output .\atlas_identity.json
+./scripts/Start-AtlasTokenHelper.ps1 -Console "192.168.1.20 4821"
 #>
 [CmdletBinding()]
 param(
+    [string] $Console = '',
     [switch] $Once,
-    [switch] $Lan,
     [int] $Port = 37011,
+    [int] $ConsolePort = 37012,
     [string] $Output = (Join-Path $env:APPDATA 'shadPS4\data\northstar_ps4\atlas_identity.json'),
     [string] $AdvertiseHost = '',
     [string] $MasterServer = 'https://northstar.tf',
@@ -65,7 +69,11 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-Add-Type -TypeDefinition @"
+# Windows PowerShell (5.1) compiles against the .NET Framework, where XML is a
+# separate assembly; PowerShell 7 references it already.
+$typeOptions = @{}
+if ($PSVersionTable.PSEdition -ne 'Core') { $typeOptions.ReferencedAssemblies = @('System.Xml') }
+Add-Type @typeOptions -TypeDefinition @"
 using System;
 using System.IO;
 using System.Net.Sockets;
@@ -183,27 +191,26 @@ public static class NsLsx {
 }
 "@
 
-function Get-PairingKey {
+# The pairing key, and the console signed in last time. Returns @{ key; console }.
+function Get-HelperState {
+    $state = @{ key = $null; console = $null }
     if (Test-Path -LiteralPath $KeyFile) {
         $saved = Get-Content -LiteralPath $KeyFile -Raw | ConvertFrom-Json
-        if ($saved.key -match '^[0-9a-f]{32}$') { return $saved.key }
+        if ($saved.key -match '^[0-9a-f]{32}$') { $state.key = $saved.key }
+        if ($saved.console -match '^[A-Za-z0-9.\-]+$') { $state.console = $saved.console }
     }
-    $bytes = New-Object byte[] 16
-    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-    $key = -join ($bytes | ForEach-Object { $_.ToString('x2') })
-    New-Item -ItemType Directory -Force -Path (Split-Path $KeyFile) | Out-Null
-    [IO.File]::WriteAllText($KeyFile, (@{ key = $key } | ConvertTo-Json))
-    return $key
+    if (-not $state.key) {
+        $bytes = New-Object byte[] 16
+        [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+        $state.key = -join ($bytes | ForEach-Object { $_.ToString('x2') })
+        Save-HelperState $state
+    }
+    return $state
 }
 
-function Get-AdvertisedHost {
-    if ($AdvertiseHost) { return $AdvertiseHost }
-    if (-not $Lan) { return '127.0.0.1' }
-    $address = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-        Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' -and $_.PrefixOrigin -ne 'WellKnown' } |
-        Sort-Object InterfaceMetric | Select-Object -First 1
-    if (-not $address) { throw 'No LAN IPv4 address found; pass -AdvertiseHost.' }
-    return $address.IPAddress
+function Save-HelperState([hashtable] $state) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $KeyFile) | Out-Null
+    [IO.File]::WriteAllText($KeyFile, ([ordered]@{ key = $state.key; console = $state.console } | ConvertTo-Json))
 }
 
 $script:lastToken = $null
@@ -215,18 +222,27 @@ function New-AtlasToken {
     if ($script:lastToken -and ((Get-Date) - $script:lastMinted).TotalSeconds -lt $MinSecondsBetweenTokens) {
         return @{ uid = $script:lastUid; token = $script:lastToken }
     }
-    $pair = [NsLsx]::GetAuthCode($LsxPort, $ContentId, $Title, $ClientId, $Scope)
+    try {
+        $pair = [NsLsx]::GetAuthCode($LsxPort, $ContentId, $Title, $ClientId, $Scope)
+    } catch [Net.Sockets.SocketException] {
+        throw 'Could not reach the EA app. Open the EA app, sign in, and try again.'
+    } catch {
+        $inner = $_.Exception
+        while ($inner.InnerException) { $inner = $inner.InnerException }
+        if ($inner -is [Net.Sockets.SocketException]) { throw 'Could not reach the EA app. Open the EA app, sign in, and try again.' }
+        throw $inner.Message
+    }
     $uid = $pair[0]
     $url = "$($MasterServer.TrimEnd('/'))/client/origin_auth?id=$uid&token=$([uri]::EscapeDataString($pair[1]))"
-    $headers = @{ 'User-Agent' = "R2Northstar/$LauncherVersion+ps4 NorthstarPS4TokenHelper" }
     try {
-        $reply = Invoke-RestMethod -Uri $url -Method Get -Headers $headers -TimeoutSec 20
+        $reply = Invoke-RestMethod -Uri $url -Method Get -UserAgent "R2Northstar/$LauncherVersion+ps4 NorthstarPS4TokenHelper" -TimeoutSec 20
     } catch {
         $message = $_.ErrorDetails.Message
         try { $message = ($message | ConvertFrom-Json).error.msg } catch { }
-        throw "Atlas refused the EA code: $message"
+        if (-not $message) { $message = $_.Exception.Message }
+        throw "Northstar refused the EA sign-in: $message"
     }
-    if (-not $reply.success -or $reply.token -notmatch '^[0-9a-f]{32}$') { throw 'Atlas returned no usable token.' }
+    if (-not $reply.success -or $reply.token -notmatch '^[0-9a-f]{32}$') { throw 'Northstar returned no usable token.' }
     $script:lastUid = $uid
     $script:lastToken = $reply.token
     $script:lastMinted = Get-Date
@@ -241,6 +257,118 @@ function Write-Identity([hashtable] $identity, [string] $refreshUrl, [string] $k
     [IO.File]::WriteAllText($temp, $json)
     Move-Item -LiteralPath $temp -Destination $Output -Force
 }
+
+function Test-Loopback([string] $address) { return $address -eq 'localhost' -or $address -like '127.*' }
+
+# Whether Northstar is running and listening for a sign-in at that address.
+function Test-Game([string] $address) {
+    try {
+        $hello = Invoke-RestMethod -Uri "http://$($address):$ConsolePort/northstar/hello" -TimeoutSec 3
+        return $hello.app -eq 'NorthstarPS4'
+    } catch { return $false }
+}
+
+# This PC's address as the console sees it: the local end of a route to it.
+function Get-AddressTowards([string] $address) {
+    if ($AdvertiseHost) { return $AdvertiseHost }
+    if (Test-Loopback $address) { return '127.0.0.1' }
+    $udp = New-Object Net.Sockets.UdpClient
+    try {
+        $udp.Connect($address, $ConsolePort)
+        return $udp.Client.LocalEndPoint.Address.ToString()
+    } finally { $udp.Close() }
+}
+
+# Hands the identity to the game. Returns $null on success, or why not.
+function Send-SignIn([string] $address, [string] $code, [hashtable] $identity, [string] $key) {
+    $refreshUrl = "http://$(Get-AddressTowards $address):$Port/atlas/token"
+    $body = [ordered]@{ uid = $identity.uid; playerToken = $identity.token; refreshUrl = $refreshUrl; refreshKey = $key; code = $code } |
+        ConvertTo-Json -Compress
+    try {
+        $reply = Invoke-RestMethod -Uri "http://$($address):$ConsolePort/northstar/signin" -Method Post -Body $body `
+            -ContentType 'application/json' -TimeoutSec 10
+        if ($reply.ok) { return $null }
+        return 'the game did not accept the sign-in'
+    } catch {
+        $message = $_.ErrorDetails.Message
+        try { $message = ($message | ConvertFrom-Json).error } catch { }
+        if ($message) { return $message }
+        return "Northstar could not be reached at $($address):$ConsolePort. Check the address, and that the game is running"
+    }
+}
+
+# Splits "<address> <code>" (or "<address>:<code>" / "<address>,<code>").
+function Split-Target([string] $text) {
+    $parts = @($text.Trim() -split '[\s,]+' | Where-Object { $_ })
+    if ($parts.Count -eq 1 -and $parts[0] -match '^([0-9.]+):(\d{4})$') { $parts = @($Matches[1], $Matches[2]) }
+    $target = @{ address = $null; code = '' }
+    if ($parts.Count -ge 1) { $target.address = $parts[0] }
+    if ($parts.Count -ge 2) { $target.code = $parts[1] }
+    return $target
+}
+
+$state = Get-HelperState
+Write-Host 'NorthstarPS4 token helper'
+Write-Host 'Getting a Northstar token through the EA app...'
+try {
+    $identity = New-AtlasToken
+} catch {
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    exit 1
+}
+Write-Host "Signed in to EA as account $($identity.uid)."
+
+# Where the game is: $address is $null when the identity file is written instead.
+$address = $null
+$interactive = -not $Console
+if ($Console -eq 'local') {
+    if ((Test-Game '127.0.0.1') -and -not (Send-SignIn '127.0.0.1' '' $identity $state.key)) { $address = '127.0.0.1' }
+} elseif ($Console) {
+    $target = Split-Target $Console
+    $failure = Send-SignIn $target.address $target.code $identity $state.key
+    if ($failure) { Write-Host "Sign-in failed: $failure." -ForegroundColor Red; exit 1 }
+    $address = $target.address
+} elseif (Test-Game '127.0.0.1') {
+    $failure = Send-SignIn '127.0.0.1' '' $identity $state.key
+    if ($failure) { Write-Host "Sign-in failed: $failure." -ForegroundColor Red; exit 1 }
+    $address = '127.0.0.1'
+} elseif ($state.console -and (Test-Game $state.console) -and -not (Send-SignIn $state.console '' $identity $state.key)) {
+    $address = $state.console
+} else {
+    while ($interactive) {
+        Write-Host ''
+        Write-Host 'Type the address and code that Northstar shows on the PS4 (for example: 192.168.1.20 4821).'
+        Write-Host 'If Northstar runs in shadPS4 on this PC and is not started yet, just press Enter.'
+        $answer = Read-Host '>'
+        if ($null -eq $answer -or -not $answer.Trim()) { break }
+        $target = Split-Target $answer
+        $failure = Send-SignIn $target.address $target.code $identity $state.key
+        if (-not $failure) { $address = $target.address; break }
+        Write-Host "Sign-in failed: $failure." -ForegroundColor Red
+    }
+}
+
+if ($address) {
+    if (Test-Loopback $address) {
+        Write-Host 'Signed in Northstar running in shadPS4 on this PC.' -ForegroundColor Green
+    } else {
+        Write-Host "Signed in Northstar on $address." -ForegroundColor Green
+        $state.console = $address
+        Save-HelperState $state
+    }
+} else {
+    Write-Identity $identity "http://127.0.0.1:$Port/atlas/token" $state.key
+    Write-Host "Saved the sign-in to $Output; Northstar in shadPS4 on this PC picks it up when it starts." -ForegroundColor Green
+}
+if ($Once) { exit 0 }
+
+$remote = $address -and -not (Test-Loopback $address)
+$listenAddress = if ($remote) { [Net.IPAddress]::Any } else { [Net.IPAddress]::Loopback }
+$listener = New-Object Net.Sockets.TcpListener($listenAddress, $Port)
+$listener.Start()
+Write-Host ''
+Write-Host 'Leave this window open while you play: Northstar asks it for a new token when the old one expires.'
+Write-Host 'Close the window or press Ctrl+C to stop.'
 
 function Write-Reply($stream, [int] $status, [string] $reason, [string] $body) {
     $payload = [Text.Encoding]::UTF8.GetBytes($body)
@@ -257,20 +385,6 @@ function Test-KeyEqual([string] $a, [string] $b) {
     return $diff -eq 0
 }
 
-$key = Get-PairingKey
-$advertise = Get-AdvertisedHost
-$refreshUrl = "http://$($advertise):$Port/atlas/token"
-
-Write-Host 'Getting an Atlas token through the EA app...'
-$identity = New-AtlasToken
-Write-Identity $identity $refreshUrl $key
-Write-Host "Wrote $Output for account $($identity.uid) (token not shown)."
-if ($Once) { return }
-
-$listenAddress = if ($Lan) { [Net.IPAddress]::Any } else { [Net.IPAddress]::Loopback }
-$listener = New-Object Net.Sockets.TcpListener($listenAddress, $Port)
-$listener.Start()
-Write-Host "Serving fresh tokens at $refreshUrl. Leave this window open while playing; Ctrl+C stops it."
 try {
     for (;;) {
         $client = $listener.AcceptTcpClient()
@@ -289,14 +403,14 @@ try {
             $peer = $client.Client.RemoteEndPoint.Address
             if ($requestLine -notmatch '^GET /atlas/token(\?.*)? HTTP/1\.[01]$') {
                 Write-Reply $stream 404 'Not Found' '{"error":"not found"}'
-            } elseif (-not (Test-KeyEqual $headers['x-northstarps4-key'] $key)) {
-                Write-Host "$(Get-Date -Format T) refused a request from $peer (wrong key)"
+            } elseif (-not (Test-KeyEqual $headers['x-northstarps4-key'] $state.key)) {
+                Write-Host "$(Get-Date -Format T) refused a request from $peer (not paired with this helper)"
                 Write-Reply $stream 403 'Forbidden' '{"error":"this console is not paired with the token helper"}'
             } else {
                 try {
                     $identity = New-AtlasToken
-                    Write-Identity $identity $refreshUrl $key
-                    Write-Host "$(Get-Date -Format T) gave $peer a fresh token for account $($identity.uid)"
+                    if (-not $remote) { Write-Identity $identity "http://127.0.0.1:$Port/atlas/token" $state.key }
+                    Write-Host "$(Get-Date -Format T) gave $peer a new token for account $($identity.uid)"
                     Write-Reply $stream 200 'OK' (@{ uid = $identity.uid; playerToken = $identity.token } | ConvertTo-Json -Compress)
                 } catch {
                     $message = "$($_.Exception.Message)" -replace '"', "'"

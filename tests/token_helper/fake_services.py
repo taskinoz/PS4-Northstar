@@ -1,7 +1,10 @@
 """Fake EA app (LSX) and fake Atlas for testing scripts/Start-AtlasTokenHelper.ps1.
 
-usage: fake_services.py <lsx port> <atlas port> <state file>
-Serves until killed. Writes one JSON line per event to <state file> (requests
+usage: fake_services.py <lsx port> <atlas port> <state file> [<console port>]
+Serves until killed. With a console port, also plays a console's sign-in
+listener (runtime_signin.inl), as a remote console: code CONSOLE_CODE, or
+the key of the helper it accepted last. It listens on 127.0.0.1:<console port>
+and 127.0.0.2:<console port + 2>. Writes one JSON line per event to <state file> (requests
 seen, tokens issued) so the test can check what happened. No real account or
 network service is involved.
 """
@@ -16,6 +19,7 @@ USER_ID = '1012345678901'
 AUTH_CODE = 'QUOxFAKEcodeForTests'
 CONTENT_ID = '1039093'
 CLIENT_ID = 'TITANFALL2-PC-SERVER'
+CONSOLE_CODE = '4821'
 
 
 def lsx_key(seed):
@@ -163,9 +167,50 @@ def atlas_server(port, state_file):
     ThreadingHTTPServer(('127.0.0.1', port), Handler).serve_forever()
 
 
+def console_server(host, port, state_file, paired):
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def reply(self, status, payload):
+            body = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path == '/northstar/hello':
+                return self.reply(200, {'app': 'NorthstarPS4', 'signedIn': paired['key'] is not None})
+            self.reply(404, {'error': 'not found'})
+
+        def do_POST(self):
+            if self.path != '/northstar/signin':
+                return self.reply(404, {'error': 'not found'})
+            push = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
+            by_key = paired['key'] is not None and push.get('refreshKey') == paired['key']
+            ok = by_key or push.get('code') == CONSOLE_CODE
+            note(state_file, event='signin', ok=ok, byKey=by_key, uid=push.get('uid'), token=push.get('playerToken'),
+                 refreshUrl=push.get('refreshUrl'))
+            if not ok:
+                return self.reply(403, {'error': 'wrong code; type the code shown on the PS4'})
+            paired['key'] = push.get('refreshKey')
+            self.reply(200, {'ok': True})
+
+    ThreadingHTTPServer((host, port), Handler).serve_forever()
+
+
 if __name__ == '__main__':
     lsx_port, atlas_port, state = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
     assert list(lsx_key(1337)) == [251, 135, 22, 197, 214, 181, 148, 115, 149, 93, 40, 78, 123, 141, 60, 108]
     threading.Thread(target=lsx_server, args=(lsx_port, state), daemon=True).start()
+    if len(sys.argv) > 4:
+        # Two addresses, one console: 127.0.0.2 is not where the helper looks
+        # for a game on its own PC, so it has to ask.
+        paired = {'key': None}
+        threading.Thread(target=console_server, args=('127.0.0.1', int(sys.argv[4]), state, paired), daemon=True).start()
+        threading.Thread(target=console_server, args=('127.0.0.2', int(sys.argv[4]) + 2, state, paired), daemon=True).start()
     note(state, event='ready')
     atlas_server(atlas_port, state)

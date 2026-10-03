@@ -219,7 +219,9 @@ constexpr std::size_t kAtlasIdentityMax = 4096;
 
 // Identity state, read once at startup and reported to script.
 enum class AtlasIdentityState { Missing, Incomplete, Malformed, Ready };
-AtlasIdentityState g_atlasIdentityState = AtlasIdentityState::Missing;
+// Atomic: a sign-in pushed from the PC helper (runtime_signin.inl) changes it
+// on the listener thread while the UI reads it.
+std::atomic<AtlasIdentityState> g_atlasIdentityState{AtlasIdentityState::Missing};
 char g_atlasUid[32]{};
 // platform_user_id, kept for EnsureConnectUid below. Null until
 // ApplyAtlasIdentity has found it.
@@ -229,21 +231,42 @@ char g_atlasToken[40]{};
 char g_atlasRefreshUrl[260]{};
 char g_atlasRefreshKey[40]{};
 
+// How to sign in from a PC, with this console's address and pairing code,
+// once the sign-in listener (runtime_signin.inl) is up. Written once before
+// g_pcSignInReady is set, read-only after.
+char g_pcSignInHint[192]{};
+std::atomic<bool> g_pcSignInReady{false};
+
 // Shown in the UI when authentication is unavailable, so the message has to say
 // what to actually do rather than just that it failed.
 const char* AtlasIdentityMessage() noexcept {
-    switch (g_atlasIdentityState) {
+    // Indexed by state; filled with the sign-in hint once it exists.
+    static char withHint[3][320];
+    static std::atomic<bool> built{false};
+    static const char* const problems[3] = {"Not signed in to Northstar", "atlas_identity.json has no playerToken",
+        "atlas_identity.json could not be read"};
+    int index = 0;
+    switch (g_atlasIdentityState.load()) {
     case AtlasIdentityState::Ready:
-        return "Signed in with an imported Atlas identity";
-    case AtlasIdentityState::Incomplete:
-        return "atlas_identity.json has no playerToken. Re-export it from a PC running Northstar and signed in";
-    case AtlasIdentityState::Malformed:
-        return "atlas_identity.json could not be read. Re-export it with scripts/Export-AtlasCredentials.ps1";
-    default:
-        break;
+        return "Signed in to Northstar";
+    case AtlasIdentityState::Incomplete: index = 1; break;
+    case AtlasIdentityState::Malformed: index = 2; break;
+    default: break;
     }
-    return "No Atlas identity. On a PC running Northstar and signed in, run scripts/Export-AtlasCredentials.ps1 "
-           "and copy atlas_identity.json into /data/northstar_ps4/";
+    if (g_pcSignInReady.load(std::memory_order_acquire)) {
+        if (!built.load(std::memory_order_acquire)) {
+            // Racing callers write identical text, so a duplicate build is harmless.
+            for (int i = 0; i < 3; ++i)
+                std::snprintf(withHint[i], sizeof(withHint[i]), "%s. %s", problems[i], g_pcSignInHint);
+            built.store(true, std::memory_order_release);
+        }
+        return withHint[index];
+    }
+    static const char* const plain[3] = {
+        "Not signed in to Northstar. On a PC signed in to the EA app, run the NorthstarPS4 token helper",
+        "atlas_identity.json has no playerToken. On a PC signed in to the EA app, run the NorthstarPS4 token helper",
+        "atlas_identity.json could not be read. On a PC signed in to the EA app, run the NorthstarPS4 token helper"};
+    return plain[index];
 }
 const char* AtlasIdentityCode() noexcept {
     switch (g_atlasIdentityState) {
@@ -285,6 +308,9 @@ struct AtlasIdentityVisitor {
 };
 
 void ApplyAtlasIdentity(void* cvar, ModFindVarFn findVar) noexcept {
+    // Found even without an identity: one signed in from a PC later is applied
+    // through it (EnsureConnectUid).
+    if (cvar && findVar && g_authConVarWriteReady) g_platformUserIdConVar = findVar(cvar, "platform_user_id");
     static char text[kAtlasIdentityMax];
     std::size_t size = 0;
     if (!ReadFileIntoBuffer(kAtlasIdentityFile, text, sizeof(text), size)) {

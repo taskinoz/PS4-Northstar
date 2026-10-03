@@ -47,6 +47,38 @@ int main() {
     out.refreshKey = "not-hex";
     assert(BuildIdentityJson(out).find("refreshUrl") == std::string::npos);
 
+    // Sign-in pushes: the request head.
+    RequestHead head;
+    assert(ParseRequestHead("POST /northstar/signin HTTP/1.1\r\nHost: x\r\ncontent-LENGTH:  57\r\n", head));
+    assert(head.method == "POST" && head.path == kSignInPath && head.contentLength == 57);
+    assert(ParseRequestHead("GET /northstar/hello HTTP/1.0", head) && head.contentLength == 0);
+    assert(!ParseRequestHead("GET /x", head) && !ParseRequestHead("GET x HTTP/1.1", head));
+    assert(!ParseRequestHead("POST / HTTP/1.1\r\nContent-Length: 99999\r\n", head));
+    assert(!ParseRequestHead("POST / HTTP/1.1\r\nContent-Length: x\r\n", head));
+
+    // Sign-in pushes: who may replace the identity.
+    IdentityFields push;
+    assert(ParseIdentity(R"({"uid":"1012345678901","playerToken":"fedcba9876543210fedcba9876543210",
+        "refreshUrl":"http://192.168.1.5:37011/atlas/token","refreshKey":"00112233445566778899aabbccddeeff",
+        "code":"0042"})", push));
+    assert(push.code == "0042");
+    int wrong = 0;
+    assert(CheckSignInPush(push, false, "0042", "", wrong).empty());
+    assert(CheckSignInPush(push, true, "9999", "", wrong).empty());  // this machine needs no code
+    IdentityFields guess = push;
+    guess.code = "1234";
+    assert(CheckSignInPush(guess, false, "0042", "", wrong).find("wrong code") == 0 && wrong == 1);
+    assert(CheckSignInPush(guess, false, "0042", guess.refreshKey, wrong).empty());  // the paired helper
+    assert(CheckSignInPush(guess, false, "", "", wrong).find("wrong code") == 0);  // no code to match
+    for (int i = 0; i < kMaxWrongCodes; ++i) CheckSignInPush(guess, false, "0042", "", wrong);
+    assert(CheckSignInPush(push, false, "0042", "", wrong).find("too many") == 0);  // even the right one
+    assert(CheckSignInPush(push, true, "0042", "", wrong).empty());
+    IdentityFields bad = push;
+    bad.refreshKey.clear();
+    wrong = 0;
+    assert(CheckSignInPush(bad, true, "0042", "", wrong).find("malformed") != std::string::npos);
+    assert(FormatSignInCode(42) == "0042" && FormatSignInCode(123456) == "3456");
+
     std::puts("atlas_refresh tests passed");
     return 0;
 }

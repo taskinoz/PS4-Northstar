@@ -181,15 +181,20 @@ Mods can make web requests through Northstar's HTTP functions, as on PC. The sam
 
 The PS4 build has no EA (Origin) session of its own, so it cannot get an Atlas token the way Northstar does on PC. A PC signed in to the EA app gets the token for it. No EA credential ever reaches the console: only the account uid and the Northstar player token are copied.
 
-**Token helper (recommended).** The helper gets a token through the EA app and gives the console a new one whenever Atlas refuses the old one, so you do not have to re-export every day.
+**Token helper (recommended).** The token helper is a small program for the PC. It signs the game in to Northstar through the EA app, and gets the game a new token whenever Atlas refuses the old one, so you never copy files around.
 
 1. On the PC, open the EA app and sign in with the account that owns Titanfall 2. PC Northstar does not need to be running.
-2. Run `scripts\Start-AtlasTokenHelper.ps1`. It asks the EA app for an authorization code, as Titanfall 2 does, exchanges it with Atlas for a token, and writes `atlas_identity.json` into the emulator's `/data/northstar_ps4/`.
-3. Leave its window open while you play. When Atlas refuses the console's token (it expires after about 24 hours), the console asks the helper for a new one, saves it, and retries the request. The helper prints a line each time it does this, but never the token.
+2. Double-click `NorthstarPS4-TokenHelper.cmd`. In a repository checkout it is in `scripts\`, next to `Start-AtlasTokenHelper.ps1`.
+3. Tell it where the game is:
+   - **shadPS4 on the same PC:** if the game is already running, the helper finds it and signs it in by itself. If it isn't running yet, press Enter at the prompt; the game picks up the sign-in when it starts.
+   - **A PS4, or shadPS4 on another computer:** start the game and select Launch Northstar. The error message shows this console's address and a 4-digit code, for example `enter 192.168.1.20 4821`. Type those two at the helper's prompt. The game signs in at once, so select Launch Northstar again.
+4. Leave the helper's window open while you play. When Atlas refuses the game's token (it expires after about 24 hours), the game asks the helper for a new one, saves it, and retries. The helper prints a line each time, but never the token.
 
-The helper only answers requests that carry the pairing key it writes into `atlas_identity.json` (the key is kept in `%APPDATA%\NorthstarPS4\token-helper.json`). By default it listens on this PC only, which is all shadPS4 needs. For a real PS4, run it with `-Lan -Output .\atlas_identity.json` and copy the file to the console once. The console then reaches the helper over your network using plain HTTP, so use `-Lan` only on a network you trust. `-Once` writes one token and exits without serving.
+Next time, the helper signs the same console in again without the code; just leave the game running when you start the helper. Signing in also pairs the game with the helper: the game stores a key, and the helper only gives tokens to a game that sends it. The key is kept in `%APPDATA%\NorthstarPS4\token-helper.json` on the PC and in `atlas_identity.json` in the game. The game and the helper talk over plain HTTP: the game listens on port 37012 and the helper on 37011. Use the helper on a network you trust. Windows may ask whether to let PowerShell or shadPS4 use the network: allow it on private networks.
 
-Each new token ends the previous session for the account. Starting PC Northstar therefore signs the console out, and the console then asks the helper again. Running the helper ends a PC Northstar session in the same way.
+Each new token ends the previous session for the account. Starting PC Northstar, or Northstar on any other machine, therefore signs the game out, and the game then asks the helper again. Running the helper ends a PC Northstar session in the same way.
+
+From a terminal, `scripts\Start-AtlasTokenHelper.ps1 -Console "192.168.1.20 4821"` skips the prompt, and `-Once` signs the game in and exits without serving new tokens. `-nopcsignin` in `ns_startup_args.txt` turns the game's sign-in listener off.
 
 **Export from PC Northstar.** Without the helper, copy the token from a running PC Northstar. It is not renewed, so repeat this when it expires.
 
@@ -197,14 +202,14 @@ Each new token ends the previous session for the account. Starting PC Northstar 
 2. Run `scripts\Export-AtlasCredentials.ps1`. It reads the uid and player token out of the running client, cross-checks the uid against the client's own log, and refuses to export on a mismatch. Add `-WhatIf` to see what it would write without writing it.
 3. It writes `atlas_identity.json` into the emulator's `/data/northstar_ps4/`. Point `-Output` elsewhere if your data mount differs.
 
-The console picks the file up at startup, applies the uid to `platform_user_id`, and reports the session to the menu. If anything is missing the menu says what to do rather than only that it failed:
+The console reads `atlas_identity.json` at startup (or takes a sign-in from the helper while running), applies the uid to `platform_user_id`, and reports the session to the menu. If anything is missing, Launch Northstar says what to do, with this console's address and sign-in code:
 
 | State | What it means |
 | --- | --- |
-| `PS4_AUTH_IMPORTED` | Signed in with the imported identity. |
-| `PS4_AUTH_NO_IDENTITY` | No `atlas_identity.json`. Export one and copy it to `/data/northstar_ps4/`. |
-| `PS4_AUTH_NO_TOKEN` | The file has a uid but no `playerToken`. Re-export it from a signed-in PC client. |
-| `PS4_AUTH_BAD_IDENTITY` | The file could not be read, or the token is not 32 hex characters. Re-export it. |
+| `PS4_AUTH_IMPORTED` | Signed in. |
+| `PS4_AUTH_NO_IDENTITY` | Not signed in yet. Run the token helper on a PC. |
+| `PS4_AUTH_NO_TOKEN` | The file has a uid but no `playerToken`. Sign in again with the token helper. |
+| `PS4_AUTH_BAD_IDENTITY` | The file could not be read, or the token is not 32 hex characters. Sign in again with the token helper. |
 
 **`atlas_identity.json` is a live credential.** Anyone holding it can authenticate to Atlas as that account, and with the helper's key they can also ask the helper for new tokens. A token expires after 24 hours, and sooner when another token is minted for the account. Do not commit or share the file.
 
