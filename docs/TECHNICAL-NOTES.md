@@ -6088,3 +6088,34 @@ the load; every one showed its own loading screen. Loading 14 maps in a row once
 shadPS4 GPU assertion (`resource_discover_pass.cpp:257`), an emulator fault. A map that is not in
 Northstar.Client's `mapImages` table gets `loadscreens/<map>_lobby` as its menu image, which does
 not exist for custom maps; that is the same on PC.
+
+## Models in a mod VPK (2026-10-03)
+
+Scope (user decision): compressed and patch RPaks are out of scope, since no tools create them, and
+Titanfall 2 has no models in paks (that is Apex). Models ship loose (works, see above) or in VPKs.
+
+**Building a test VPK with RSPNVPK** (tools/RSPNVPK). RSPNVPK adds a folder's files to an existing
+directory VPK; `<file>.delete` removes an entry. A rifle-only `englishclient_mp_common` VPK was
+made from Moblin.Archon's small directory file:
+- every Archon entry was marked `.delete`;
+- the Resonance Rifle's `mod/models` and `mod/materials` (44 files) were added.
+
+The first build used `-n 1` and was rejected by tf2vpk ("non-eof chunk terminator must equal the
+block index"). In this format, the u16 after each chunk of a multi-chunk file is the archive
+index, or 0xFFFF after the last chunk. RSPNVPK's `DirEntryBlock.Write` wrote 0, so every chunk
+after the first of a file over 1 MB pointed at `_000.vpk`. Archive number 0 (`-n 0`) is not
+affected; the local clone now writes `FileIdx`, uncommitted. With `-n 0`, tf2vpk read all 44
+entries and three files, including a 22-chunk texture, unpacked byte-identical.
+
+**In game.** The VPK mounted as a mod VPK (preload). The rifle's loose models and materials were
+removed for this test:
+- the viewmodel and the impact-effect models were read from the VPK (cache lookups hit) and the
+  custom model drew;
+- the impact-effect `.vmt`/`.vtf` were also found in the VPK;
+- the viewmodel's own materials (neon, sight, glass) were never looked up, and the rifle drew
+  without its glow and sight. With loose files the same materials are opened from disk, so the
+  likely cause is lookup order: a loose `.vmt` is used before an RPak material of the same name,
+  and one in a VPK is not. Converting the VPK's textures to the PS4 VPK layout did not change
+  this. Whether VPK textures must be in that layout needs a visible test.
+
+The rifle was put back to its shipped loose layout afterwards.
