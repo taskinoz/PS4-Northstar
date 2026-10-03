@@ -32,45 +32,91 @@
       <h1>Token Helper</h1>
     </div>
   </header>
-  <p class="lead">Signs Northstar on your PS4, or in shadPS4, in with the EA account on this computer.
-    Keep this window open while you play: Northstar asks it for a new sign-in when the old one expires.</p>
 
-  <section class="tile" aria-labelledby="ea-title">
-    <h2 id="ea-title"><span class="step">1</span>EA account</h2>
-    <div class="row">
-      <div class="status" id="ea"><span class="dot"></span><span id="ea-text">Starting...</span></div>
-      <button class="ghost" id="retry" hidden>Try again</button>
-    </div>
-  </section>
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button class="tab" role="tab" id="tab-install" aria-controls="panel-install" aria-selected="true">Install</button>
+    <button class="tab" role="tab" id="tab-signin" aria-controls="panel-signin" aria-selected="false">Sign in</button>
+  </nav>
 
-  <section class="tile" aria-labelledby="game-title">
-    <h2 id="game-title"><span class="step">2</span>Where is Northstar running?</h2>
-    <form id="signin">
-      <label class="choice"><input type="radio" name="mode" value="local">
-        <span class="choice-text"><strong>In shadPS4 on this computer</strong>
-          <small>Found by itself when it's running; otherwise it picks up the sign-in when it starts.</small></span></label>
-      <label class="choice"><input type="radio" name="mode" value="remote">
-        <span class="choice-text"><strong>On a PS4, or in shadPS4 on another computer</strong>
-          <small>In the game, select Launch Northstar. It shows an address and a 4-digit code.</small></span></label>
-      <div class="fields" id="fields">
-        <label class="field">Address<input type="text" id="address" autocomplete="off" spellcheck="false" placeholder="192.168.1.20"></label>
-        <label class="field">Code<input type="text" id="code" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="0000"></label>
+  <!-- Install -->
+  <div class="panel" id="panel-install" role="tabpanel" aria-labelledby="tab-install">
+    <p class="lead">Installs PS4 Northstar into your Titanfall 2 game folder for shadPS4, keeps it up to date,
+      and takes it out again if you want the ordinary game back. The game's own archives are never changed.</p>
+
+    <section class="tile" aria-labelledby="folder-title">
+      <h2 id="folder-title"><span class="step">1</span>Game folder</h2>
+      <div class="row">
+        <code class="path" id="folder">No folder chosen</code>
+        <button class="ghost" id="choose">Choose…</button>
       </div>
+      <div class="status" id="folder-status"><span class="dot"></span><span id="folder-text">Choose the folder with the game's eboot.bin and vpk_ps4.</span></div>
+    </section>
+
+    <section class="tile" aria-labelledby="ps4ns-title">
+      <h2 id="ps4ns-title"><span class="step">2</span>PS4 Northstar</h2>
+      <p class="note" id="latest">Looking for the latest release…</p>
       <div class="actions">
-        <button type="submit" class="primary" id="submit" disabled><span class="glyph cross-glyph" aria-hidden="true">✕</span>Sign in</button>
-        <div id="result" role="status"></div>
+        <button class="primary" id="install" disabled><span class="glyph cross-glyph" aria-hidden="true">✕</span><span id="install-label">Install</span></button>
+        <button class="ghost" id="check">Check for updates</button>
+        <div id="install-result" role="status"></div>
       </div>
-    </form>
-  </section>
+      <details class="uninstall" id="uninstall-box">
+        <summary>Uninstall</summary>
+        <p class="note">Puts back the original eboot.bin and removes the runtime, so the game starts as normal.
+          Your settings and sign-in are kept.</p>
+        <label class="check"><input type="checkbox" id="remove-mods"> Also delete the R2Northstar folder and every mod in it</label>
+        <button class="ghost danger" id="uninstall" disabled>Uninstall PS4 Northstar</button>
+      </details>
+    </section>
 
-  <section class="tile" aria-labelledby="activity-title">
-    <h2 id="activity-title"><span class="step">3</span>Activity</h2>
-    <ul id="activity"></ul>
-  </section>
+    <section class="tile" aria-labelledby="progress-title">
+      <h2 id="progress-title"><span class="step">3</span>Progress</h2>
+      <ul class="log" id="install-log"></ul>
+    </section>
+  </div>
+
+  <!-- Sign in -->
+  <div class="panel" id="panel-signin" role="tabpanel" aria-labelledby="tab-signin" hidden>
+    <p class="lead">Signs Northstar on your PS4, or in shadPS4, in with the EA account on this computer.
+      Keep this window open while you play: Northstar asks it for a new sign-in when the old one expires.</p>
+
+    <section class="tile" aria-labelledby="ea-title">
+      <h2 id="ea-title"><span class="step">1</span>EA account</h2>
+      <div class="row">
+        <div class="status" id="ea"><span class="dot"></span><span id="ea-text">Starting...</span></div>
+        <button class="ghost" id="retry" hidden>Try again</button>
+      </div>
+    </section>
+
+    <section class="tile" aria-labelledby="game-title">
+      <h2 id="game-title"><span class="step">2</span>Where is Northstar running?</h2>
+      <form id="signin">
+        <label class="choice"><input type="radio" name="mode" value="local">
+          <span class="choice-text"><strong>In shadPS4 on this computer</strong>
+            <small>Found by itself when it's running; otherwise it picks up the sign-in when it starts.</small></span></label>
+        <label class="choice"><input type="radio" name="mode" value="remote">
+          <span class="choice-text"><strong>On a PS4, or in shadPS4 on another computer</strong>
+            <small>In the game, select Launch Northstar. It shows an address and a 4-digit code.</small></span></label>
+        <div class="fields" id="fields">
+          <label class="field">Address<input type="text" id="address" autocomplete="off" spellcheck="false" placeholder="192.168.1.20"></label>
+          <label class="field">Code<input type="text" id="code" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="0000"></label>
+        </div>
+        <div class="actions">
+          <button type="submit" class="primary" id="submit" disabled><span class="glyph cross-glyph" aria-hidden="true">✕</span>Sign in</button>
+          <div id="result" role="status"></div>
+        </div>
+      </form>
+    </section>
+
+    <section class="tile" aria-labelledby="activity-title">
+      <h2 id="activity-title"><span class="step">3</span>Activity</h2>
+      <ul class="log" id="activity"></ul>
+    </section>
+  </div>
 
   <footer>
     <span id="version"></span>
-    <span class="hints"><span class="glyph cross-glyph" aria-hidden="true">✕</span>Enter to sign in</span>
+    <span class="hints"><span class="glyph cross-glyph" aria-hidden="true">✕</span>Enter to confirm</span>
   </footer>
 </main>
 <script src="app.js"></script>

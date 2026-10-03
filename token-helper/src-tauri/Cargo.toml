@@ -24,6 +24,9 @@ tiny_http = "0.12"
 getrandom = "0.2"
 dirs = "5"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tauri-plugin-dialog = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console"] }

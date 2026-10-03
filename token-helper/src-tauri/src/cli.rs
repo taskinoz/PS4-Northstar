@@ -6,7 +6,41 @@ use crate::service::{is_loopback, Service};
 #[cfg(windows)]
 use std::sync::mpsc;
 
+/// --install, --uninstall and --install-status.
+fn run_install(o: &Options) -> i32 {
+    let progress = |line: String| println!("{line}");
+    if let Some(folder) = &o.install_status {
+        let info = crate::install::inspect(folder, &o.sources);
+        println!("{}", info.describe());
+        return if info.installable() { 0 } else { 1 };
+    }
+    let (folder, result) = if let Some(folder) = &o.install {
+        (folder, crate::install::install(folder, &o.sources, &progress).map(|_| ()))
+    } else {
+        let folder = o.uninstall.as_ref().unwrap();
+        (folder, crate::install::uninstall(folder, o.remove_mods, &o.sources, &progress))
+    };
+    match result {
+        Ok(()) => {
+            if o.install.is_some() {
+                if let Ok(mut state) = HelperState::load(&o.key_file) {
+                    state.game_folder = folder.display().to_string();
+                    let _ = state.save();
+                }
+            }
+            0
+        }
+        Err(error) => {
+            println!("{error}");
+            1
+        }
+    }
+}
+
 pub fn run(o: &Options) -> i32 {
+    if o.install_mode() {
+        return run_install(o);
+    }
     let mut state = match HelperState::load(&o.key_file) {
         Ok(state) => state,
         Err(error) => {

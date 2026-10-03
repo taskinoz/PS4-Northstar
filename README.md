@@ -25,7 +25,7 @@ Downloads, with notes and known issues for each version, are on the [releases pa
   - hooks the UI, CLIENT and SERVER script VMs to run Northstar's scripts and natives;
   - talks to Northstar's master server.
 - **Unchanged files:** the retail archives (`vpk_ps4/`) and Northstar's mods stay byte-for-byte unchanged. Platform differences live in the runtime, or as overrides in this port's own `Northstar.PS4` mod.
-- **Signing in:** a PS4 has no EA app, so the **token helper**, a small app for Windows, macOS and Linux, signs the game in to Northstar through the EA app on a computer and keeps it signed in.
+- **The token helper:** a small app for Windows, macOS and Linux that installs PS4 Northstar into the game folder and keeps it up to date. A PS4 has no EA app, so it also signs the game in to Northstar through the EA app on a computer, and keeps it signed in.
 
 ```text
 <game folder>/

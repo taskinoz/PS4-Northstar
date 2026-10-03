@@ -51,6 +51,9 @@ The same app takes options. With any of these it works in the terminal instead o
 
 | Option | What it does |
 | --- | --- |
+| `--install <game folder>` | Installs PS4 Northstar into the game folder, or updates it, from the newest release. |
+| `--uninstall <game folder>` | Puts back the original `eboot.bin` and removes the runtime; add `--remove-mods` to delete `R2Northstar` too. |
+| `--install-status <game folder>` | Says what's installed in the game folder. |
 | `--console "192.168.1.20 4821"` | Signs that console in. Use just the address for a console paired before. |
 | `--local` | Signs in Northstar in shadPS4 on this computer, or, if it isn't running, saves the sign-in for when it starts. |
 | `--cli` | Signs in a running game or the console paired last time; otherwise saves the sign-in for shadPS4 on this computer. |

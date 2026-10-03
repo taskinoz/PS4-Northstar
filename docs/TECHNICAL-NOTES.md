@@ -6510,3 +6510,48 @@ texture the game has, the mod's file was never used.
 - A screenshot did not catch the muzzle flash itself: the gun fired a single round, and the flash
   is too short.
 - Profile tests pass, and 4/4 boots reached the lobby.
+
+## The token helper installs PS4 Northstar (2026-10-04)
+
+The token helper app now has an **Install** tab (and `--install`, `--uninstall [--remove-mods]` and
+`--install-status <game folder>`), so players never run a script. The code is
+`token-helper/src-tauri/src/install.rs`.
+
+**Install:**
+1. Find the newest release with a runtime through GitHub's releases API (pre-releases included,
+   drafts skipped).
+2. Download its assets, checking each against GitHub's published SHA-256 `digest`.
+3. Replace Northstar's three folders and this port's two in `R2Northstar/mods`, leaving other mods.
+   Northstar's come from a `northstar-mods-*.zip` asset, or else from Northstar's
+   `Northstar.release.v1.31.13.zip`, which is checked against its known SHA-256. Zip entries are
+   kept below `R2Northstar/mods/`, and ones that would leave it are skipped.
+4. Extract the converted Northstar.Custom paks.
+5. Write the runtime.
+6. Add the bootstrap to `eboot.bin` only if it is the original: SHA-256 `590956ab…`, with the
+   original kept as `eboot.bin.northstar-stage2.bak`. The result must hash to `5a4b52ff…`.
+7. Record what was installed in `R2Northstar/ps4-northstar-install.json`.
+
+Nothing in the game folder changes until every download has arrived and passed its check. The
+bootstrap is the Rust port of `Enable-Stage2Bootstrap.ps1`.
+
+**Uninstall** restores the original eboot from the backup, or, without one, takes the bootstrap out
+exactly. Either way the result must hash to the original's. It then removes the runtime, and
+optionally `R2Northstar`. An eboot it doesn't recognise is never touched. The window remembers the
+game folder in `token-helper.json` (`gameFolder`) and uses the system folder picker
+(`tauri-plugin-dialog`, called from Rust).
+
+**Tests:**
+- `cargo test`, 14 tests:
+  - the bootstrap round trip on a synthetic eboot;
+  - with `NS_TEST_EBOOT` set, the real eboot: patched to exactly the script's `5a4b52ff…` and back
+    to `590956ab…`;
+  - zip paths that try to escape;
+  - an end-to-end run against a fake GitHub: install, update, a corrupted download refused with
+    nothing changed, uninstall with and without a backup, and an unknown eboot refused.
+- **The release exe in terminal mode**, against `tests/token_helper/fake_github.py` serving the real
+  v0.2.18 assets plus a mods zip of the repo's Northstar 1.31.13 (818 files), on a throwaway game
+  folder holding the original eboot:
+  - the install gave the patched hash, the release PRX and all five mod folders;
+  - uninstall gave back the original eboot and kept the mods.
+- **The window**, driven with UI Automation: the remembered folder, the latest release, Install
+  with progress, then Reinstall offered.

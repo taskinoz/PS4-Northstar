@@ -55,7 +55,31 @@ header { display: flex; gap: 14px; align-items: center; }
   background: var(--ps-blue); color: #fff; font-size: 11px; vertical-align: 1px;
 }
 h1 { margin: 0; font-size: 30px; font-weight: 300; letter-spacing: .01em; line-height: 1.15; }
-.lead { color: var(--muted); margin: 14px 0 20px; }
+.lead { color: var(--muted); margin: 4px 0 18px; }
+
+/* PS5-style section tabs */
+.tabs { display: flex; gap: 6px; margin: 20px 0 14px; padding: 4px; border-radius: 999px; width: fit-content;
+  background: rgba(255, 255, 255, .06); border: 1px solid var(--tile-line); }
+.tab { padding: 7px 20px; border: 0; background: transparent; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+.tab:hover { color: var(--text); }
+.tab[aria-selected=true] { background: #fff; color: #08142f; }
+.panel[hidden] { display: none; }
+
+.path { display: block; flex: 1 1 260px; min-width: 0; padding: 8px 12px; border-radius: 10px; overflow-wrap: anywhere;
+  background: var(--field); border: 1px solid var(--tile-line); font: 13px/1.5 "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace; }
+#folder-status { margin-top: 10px; }
+.note { color: var(--muted); margin: 0 0 4px; }
+#install-result { flex: 1 1 240px; min-height: 1.5em; }
+#install-result.ok { color: var(--triangle); }
+#install-result.error { color: var(--circle); }
+.uninstall { margin-top: 16px; border-top: 1px solid var(--tile-line); padding-top: 10px; }
+.uninstall summary { cursor: pointer; color: var(--muted); font-weight: 600; }
+.uninstall summary:hover { color: var(--text); }
+.uninstall .note { margin: 10px 0; }
+.check { display: flex; gap: 8px; align-items: center; margin: 0 0 12px; font-size: 14px; }
+.check input { accent-color: var(--circle); width: 16px; height: 16px; }
+.danger { border-color: rgba(255, 91, 110, .5); color: #ffb3bc; }
+.danger:hover:not(:disabled) { background: rgba(255, 91, 110, .15); }
 
 .tile {
   background: var(--tile); border: 1px solid var(--tile-line); border-radius: 16px;
@@ -119,12 +143,12 @@ button:disabled { opacity: .45; cursor: default; }
 .primary .cross-glyph { background: #0b2a66; }
 #result { flex: 1 1 240px; min-height: 1.5em; }
 
-#activity {
+#activity, .log {
   list-style: none; margin: 0; padding: 10px 12px; max-height: 170px; overflow: auto; border-radius: 10px;
   background: rgba(1, 7, 22, .55); border: 1px solid var(--tile-line);
   font: 12.5px/1.65 "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace; color: #cfe0ff;
 }
-#activity:empty::before { content: "Nothing yet."; color: var(--muted); }
+.log:empty::before { content: "Nothing yet."; color: var(--muted); }
 
 footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
   color: var(--muted); font-size: 12.5px; padding: 4px 2px 0; }

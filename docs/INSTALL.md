@@ -11,13 +11,7 @@ This guide is for players. To build from source, see [BUILDING.md](BUILDING.md);
 - **Titanfall 2 for PS4**, dumped from your own copy, at the final patch: `CUSA04013`, build `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM`. The game's archives (`vpk_ps4/`) must be the original, unmodified ones.
 - **shadPS4**, set up to run that game folder. See [Which shadPS4 build](#which-shadps4-build) below.
 - **An EA account that owns Titanfall 2**, signed in to the **EA app** on a Windows PC (or a Mac, untested). Northstar signs you in through it.
-- From the [PS4 Northstar releases page](https://github.com/taskinoz/PS4-Northstar/releases):
-  - `northstar_ps4.prx`, the runtime;
-  - `northstar-ps4-mods-<version>.zip`, this port's own mods;
-  - `northstar-custom-ps4-rpaks-<version>.zip`, Northstar.Custom's textures converted for the PS4;
-  - the **NorthstarPS4 Token Helper** for your computer (Windows installer or `.exe`, macOS `.dmg`, Linux AppImage or `.deb`).
-- **Northstar 1.31.13** from [Northstar's releases](https://github.com/R2Northstar/Northstar/releases/tag/v1.31.13): `Northstar.release.v1.31.13.zip`. Only its mods are used, not the PC launcher.
-- `Enable-Stage2Bootstrap.ps1` from this repository's [`scripts/`](../scripts/Enable-Stage2Bootstrap.ps1) folder, run once to let the game load the runtime. It runs in Windows PowerShell, which every Windows PC has.
+- The **NorthstarPS4 Token Helper** for your computer, from the [PS4 Northstar releases page](https://github.com/taskinoz/PS4-Northstar/releases): the Windows installer or `.exe`, the macOS `.dmg`, or the Linux AppImage or `.deb`. It installs PS4 Northstar into the game folder, keeps it up to date, and signs you in.
 
 ## Which shadPS4 build
 
@@ -42,20 +36,20 @@ Shader caches aren't shared between shadPS4 builds: after switching builds, move
 
 ## Install
 
-In these steps, the **game folder** is the folder with the game's `eboot.bin` (for example `D:\PS4\CUSA04013`). The **data folder** is shadPS4's save data for PS4 Northstar: `%APPDATA%\shadPS4\data\northstar_ps4` on Windows.
+The **game folder** is the folder with the game's `eboot.bin` and `vpk_ps4` (for example `D:\PS4\CUSA04013`).
 
-1. **Back up the game folder** if you haven't already, or at least `eboot.bin`.
-2. **Add the Northstar mods.** Open `Northstar.release.v1.31.13.zip` and copy its `R2Northstar\mods` folder into the game folder, so you have `<game folder>\R2Northstar\mods\Northstar.Client`, `Northstar.Custom` and so on. You don't need anything else from that zip.
-3. **Add PS4 Northstar's mods.** Extract `northstar-ps4-mods-<version>.zip` into the game folder. It adds `Northstar.PS4` (required: the PS4 fixes live in it) and `Northstar.DirectConnect` beside the Northstar mods.
-4. **Add the converted textures.** Extract `northstar-custom-ps4-rpaks-<version>.zip` into the game folder, and replace the files when asked. The PC versions of these files can't be read on the PS4.
-5. **Add the runtime.** Copy `northstar_ps4.prx` to `<game folder>\bin\ps4_retail\northstar_ps4.prx`.
-6. **Let the game load it (once).** In PowerShell, in the folder where you saved `Enable-Stage2Bootstrap.ps1`:
+1. **Open the token helper.** It isn't signed, so the first time:
+   - **Windows:** select **More info**, then **Run anyway**.
+   - **macOS:** open **System Settings → Privacy & Security**, select **Open Anyway** next to its name, and confirm.
+2. On the **Install** tab, select **Choose…** and pick the game folder. The helper checks it: "Titanfall 2 found. PS4 Northstar isn't installed yet."
+3. Select **Install**. The helper downloads the newest PS4 Northstar release and Northstar's mods (about 130 MB), checks every download, and installs them. **Progress** shows each step.
 
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File .\Enable-Stage2Bootstrap.ps1 -GameRoot 'D:\PS4\CUSA04013'
-   ```
+What it changes in the game folder:
+- **`R2Northstar\mods`:** Northstar's own mods, PS4 Northstar's mods (`Northstar.PS4`, `Northstar.DirectConnect`), and Northstar.Custom's textures converted for the PS4. Other mods already there are left alone.
+- **`bin\ps4_retail\northstar_ps4.prx`:** the runtime.
+- **`eboot.bin`:** a few bytes are added so the game loads the runtime. This only works on the exact original `eboot.bin`, and the original is kept as `eboot.bin.northstar-stage2.bak`.
 
-   This adds a few bytes to `eboot.bin` so that it loads the runtime. It only works on the exact original `eboot.bin`, and it keeps that original as `eboot.bin.northstar-stage2.bak`. Updates don't need it again.
+The game's archives are never changed.
 
 When you're done, the game folder looks like this:
 
@@ -75,18 +69,13 @@ When you're done, the game folder looks like this:
   vpk_ps4/                            (unchanged)
 ```
 
-There must be no extra level such as `R2Northstar\mods\mods`.
-
 ## Sign in
 
-Northstar needs to know who you are. A PS4 has no EA app, so the **NorthstarPS4 Token Helper** on your computer signs the game in for it, and keeps it signed in.
+Northstar needs to know who you are. A PS4 has no EA app, so the token helper signs the game in for it, and keeps it signed in.
 
-1. Install or open the token helper. It isn't signed, so the first time:
-   - **Windows:** select **More info**, then **Run anyway**.
-   - **macOS:** open **System Settings → Privacy & Security**, select **Open Anyway** next to its name, and confirm.
-2. Open the **EA app** and sign in with the account that owns Titanfall 2. The token helper shows the account it found under **EA account**.
-3. Start Titanfall 2 in shadPS4. Under **Where is Northstar running?**, select **In shadPS4 on this computer** (or **On a PS4, or in shadPS4 on another computer**, then type the address and code the game shows when you select Launch Northstar). Select **Sign in**.
-4. **Keep the token helper open while you play.** Your sign-in lasts about a day. When it runs out, the game gets a new one from the helper by itself.
+1. Open the **EA app** and sign in with the account that owns Titanfall 2. On the token helper's **Sign in** tab, **EA account** shows the account it found.
+2. Start Titanfall 2 in shadPS4. Under **Where is Northstar running?**, select **In shadPS4 on this computer** (or **On a PS4, or in shadPS4 on another computer**, then type the address and code the game shows when you select Launch Northstar). Select **Sign in**.
+3. **Keep the token helper open while you play.** Your sign-in lasts about a day. When it runs out, the game gets a new one from the helper by itself.
 
 ## Play
 
@@ -96,22 +85,14 @@ To use more mods, add their folders to `<game folder>\R2Northstar\mods` and rest
 
 ## Update
 
-1. Close the game.
-2. Replace `<game folder>\bin\ps4_retail\northstar_ps4.prx` with the new release's.
-3. Extract the new release's `northstar-ps4-mods-<version>.zip` (and `northstar-custom-ps4-rpaks-<version>.zip`, if the release has one) into the game folder again, replacing files.
-4. Update the token helper if the release has a new one.
-
-Don't run `Enable-Stage2Bootstrap.ps1` again. Your settings, enabled mods, sign-in and mod save data are in the data folder, and an update keeps them.
+Open the token helper. When a new release is out, the **Install** tab offers **Update to <version>**: select it. Your settings, enabled mods, sign-in and mod save data are kept. **Check for updates** looks again. Download a new token helper from the releases page when one is out.
 
 ## Uninstall
 
-To go back to the ordinary game:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\Enable-Stage2Bootstrap.ps1 -GameRoot 'D:\PS4\CUSA04013' -Disable
-```
-
-This restores the original `eboot.bin` from `eboot.bin.northstar-stage2.bak`. Then delete `bin\ps4_retail\northstar_ps4.prx` and the `R2Northstar` folder. To also remove your Northstar settings and sign-in, delete the data folder. The game's own archives were never changed.
+On the **Install** tab, open **Uninstall** and select **Uninstall PS4 Northstar**:
+- It puts back the original `eboot.bin` and removes the runtime, so the game starts as normal.
+- Tick **Also delete the R2Northstar folder and every mod in it** to remove the mods too.
+- Your Northstar settings and sign-in stay in shadPS4's data folder (`%APPDATA%\shadPS4\data\northstar_ps4` on Windows). Delete that folder to remove them as well.
 
 ## Troubleshooting
 
@@ -126,9 +107,14 @@ This restores the original `eboot.bin` from `eboot.bin.northstar-stage2.bak`. Th
 | Textures show as a magenta-and-black checkerboard | A mod's textures or paks are in a format the PS4 can't read. Northstar.Custom's need `northstar-custom-ps4-rpaks-<version>.zip`. Other mods' RPak texture packs need converting (see [USING.md](USING.md#mods)). |
 | Boot stops on the Respawn logo | Close the game and start it again. If it keeps happening, remove recently added mods to find the one causing it. |
 | Others can't join a match you host | See [Hosting](USING.md#hosting-a-match-for-other-players): UDP port 37015 must be forwarded to your computer. |
-| `Enable-Stage2Bootstrap.ps1` says **Refusing to patch unknown eboot** | Your `eboot.bin` isn't the expected original (wrong game version, or already patched by something else). Restore the original from your backup. |
+| The token helper says the folder's **eboot.bin isn't the supported Titanfall 2 version** | Your `eboot.bin` isn't the expected original: a different game version, or changed by something else. Restore the original from your own backup. |
+| Installing fails while downloading | Check your internet connection and select the button again; nothing is changed until every download has arrived and been checked. |
 
 When reporting a problem, include shadPS4's log (`%APPDATA%\shadPS4\log\shad_log.txt`). With the log filter above it contains no sign-in token. Still, check it before posting, and never share `atlas_identity.json` from the data folder.
+
+## Installing by hand
+
+Developers, or anyone without the token helper, can install from the release files and the repository's scripts instead; see [BUILDING.md](BUILDING.md#installing-a-release-by-hand).
 
 ## What's not supported
 

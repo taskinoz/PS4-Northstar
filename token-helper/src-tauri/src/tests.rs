@@ -228,7 +228,7 @@ fn window_flow_signs_in_a_console() {
     let o = test_options("ui", &atlas, fake_lsx(), free_port());
     let ui = Ui::new(&o).unwrap();
     ui.start();
-    let view = ui.reply(0);
+    let view = ui.reply(0, 0);
     let view = serde_json::to_value(&view).unwrap();
     assert_eq!(view["ready"], true);
     assert_eq!(view["ea"]["kind"], "ok");
@@ -239,7 +239,7 @@ fn window_flow_signs_in_a_console() {
     // The same flow against the console, with the port it listens on.
     let ui = Ui::new(&o2).unwrap();
     ui.start();
-    let result = |ui: &Arc<Ui>| serde_json::to_value(ui.reply(0)).unwrap()["result"].clone();
+    let result = |ui: &Arc<Ui>| serde_json::to_value(ui.reply(0, 0)).unwrap()["result"].clone();
     // 127.0.0.1 answers hello here, so start() signs it in as this computer's game first; the
     // fake plays a remote console, which refuses that push without a code.
     ui.sign_in("remote", "127.0.0.1", "12");
@@ -263,4 +263,158 @@ fn hex32_and_addresses() {
     assert!(is_hex32("0123456789abcdef0123456789abcdef"));
     assert!(!is_hex32("0123456789ABCDEF0123456789ABCDEF"));
     assert!(crate::service::is_address("192.168.1.20") && !crate::service::is_address("a/b") && !crate::service::is_address(""));
+}
+
+// ---- Installing ----
+
+/// A zip of `files` (path, contents).
+fn make_zip(path: &std::path::Path, files: &[(&str, &[u8])]) {
+    let file = std::fs::File::create(path).unwrap();
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    for (name, data) in files {
+        zip.start_file(*name, options).unwrap();
+        zip.write_all(data).unwrap();
+    }
+    zip.finish().unwrap();
+}
+
+fn sha256_of(data: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(data))
+}
+
+/// GitHub's releases API and downloads for `version`, served from `dir`.
+/// `corrupt` serves the runtime with one byte changed.
+fn fake_github(dir: PathBuf, version: &str, corrupt: bool) -> String {
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.server_addr().to_ip().unwrap());
+    let names = ["northstar_ps4.prx", "northstar-ps4-mods-test.zip", "northstar-custom-ps4-rpaks-test.zip", "northstar-mods-test.zip"];
+    let assets: Vec<Value> = names
+        .iter()
+        .map(|name| {
+            let data = std::fs::read(dir.join(name)).unwrap();
+            json!({"name": name, "size": data.len(), "browser_download_url": format!("{base}/download/{name}"),
+                   "digest": format!("sha256:{}", sha256_of(&data))})
+        })
+        .collect();
+    let listing = json!([
+        {"tag_name": "v9.9.9-draft", "draft": true, "prerelease": false, "assets": []},
+        {"tag_name": version, "draft": false, "prerelease": true, "assets": assets},
+    ]);
+    thread::spawn(move || {
+        for request in server.incoming_requests() {
+            let url = request.url().to_string();
+            if url.starts_with("/releases") {
+                respond(request, 200, listing.clone());
+            } else if let Some(name) = url.strip_prefix("/download/") {
+                let mut data = std::fs::read(dir.join(name)).unwrap_or_default();
+                if corrupt && name.ends_with(".prx") {
+                    data[0] ^= 1;
+                }
+                let _ = request.respond(tiny_http::Response::from_data(data));
+            } else {
+                respond(request, 404, json!({}));
+            }
+        }
+    });
+    format!("{base}/releases")
+}
+
+#[test]
+fn installs_updates_and_uninstalls() {
+    use crate::install::{self, Eboot};
+    let root = temp_dir("install");
+    let release = root.join("release");
+    let game = root.join("CUSA04013");
+    std::fs::create_dir_all(&release).unwrap();
+    std::fs::create_dir_all(game.join("vpk_ps4")).unwrap();
+    std::fs::write(release.join("northstar_ps4.prx"), b"runtime v1").unwrap();
+    make_zip(&release.join("northstar-ps4-mods-test.zip"), &[
+        ("R2Northstar/mods/Northstar.PS4/mod.json", b"{}"),
+        ("R2Northstar/mods/Northstar.DirectConnect/mod.json", b"{}"),
+    ]);
+    make_zip(&release.join("northstar-custom-ps4-rpaks-test.zip"), &[("R2Northstar/mods/Northstar.Custom/paks/a.rpak", b"ps4 pak")]);
+    make_zip(&release.join("northstar-mods-test.zip"), &[
+        ("R2Northstar/mods/Northstar.Client/mod.json", b"{}"),
+        ("R2Northstar/mods/Northstar.Custom/mod.json", b"{}"),
+        ("R2Northstar/mods/Northstar.Custom/paks/a.rpak", b"pc pak"),
+        ("R2Northstar/mods/Northstar.CustomServers/mod.json", b"{}"),
+        ("R2Northstar/mods/../../escape.txt", b"nope"),
+        ("NorthstarLauncher.exe", b"not for the PS4"),
+    ]);
+    let original = install::tests::synthetic_eboot();
+    std::fs::write(game.join("eboot.bin"), &original).unwrap();
+    // Someone's own mod, and a stale file in Northstar.Client, before installing.
+    std::fs::create_dir_all(game.join("R2Northstar/mods/Someone.Mod")).unwrap();
+    std::fs::write(game.join("R2Northstar/mods/Someone.Mod/mod.json"), b"{}").unwrap();
+    std::fs::create_dir_all(game.join("R2Northstar/mods/Northstar.Client")).unwrap();
+    std::fs::write(game.join("R2Northstar/mods/Northstar.Client/stale.txt"), b"old").unwrap();
+
+    let mut sources = install::Sources {
+        releases_api: fake_github(release.clone(), "v1.0.0", false),
+        northstar_zip_url: "http://127.0.0.1:1/unused".into(),
+        northstar_zip_sha256: String::new(),
+        vanilla_eboot_sha256: sha256_of(&original),
+        patched_eboot_sha256: sha256_of(&install::patch_eboot(&original).unwrap()),
+    };
+    assert_eq!(install::inspect(&game, &sources).eboot, Eboot::Original);
+    let lines = Mutex::new(Vec::<String>::new());
+    let progress = |line: String| lines.lock().unwrap().push(line);
+
+    // Install.
+    assert_eq!(install::install(&game, &sources, &progress).unwrap(), "v1.0.0");
+    let info = install::inspect(&game, &sources);
+    assert_eq!(info.eboot, Eboot::Bootstrapped);
+    assert!(info.runtime_installed);
+    assert_eq!(info.installed_version.as_deref(), Some("v1.0.0"));
+    assert_eq!(std::fs::read(game.join("bin/ps4_retail/northstar_ps4.prx")).unwrap(), b"runtime v1");
+    assert_eq!(std::fs::read(game.join("eboot.bin.northstar-stage2.bak")).unwrap(), original);
+    let mods = game.join("R2Northstar/mods");
+    for name in ["Northstar.Client", "Northstar.Custom", "Northstar.CustomServers", "Northstar.PS4", "Northstar.DirectConnect", "Someone.Mod"] {
+        assert!(mods.join(name).join("mod.json").is_file(), "{name}");
+    }
+    assert!(!mods.join("Northstar.Client/stale.txt").exists(), "Northstar's own folders are replaced");
+    assert_eq!(std::fs::read(mods.join("Northstar.Custom/paks/a.rpak")).unwrap(), b"ps4 pak", "converted paks win");
+    assert!(!root.join("escape.txt").exists() && !game.join("escape.txt").exists());
+    assert!(!game.join("NorthstarLauncher.exe").exists() && !mods.join("NorthstarLauncher.exe").exists());
+    assert!(lines.lock().unwrap().iter().any(|l| l.contains("PS4 Northstar v1.0.0 is installed")));
+
+    // Update: a new release; the bootstrap is already there.
+    std::fs::write(release.join("northstar_ps4.prx"), b"runtime v2").unwrap();
+    sources.releases_api = fake_github(release.clone(), "v1.0.1", false);
+    assert_eq!(install::install(&game, &sources, &progress).unwrap(), "v1.0.1");
+    assert_eq!(std::fs::read(game.join("bin/ps4_retail/northstar_ps4.prx")).unwrap(), b"runtime v2");
+    assert!(lines.lock().unwrap().iter().any(|l| l.contains("already has the bootstrap")));
+
+    // A download that doesn't match its checksum changes nothing.
+    sources.releases_api = fake_github(release.clone(), "v1.0.2", true);
+    let error = install::install(&game, &sources, &progress).unwrap_err();
+    assert!(error.contains("did not download correctly"), "{error}");
+    assert_eq!(install::inspect(&game, &sources).installed_version.as_deref(), Some("v1.0.1"));
+    assert_eq!(std::fs::read(game.join("bin/ps4_retail/northstar_ps4.prx")).unwrap(), b"runtime v2");
+
+    // Uninstall keeps the mods unless asked; the original eboot comes back.
+    install::uninstall(&game, false, &sources, &progress).unwrap();
+    assert_eq!(std::fs::read(game.join("eboot.bin")).unwrap(), original);
+    assert!(!game.join("bin/ps4_retail/northstar_ps4.prx").exists());
+    assert!(!game.join("eboot.bin.northstar-stage2.bak").exists());
+    assert!(mods.join("Someone.Mod/mod.json").is_file());
+
+    // Again, without a backup, and removing the mods: the bootstrap is taken out exactly.
+    sources.releases_api = fake_github(release.clone(), "v1.0.3", false);
+    install::install(&game, &sources, &progress).unwrap();
+    std::fs::remove_file(game.join("eboot.bin.northstar-stage2.bak")).unwrap();
+    install::uninstall(&game, true, &sources, &progress).unwrap();
+    assert_eq!(std::fs::read(game.join("eboot.bin")).unwrap(), original);
+    assert!(!game.join("R2Northstar").exists());
+
+    // An eboot that isn't the original is refused, both ways, and left alone.
+    let mut other = original.clone();
+    other[10] = 1;
+    std::fs::write(game.join("eboot.bin"), &other).unwrap();
+    assert!(install::install(&game, &sources, &progress).is_err());
+    assert!(install::uninstall(&game, false, &sources, &progress).is_err());
+    assert_eq!(std::fs::read(game.join("eboot.bin")).unwrap(), other);
+    let _ = std::fs::remove_dir_all(root);
 }

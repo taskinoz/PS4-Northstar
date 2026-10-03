@@ -9,6 +9,11 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug)]
 pub struct Options {
     pub console: String, // "<address> [code]"
+    pub install: Option<PathBuf>,
+    pub uninstall: Option<PathBuf>,
+    pub install_status: Option<PathBuf>,
+    pub remove_mods: bool,
+    pub sources: crate::install::Sources,
     pub local: bool,
     pub once: bool,
     pub cli: bool,
@@ -37,6 +42,10 @@ pub fn usage() -> String {
 Signs Northstar on a PS4, or in shadPS4, in through the EA app on this computer, and keeps
 it signed in while it runs. Without options it opens its window.
 
+  --install <game folder>       Install PS4 Northstar into the game folder (the one with eboot.bin),
+                                or update it, from the newest release.
+  --uninstall <game folder>     Take PS4 Northstar out again; add --remove-mods to delete R2Northstar.
+  --install-status <game folder>  Say what's installed in the game folder.
   --console \"<address> <code>\"  Sign in the console at that address, with the code the game
                                 shows (Launch Northstar shows both). Just the address signs in
                                 a console paired before.
@@ -52,7 +61,8 @@ it signed in while it runs. Without options it opens its window.
   --version                     Show the version.
   --help                        Show this.
 
---console, --local, --once and --cli run in the terminal instead of the window. Exit codes:
+--install, --uninstall, --install-status, --console, --local, --once and --cli run in the
+terminal instead of the window. Exit codes:
 0 signed in (or stopped with Ctrl+C), 1 failed, 2 bad options. On Windows, run it with
 `start /wait` (cmd) or `Start-Process -Wait` (PowerShell) to wait for it.
 ",
@@ -81,6 +91,11 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             console: String::new(),
+            install: None,
+            uninstall: None,
+            install_status: None,
+            remove_mods: false,
+            sources: crate::install::Sources::default(),
             local: false,
             once: false,
             cli: false,
@@ -126,12 +141,15 @@ impl Options {
             };
             match name.as_str() {
                 "local" => flag(&mut o.local)?,
+                "remove-mods" => flag(&mut o.remove_mods)?,
                 "once" => flag(&mut o.once)?,
                 "cli" => flag(&mut o.cli)?,
                 "help" | "h" | "?" => flag(&mut o.help)?,
                 "version" => flag(&mut o.version)?,
                 "console" | "output" | "key-file" | "advertise-host" | "master-server" | "launcher-version" | "content-id"
-                | "title" | "client-id" | "scope" | "port" | "console-port" | "lsx-port" | "min-seconds-between-tokens" => {
+                | "title" | "client-id" | "scope" | "port" | "console-port" | "lsx-port" | "min-seconds-between-tokens"
+                | "install" | "uninstall" | "install-status" | "releases-api" | "northstar-zip-url" | "northstar-zip-sha256"
+                | "vanilla-eboot-sha256" | "patched-eboot-sha256" => {
                     let value = match inline {
                         Some(value) => value,
                         None => args.next().ok_or_else(|| format!("--{name} needs a value."))?,
@@ -141,6 +159,15 @@ impl Options {
                     };
                     match name.as_str() {
                         "console" => o.console = value.trim().to_string(),
+                        "install" => o.install = Some(PathBuf::from(value)),
+                        "uninstall" => o.uninstall = Some(PathBuf::from(value)),
+                        "install-status" => o.install_status = Some(PathBuf::from(value)),
+                        // For tests and mirrors; not in the help.
+                        "releases-api" => o.sources.releases_api = value,
+                        "northstar-zip-url" => o.sources.northstar_zip_url = value,
+                        "northstar-zip-sha256" => o.sources.northstar_zip_sha256 = value.to_ascii_lowercase(),
+                        "vanilla-eboot-sha256" => o.sources.vanilla_eboot_sha256 = value.to_ascii_lowercase(),
+                        "patched-eboot-sha256" => o.sources.patched_eboot_sha256 = value.to_ascii_lowercase(),
                         "output" => o.output = PathBuf::from(value),
                         "key-file" => o.key_file = PathBuf::from(value),
                         "advertise-host" => o.advertise_host = value,
@@ -174,7 +201,12 @@ impl Options {
 
     /// Whether the options ask for the terminal rather than the window.
     pub fn terminal_mode(&self) -> bool {
-        self.cli || self.local || self.once || !self.console.is_empty()
+        self.cli || self.local || self.once || !self.console.is_empty() || self.install_mode()
+    }
+
+    /// Whether the options ask to install, uninstall or check a game folder.
+    pub fn install_mode(&self) -> bool {
+        self.install.is_some() || self.uninstall.is_some() || self.install_status.is_some()
     }
 
     pub fn settings(&self) -> Settings {
@@ -213,12 +245,14 @@ pub fn split_target(text: &str) -> (String, String) {
 pub struct HelperState {
     pub key: String,
     pub console: String,
+    pub game_folder: String,
     path: PathBuf,
 }
 
 impl HelperState {
     pub fn load(path: &Path) -> Result<HelperState, String> {
-        let mut state = HelperState { key: String::new(), console: String::new(), path: path.to_path_buf() };
+        let mut state =
+            HelperState { key: String::new(), console: String::new(), game_folder: String::new(), path: path.to_path_buf() };
         if let Ok(text) = fs::read_to_string(path) {
             if let Ok(saved) = serde_json::from_str::<Value>(&text) {
                 if let Some(key) = saved["key"].as_str().filter(|k| is_hex32(k)) {
@@ -226,6 +260,9 @@ impl HelperState {
                 }
                 if let Some(console) = saved["console"].as_str().filter(|c| is_address(c)) {
                     state.console = console.into();
+                }
+                if let Some(folder) = saved["gameFolder"].as_str() {
+                    state.game_folder = folder.into();
                 }
             }
         }
@@ -240,7 +277,9 @@ impl HelperState {
 
     pub fn save(&self) -> std::io::Result<()> {
         let console = if self.console.is_empty() { Value::Null } else { json!(self.console) };
-        let text = serde_json::to_string_pretty(&json!({"key": self.key, "console": console})).unwrap();
+        let game_folder = if self.game_folder.is_empty() { Value::Null } else { json!(self.game_folder) };
+        let text =
+            serde_json::to_string_pretty(&json!({"key": self.key, "console": console, "gameFolder": game_folder})).unwrap();
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }

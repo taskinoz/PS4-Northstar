@@ -16,6 +16,7 @@
 
 mod cli;
 mod gui;
+mod install;
 mod lsx;
 mod options;
 mod service;

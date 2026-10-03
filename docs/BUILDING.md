@@ -130,7 +130,29 @@ Mounting rules:
 .\scripts\Build-TokenHelper.ps1 -Bundle    # plus the Windows installer
 ```
 
-Or, in `token-helper\`: `bun install`, then `bun tauri build`, or `bun tauri dev` while working on it. Tauri builds only for the system it runs on, so `.github/workflows/token-helper.yml` builds Windows, a universal macOS `.dmg`, and Linux AppImage and `.deb`. Run it from the Actions tab once it's on the default branch, or push a `token-helper-v<version>` tag. `make-icon.ps1` redraws `app-icon.png`, and `bun tauri icon app-icon.png` regenerates the icon set.
+Or, in `token-helper\`: `bun install`, then `bun tauri build`, or `bun tauri dev` while working on it.
+
+The installer is `src-tauri/src/install.rs`:
+- **The eboot patch** is the one `Enable-Stage2Bootstrap.ps1` writes, and its exact reverse, each checked against the original's and the patched eboot's SHA-256.
+- **Tests:** `cargo test` with `NS_TEST_EBOOT` pointing at an original `eboot.bin` also checks the real game's eboot.
+- **Source overrides:** `--releases-api`, `--northstar-zip-url` and the `--*-sha256` options point it at other sources. `tests/token_helper/fake_github.py` serves a folder of files as a release for trying it. Tauri builds only for the system it runs on, so `.github/workflows/token-helper.yml` builds Windows, a universal macOS `.dmg`, and Linux AppImage and `.deb`. Run it from the Actions tab once it's on the default branch, or push a `token-helper-v<version>` tag. `make-icon.ps1` redraws `app-icon.png`, and `bun tauri icon app-icon.png` regenerates the icon set.
+
+## Installing a release by hand
+
+Players use the token helper's **Install** tab, which does the following. Developers can do the same by hand from a release's files:
+
+1. Copy `R2Northstar\mods` from Northstar 1.31.13 (the `northstar-mods-<version>.zip` release asset, or `Northstar.release.v1.31.13.zip` from Northstar's releases) into the game folder.
+2. Extract `northstar-ps4-mods-<version>.zip` and `northstar-custom-ps4-rpaks-<version>.zip` into the game folder, replacing files.
+3. Copy `northstar_ps4.prx` to `<game folder>\bin\ps4_retail\northstar_ps4.prx`.
+4. Run `.\scripts\Enable-Stage2Bootstrap.ps1 -GameRoot <game folder>` once (`-Disable` restores the original).
+
+## Release assets
+
+The token helper's installer takes the newest release, pre-releases included, that has both `northstar_ps4.prx` and a `northstar-ps4-mods-*.zip`. From that release it uses:
+- `northstar-custom-ps4-rpaks-*.zip`, when present;
+- `northstar-mods-*.zip`, when present: Northstar's mods laid out as `R2Northstar/mods/...`, made from `work/northstar-release/<version>/mods`. Without it, the installer downloads Northstar's own release zip (107 MB) and checks it against the SHA-256 in `install.rs`.
+
+Every download is checked against the `digest` GitHub publishes for the asset. Release zips must keep the `R2Northstar/mods/` prefix.
 
 ## Going back to the ordinary game
 

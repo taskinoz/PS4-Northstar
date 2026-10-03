@@ -3,9 +3,11 @@
 //! so the window never stops responding. The page talks to this process over
 //! Tauri's IPC only: nothing else on the computer or the network can drive it.
 
+use crate::install::{self, FolderInfo, Sources};
 use crate::options::{HelperState, Options, VERSION};
 use crate::service::{is_address, Event, Identity, Service};
 use serde::Serialize;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -27,11 +29,28 @@ pub struct View {
     pub result: Message,
 }
 
+/// The Install tab.
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallView {
+    pub folder: String,
+    pub info: Option<FolderInfo>,
+    pub status: Message,
+    pub latest: String, // the newest release's version, once known
+    pub action: String, // "", "Install", "Update to <version>" or "Reinstall"
+    pub can_uninstall: bool,
+    pub busy: bool,
+    pub result: Message,
+}
+
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StateReply {
     #[serde(flatten)]
     view: View,
     events: Vec<Event>,
+    install: InstallView,
+    install_events: Vec<Event>,
     version: &'static str,
 }
 
@@ -41,6 +60,9 @@ pub struct Ui {
     view: Mutex<View>,
     identity: Mutex<Option<Identity>>,
     output: String,
+    sources: Sources,
+    install: Mutex<InstallView>,
+    install_log: Mutex<(u64, Vec<Event>)>,
 }
 
 fn message(text: impl Into<String>, kind: &str) -> Message {
@@ -68,12 +90,16 @@ impl Ui {
             address: state.console.clone(),
             ..View::default()
         };
+        let install = InstallView { folder: state.game_folder.clone(), ..InstallView::default() };
         Ok(Arc::new(Ui {
             service,
             state: Mutex::new(state),
             view: Mutex::new(view),
             identity: Mutex::new(None),
             output: o.output.display().to_string(),
+            sources: o.sources.clone(),
+            install: Mutex::new(install),
+            install_log: Mutex::new((0, Vec::new())),
         }))
     }
 
@@ -104,8 +130,153 @@ impl Ui {
         self.state.lock().unwrap().console.clone()
     }
 
-    pub fn reply(&self, since: u64) -> StateReply {
-        StateReply { view: self.view.lock().unwrap().clone(), events: self.service.events_since(since), version: VERSION }
+    pub fn reply(&self, since: u64, install_since: u64) -> StateReply {
+        let install_events =
+            self.install_log.lock().unwrap().1.iter().filter(|e| e.seq > install_since).cloned().collect();
+        StateReply {
+            view: self.view.lock().unwrap().clone(),
+            events: self.service.events_since(since),
+            install: self.install.lock().unwrap().clone(),
+            install_events,
+            version: VERSION,
+        }
+    }
+
+    // ---- The Install tab ----
+
+    fn install_note(&self, text: &str) {
+        let mut log = self.install_log.lock().unwrap();
+        log.0 += 1;
+        let seq = log.0;
+        log.1.push(Event { seq, text: format!("{}  {text}", chrono::Local::now().format("%H:%M:%S")) });
+        let excess = log.1.len().saturating_sub(300);
+        log.1.drain(..excess);
+    }
+
+    fn begin_install(&self) -> bool {
+        let mut view = self.install.lock().unwrap();
+        if view.busy {
+            return false;
+        }
+        view.busy = true;
+        true
+    }
+
+    fn update_install(&self, change: impl FnOnce(&mut InstallView)) {
+        change(&mut self.install.lock().unwrap());
+    }
+
+    /// Looks at the chosen folder and, when `check_release`, at the newest release.
+    pub fn refresh_install(self: &Arc<Self>, check_release: bool) {
+        let folder = self.install.lock().unwrap().folder.clone();
+        if folder.is_empty() {
+            self.update_install(|v| {
+                v.info = None;
+                v.status = message("Choose the Titanfall 2 game folder: the one with eboot.bin and vpk_ps4.", "");
+                v.action.clear();
+                v.can_uninstall = false;
+            });
+            if !check_release {
+                return;
+            }
+        }
+        let latest = if check_release {
+            match install::latest_release(&self.sources) {
+                Ok(release) => release.version,
+                Err(error) => {
+                    self.update_install(|v| v.result = message(error, "error"));
+                    self.install.lock().unwrap().latest.clone()
+                }
+            }
+        } else {
+            self.install.lock().unwrap().latest.clone()
+        };
+        if folder.is_empty() {
+            self.update_install(|v| v.latest = latest);
+            return;
+        }
+        let info = install::inspect(&PathBuf::from(&folder), &self.sources);
+        let installed = info.runtime_installed || info.eboot == install::Eboot::Bootstrapped;
+        let action = if !info.installable() {
+            String::new()
+        } else if !installed {
+            "Install".into()
+        } else if !latest.is_empty() && info.installed_version.as_deref() != Some(latest.as_str()) {
+            format!("Update to {latest}")
+        } else {
+            "Reinstall".into()
+        };
+        let kind = if !info.installable() {
+            "error"
+        } else if installed {
+            "ok"
+        } else {
+            ""
+        };
+        self.update_install(|v| {
+            v.status = message(info.describe(), kind);
+            v.can_uninstall = installed && info.eboot != install::Eboot::Unknown;
+            v.info = Some(info);
+            v.latest = latest;
+            v.action = action;
+        });
+    }
+
+    pub fn set_game_folder(self: &Arc<Self>, folder: String) {
+        {
+            let mut state = self.state.lock().unwrap();
+            state.game_folder = folder.clone();
+            let _ = state.save();
+        }
+        self.update_install(|v| {
+            v.folder = folder;
+            v.result = Message::default();
+        });
+        self.refresh_install(false);
+    }
+
+    pub fn run_install(self: &Arc<Self>) {
+        if !self.begin_install() {
+            return;
+        }
+        let folder = PathBuf::from(self.install.lock().unwrap().folder.clone());
+        self.update_install(|v| v.result = message("Installing...", ""));
+        let ui = Arc::clone(self);
+        let outcome = install::install(&folder, &self.sources, &move |line| ui.install_note(&line));
+        if let Err(error) = &outcome {
+            self.install_note(error);
+        }
+        self.update_install(|v| {
+            v.busy = false;
+            v.result = match &outcome {
+                Ok(version) => message(
+                    format!("PS4 Northstar {version} is installed. Start Titanfall 2 in shadPS4, then sign in on the Sign in tab."),
+                    "ok",
+                ),
+                Err(error) => message(error.clone(), "error"),
+            };
+        });
+        self.refresh_install(false);
+    }
+
+    pub fn run_uninstall(self: &Arc<Self>, remove_mods: bool) {
+        if !self.begin_install() {
+            return;
+        }
+        let folder = PathBuf::from(self.install.lock().unwrap().folder.clone());
+        let ui = Arc::clone(self);
+        let outcome = install::uninstall(&folder, remove_mods, &self.sources, &move |line| ui.install_note(&line));
+        if let Err(error) = &outcome {
+            self.install_note(error);
+        }
+        self.update_install(|v| {
+            v.busy = false;
+            v.result = match &outcome {
+                Ok(()) => message("PS4 Northstar is uninstalled. The game starts as normal again.", "ok"),
+                Err(error) => message(error.clone(), "error"),
+            };
+        });
+        self.refresh_install(false);
     }
 
     /// Gets a token, then signs in a game running on this computer or the
@@ -230,8 +401,42 @@ impl Ui {
 }
 
 #[tauri::command]
-fn get_state(ui: tauri::State<Arc<Ui>>, since: u64) -> StateReply {
-    ui.reply(since)
+fn get_state(ui: tauri::State<Arc<Ui>>, since: u64, install_since: u64) -> StateReply {
+    ui.reply(since, install_since)
+}
+
+/// Opens the system folder picker. Async, so the window's thread isn't blocked while it's open.
+#[tauri::command]
+async fn choose_game_folder(app: tauri::AppHandle, ui: tauri::State<'_, Arc<Ui>>) -> Result<(), String> {
+    use tauri_plugin_dialog::DialogExt;
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("Choose the Titanfall 2 game folder (the one with eboot.bin)")
+        .blocking_pick_folder();
+    if let Some(path) = picked.and_then(|p| p.into_path().ok()) {
+        let ui = Arc::clone(&ui);
+        thread::spawn(move || ui.set_game_folder(path.display().to_string()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn check_install(ui: tauri::State<Arc<Ui>>) {
+    let ui = Arc::clone(&ui);
+    thread::spawn(move || ui.refresh_install(true));
+}
+
+#[tauri::command]
+fn install_now(ui: tauri::State<Arc<Ui>>) {
+    let ui = Arc::clone(&ui);
+    thread::spawn(move || ui.run_install());
+}
+
+#[tauri::command]
+fn uninstall_now(ui: tauri::State<Arc<Ui>>, remove_mods: bool) {
+    let ui = Arc::clone(&ui);
+    thread::spawn(move || ui.run_uninstall(remove_mods));
 }
 
 #[tauri::command]
@@ -260,9 +465,20 @@ pub fn run(o: &Options) -> i32 {
     };
     let starter = Arc::clone(&ui);
     thread::spawn(move || starter.start());
+    let checker = Arc::clone(&ui);
+    thread::spawn(move || checker.refresh_install(true));
     let result = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(Arc::clone(&ui))
-        .invoke_handler(tauri::generate_handler![get_state, sign_in, retry])
+        .invoke_handler(tauri::generate_handler![
+            get_state,
+            sign_in,
+            retry,
+            choose_game_folder,
+            check_install,
+            install_now,
+            uninstall_now
+        ])
         .run(tauri::generate_context!());
     ui.service.stop();
     match result {
