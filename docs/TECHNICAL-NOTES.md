@@ -6275,3 +6275,43 @@ on the right interface. It listens on all interfaces only when the console is re
 minted at 18:34 (refused by about 20:15) went before 24 h. Something else signing the account in,
 such as another machine, is the likely cause. The game renews through the helper, but only while
 the helper runs; otherwise the lobby falls back to the local save.
+
+## Token helper window (2026-10-03)
+
+`NorthstarPS4-TokenHelper.cmd` with no arguments starts `Start-AtlasTokenHelper.ps1 -Gui` hidden
+(`start "" powershell -STA -WindowStyle Hidden`). With arguments, it runs in the terminal as before.
+
+**Layout of the code.** All the networking moved into one C# class, `NsTokenHelper`, compiled by
+`Add-Type`, which both modes use:
+- `Mint`, which caches tokens for `MinSecondsBetweenTokens`;
+- `Hello`, `SignIn` and `WriteIdentity`;
+- `StartServing`/`Stop`: `/atlas/token` served on a background thread, with activity lines queued
+  in `Events`;
+- `…Async` wrappers that return `Task`s.
+
+The C# is kept to C# 5 for the .NET Framework compiler (Windows PowerShell). HTTP uses
+`HttpWebRequest`, the API both runtimes have. PowerShell 7 rejects it as obsolete (SYSLIB0014),
+and the Framework compiler rejects a `#pragma` naming that warning, so the pragma is added only
+on PowerShell 7. TLS 1.2 is enabled for the Framework.
+
+**The window** (`scripts/AtlasTokenHelperWindow.ps1`, WinForms) never blocks its thread. Each step
+starts a task, and a 150 ms timer runs that task's continuation and moves activity lines into the
+list. The steps:
+1. Get a token (EA account shown, or the reason with Try again).
+2. Look for a game on 127.0.0.1, then for the console paired last time, and sign it in.
+3. Otherwise, wait for the player's choice: this PC, or an address and code.
+4. Serve new tokens: on all interfaces for a remote console, on loopback for this PC.
+
+Continuations run after the function that started them has returned, so their inputs live in
+script scope. Local or remote follows the option the player chose, not whether the address is a
+loopback one: a test console on 127.0.0.2 first lost its code that way.
+
+**Tests.**
+- `scripts/Test-AtlasTokenHelperWindow.ps1`: 7 checks with fakes, plus `-EaDown`. It opens the
+  window as the `.cmd` does. WinForms controls appear to UI Automation only as panes, so they are
+  found by name and driven with `BM_CLICK`/`WM_SETTEXT`, and screenshots are taken with
+  `PrintWindow`.
+- `scripts/Test-AtlasTokenHelper.ps1`: still 17/17 for the terminal mode.
+- In game with fakes (shadPS4, no identity file, real identity set aside and restored):
+  - the window found the running game and signed it in without asking;
+  - Launch Northstar then authenticated with that token.

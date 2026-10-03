@@ -192,7 +192,7 @@ def console_server(host, port, state_file, paired):
             push = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
             by_key = paired['key'] is not None and push.get('refreshKey') == paired['key']
             ok = by_key or push.get('code') == CONSOLE_CODE
-            note(state_file, event='signin', ok=ok, byKey=by_key, uid=push.get('uid'), token=push.get('playerToken'),
+            note(state_file, event='signin', ok=ok, byKey=by_key, code=push.get('code'), uid=push.get('uid'), token=push.get('playerToken'),
                  refreshUrl=push.get('refreshUrl'))
             if not ok:
                 return self.reply(403, {'error': 'wrong code; type the code shown on the PS4'})
