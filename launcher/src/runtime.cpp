@@ -2414,6 +2414,7 @@ std::uint64_t ModSecondarySize(void* self, const char* fileName, const char* pat
 #include "runtime_atlas_server.inl"
 #include "runtime_netmessage_fixes.inl"
 #include "runtime_materials.inl"
+#include "runtime_script_errors.inl"
 #endif
 
 // IBaseFileSystem::ReadFile - secondary slot 14, filesystem_stdio+0xc3d0.
@@ -2969,6 +2970,7 @@ void* ModuleTracker(void*) noexcept {
     InstallCustomAudio(clientBase, clientSpan);
     // Before the UI VM registers its natives.
     InstallClientUnsafeFuncStubs(clientBase);
+    InstallRecoverableCompileErrors(clientBase);
 #endif
 #if defined(NORTHSTAR_PS4_ENABLE_M6_FS_OVERLAY)
     if (fsHandle != static_cast<OrbisKernelModule>(-1)) {

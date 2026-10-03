@@ -391,6 +391,7 @@ void InstallUsercmdChecks(std::uintptr_t serverBase) noexcept {
 } // namespace serverfixes
 
 void InstallServerUnsafeFuncStubs(std::uintptr_t serverBase) noexcept;  // below
+void InstallServerRecoverableCompileErrors(std::uintptr_t serverBase) noexcept;  // runtime_script_errors.inl
 
 // Once server.prx is mapped, before any SERVER VM is created.
 void InstallServerExploitFixes(std::uintptr_t serverBase) noexcept {
@@ -400,6 +401,7 @@ void InstallServerExploitFixes(std::uintptr_t serverBase) noexcept {
     serverfixes::InstallGetEntByIndexGuard(serverBase);
     serverfixes::InstallUsercmdChecks(serverBase);
     InstallServerUnsafeFuncStubs(serverBase);
+    InstallServerRecoverableCompileErrors(serverBase);
 }
 
 // PC squirrel.cpp StubUnsafeSQFuncs: unless -allowunsafesqfuncs is given,

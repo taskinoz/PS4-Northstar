@@ -50,6 +50,10 @@ const ScriptPrintHook* FindScriptPrintHook(void* shared) noexcept {
     return nullptr;
 }
 
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+void NoteScriptOutput(const char* label, const char* text) noexcept;  // runtime_script_errors.inl
+#endif
+
 void ScriptPrint(void* vm, const char* format, ...) noexcept {
     if (!format) return;
     char text[1024];
@@ -65,6 +69,9 @@ void ScriptPrint(void* vm, const char* format, ...) noexcept {
         ? FindScriptPrintHook(*reinterpret_cast<void**>(static_cast<char*>(vm) + 0x50))
         : nullptr;
     if (length) LogFormat("[NorthstarPS4] [%s script] %s\n", hook ? hook->label : "?", text);
+#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
+    if (length && hook) NoteScriptOutput(hook->label, text);
+#endif
     // Preserve whatever the engine had installed, if anything ever is. The
     // original takes varargs, so the already-formatted text is passed through
     // the same "%s" shape the caller used.

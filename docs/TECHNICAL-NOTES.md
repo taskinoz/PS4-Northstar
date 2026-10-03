@@ -6049,3 +6049,42 @@ This only matters for repacking game VPKs, which the port does not do.
 
 **Not yet working.** A loose texture that overrides one that is also in a game VPK was not served
 (the cache bypass logged, but no open followed). Mod-only textures, the common case, work.
+
+## Script compile errors no longer freeze the game (2026-10-03)
+
+A mod CLIENT script that failed to compile left the game on a black loading screen with a spinner
+for good. The log showed `FatalError: <file>: CLIENT SCRIPT COMPILE ERROR: ...` and the harness
+stopped answering, so the main thread was halted.
+
+The client's compile-error handler (client+0x67e7b0) prints the error through the VM's print
+function. It then calls the script-error routine (client+0x67e5b0) with fatal = 1
+(`mov esi, 1` at +0x67e8b7), and for fatal errors that routine ends in `Error()` at +0x67e76f.
+With fatal = 0 it takes the path a run-time script error takes: an error dialog and a return to
+the menus.
+
+PC Northstar replaces the compile-error handler (ScriptCompileErrorHook). It logs the file and
+the mod that owns it, and for fatal errors runs `disconnect "Encountered CLIENT script compilation
+error, see console for details."`. On PS4:
+- `InstallRecoverableCompileErrors` changes that immediate to 0 (preimage-checked);
+- `runtime_script_errors.inl` watches the captured script output. After "SCRIPT COMPILE ERROR"
+  and its `<file> line [n] column [m]` line, it logs which mod owns the file (through the
+  overlay);
+- when the VM has not started yet, the error is fatal (the scripts.rson compile, not
+  `compilestring()` at run time). The module then queues a disconnect that names the file and the
+  mod, because there is no console to point at. The command goes through `Cbuf_AddText`
+  (engine+0x203f30) on the buffer the client's ProcessStringCmd uses (engine+0x3e74280, mutex
+  engine+0x3e78fb0);
+- a UI error is only logged.
+
+Verified with a test mod whose CLIENT script names an unknown type: the game returned to the main
+menu with "Encountered CLIENT script compilation error in test_compile_error.nut
+(Test.CompileError). Disable or fix that mod." server.prx has the same handler and call
+(`mov esi, 1` at +0x630267, routine +0x62ff60), patched the same way once server.prx is mapped. A
+SERVER test mod gave "Encountered SERVER script compilation error in
+test_compile_error_server.nut (Test.CompileErrorServer)" and the same return to the menus.
+
+**Loading screens.** All 23 stock MP maps were loaded on the current build and captured during
+the load; every one showed its own loading screen. Loading 14 maps in a row once ended in a
+shadPS4 GPU assertion (`resource_discover_pass.cpp:257`), an emulator fault. A map that is not in
+Northstar.Client's `mapImages` table gets `loadscreens/<map>_lobby` as its menu image, which does
+not exist for custom maps; that is the same on PC.
