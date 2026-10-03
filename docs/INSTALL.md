@@ -11,7 +11,7 @@ This guide is for players. To build from source, see [BUILDING.md](BUILDING.md);
 - **Titanfall 2 for PS4**, dumped from your own copy, at the final patch: `CUSA04013`, build `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM`. The game's archives (`vpk_ps4/`) must be the original, unmodified ones.
 - **shadPS4**, set up to run that game folder. See [Which shadPS4 build](#which-shadps4-build) below.
 - **An EA account that owns Titanfall 2**, signed in to the **EA app** on a Windows PC (or a Mac, untested). Northstar signs you in through it.
-- The **NorthstarPS4 Token Helper** for your computer, from the [PS4 Northstar releases page](https://github.com/taskinoz/PS4-Northstar/releases): the Windows installer or `.exe`, the macOS `.dmg`, or the Linux AppImage or `.deb`. It installs PS4 Northstar into the game folder, keeps it up to date, and signs you in.
+- The **NorthstarPS4 Token Helper** for your computer, from the [PS4 Northstar releases page](https://github.com/taskinoz/PS4-Northstar/releases): `NorthstarPS4TokenHelper-<version>-windows-setup.exe` (or `-windows.exe` to run without installing), `-macos-universal.dmg`, or `-linux-x86_64.AppImage` (`chmod +x` it first) or `-linux-amd64.deb`. It installs PS4 Northstar into the game folder, keeps it up to date, and signs you in.
 
 ## Which shadPS4 build
 

@@ -24,9 +24,9 @@ PC Northstar signs you in through the EA app. A PS4 has no EA app, so the **Nort
 
 | System | Download |
 | --- | --- |
-| Windows | `NorthstarPS4 Token Helper_<version>_x64-setup.exe` (installer), or `NorthstarPS4TokenHelper.exe` to run without installing |
-| macOS (Apple Silicon and Intel) | `NorthstarPS4 Token Helper_<version>_universal.dmg` (untested with the Mac EA app) |
-| Linux | `.AppImage` or `.deb` |
+| Windows | `NorthstarPS4TokenHelper-<version>-windows-setup.exe` (installer), or `NorthstarPS4TokenHelper-<version>-windows.exe` to run without installing |
+| macOS (Apple Silicon and Intel) | `NorthstarPS4TokenHelper-<version>-macos-universal.dmg` (untested with the Mac EA app) |
+| Linux | `NorthstarPS4TokenHelper-<version>-linux-x86_64.AppImage` (run `chmod +x` on it first), or the `-linux-amd64.deb` package |
 
 1. Open the EA app and sign in with the account that owns Titanfall 2. PC Northstar doesn't need to be running.
 2. Open the token helper. It shows the EA account it found, or what to fix (with **Try again**). It isn't signed:
