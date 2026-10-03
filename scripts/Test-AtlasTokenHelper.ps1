@@ -1,18 +1,18 @@
 <#
 .SYNOPSIS
-Tests the token helper (token-helper/, Go) in the terminal against a fake EA app, Atlas and console.
+Tests the token helper (token-helper/, Tauri) in terminal mode against a fake EA app, Atlas and console.
 
 .DESCRIPTION
 Nothing here touches a real account: tests/token_helper/fake_services.py plays
 the EA app's LSX server, Atlas's /client/origin_auth and a console's sign-in
 listener on local ports, and the helper writes its identity and pairing key
-into a temporary folder. The Windows build is made from token-helper/ first
+into a temporary folder. The app is built from token-helper/ first
 (Build-TokenHelper.ps1). Checks:
 - the LSX key schedule against origin-sdk's published vector, the handshake
   and GetAuthCode;
 - the identity file when no game is running;
-- signing a console in: a wrong code, the right code, typed at the prompt,
-  again by the paired key, and finding a running game by itself;
+- signing a console in: a wrong code, the right code, a console on another
+  address, again by the paired key, finding a running game by itself, and --cli
 - --help and a bad option;
 - the served endpoint with the right key, a wrong key and an unknown path;
 - that nothing secret is printed.
@@ -84,11 +84,15 @@ try {
     $run = Run @('--once', '--cli', '--console-port', $ConsolePort)
     $printed += $run.output
     Check ($run.exit -eq 0 -and @(Events | Where-Object event -eq 'signin').Count -eq $before + 1 -and (LastSignIn).ok) 'a running game is found and signed in without asking'
-    # A console the helper has to ask about (127.0.0.2, ConsolePort + 2), typed at the prompt.
-    Remove-Item -LiteralPath $keyFile
-    $run = Run @('--once', '--cli', '--console-port', ($ConsolePort + 2)) '127.0.0.2 4821'
+    # A console found nowhere (127.0.0.2 is ConsolePort + 2's address): --cli saves the sign-in
+    # for shadPS4 here and says how to name a console; then --console names it.
+    Remove-Item -LiteralPath $keyFile, $identity
+    $run = Run @('--once', '--cli', '--console-port', ($ConsolePort + 2))
     $printed += $run.output
-    Check ($run.exit -eq 0 -and $run.output -match 'Type the address and code' -and (LastSignIn).ok -and -not (LastSignIn).byKey) 'the address and code typed at the prompt sign the console in'
+    Check ($run.exit -eq 0 -and $run.output -match '--console' -and (Test-Path $identity)) '--cli with no game found saves the sign-in and names --console'
+    $run = Run @('--once', '--console', '127.0.0.2 4821', '--console-port', ($ConsolePort + 2))
+    $printed += $run.output
+    Check ($run.exit -eq 0 -and (LastSignIn).ok -and -not (LastSignIn).byKey) 'a console on another address signs in with its code'
     $run = Run @('--help')
     Check ($run.exit -eq 0 -and $run.output -match '--console') '--help prints the options'
     $run = Run @('--nonsense')

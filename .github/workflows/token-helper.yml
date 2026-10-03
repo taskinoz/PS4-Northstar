@@ -1,0 +1,61 @@
+# Builds the token helper app (token-helper/, Tauri) for Windows, macOS and
+# Linux. Tauri builds for the system it runs on, so each runs on its own
+# runner; the macOS app is universal (Apple Silicon and Intel). Run it from
+# the Actions tab, or push a tag named token-helper-v<version>.
+name: Token helper
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["token-helper-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            build: --bundles nsis
+            artifacts: |
+              token-helper/src-tauri/target/release/NorthstarPS4TokenHelper.exe
+              token-helper/src-tauri/target/release/bundle/nsis/*.exe
+          - os: macos-latest
+            build: --target universal-apple-darwin --bundles dmg
+            artifacts: |
+              token-helper/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          - os: ubuntu-22.04
+            build: --bundles appimage,deb
+            artifacts: |
+              token-helper/src-tauri/target/release/bundle/appimage/*.AppImage
+              token-helper/src-tauri/target/release/bundle/deb/*.deb
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: token-helper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - name: macOS targets
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - run: bun install --frozen-lockfile
+      - name: Tests
+        working-directory: token-helper/src-tauri
+        run: cargo test
+      - name: Build
+        run: bun tauri build ${{ matrix.build }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: token-helper-${{ runner.os }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error

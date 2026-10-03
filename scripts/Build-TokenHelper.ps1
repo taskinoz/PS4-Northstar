@@ -1,86 +1,53 @@
 <#
 .SYNOPSIS
-Builds the token helper (token-helper/, Go) for Windows, macOS and Linux.
+Builds the token helper app (token-helper/, Tauri) for this platform.
 
 .DESCRIPTION
-Cross-compiles with the Go toolchain in tools/go-portable (or `go` on PATH),
-with cgo off, so every platform builds here and needs nothing installed to run:
-- NorthstarPS4TokenHelper.exe          Windows x64
-- NorthstarPS4TokenHelper-macOS        macOS, one universal binary (Apple Silicon + Intel)
-- NorthstarPS4TokenHelper-linux        Linux x64
-Go's linker gives the Apple Silicon build the ad-hoc signature macOS requires;
-the two macOS builds are joined into a universal ("fat") binary here, as lipo
-would. Runs the Go tests first unless -SkipTests.
+Installs the Tauri CLI with Bun (`bun install`), runs the Rust tests
+(`cargo test`) unless -SkipTests, and builds the app with `bun tauri build`.
+On Windows that gives NorthstarPS4TokenHelper.exe, copied to -Output; with
+-Bundle, the NSIS installer too (Tauri downloads NSIS the first time).
+
+Tauri builds for the system it runs on, so the macOS and Linux apps are built
+by .github/workflows/token-helper.yml on GitHub's runners.
+
+Needs Bun, Rust (cargo) and, on Windows, the Visual Studio C++ build tools.
 #>
 [CmdletBinding()]
 param(
     [string] $Output = (Join-Path (Split-Path $PSScriptRoot) 'dist\token-helper'),
-    [string] $Version = '1.0.0',
+    [switch] $Bundle,
     [switch] $SkipTests
 )
 $ErrorActionPreference = 'Stop'
-$repo = Split-Path $PSScriptRoot
-$source = Join-Path $repo 'token-helper'
-$go = Join-Path $repo 'tools\go-portable\go\bin\go.exe'
-if (-not (Test-Path $go)) { $go = (Get-Command go -ErrorAction Stop).Source }
+$source = Join-Path (Split-Path $PSScriptRoot) 'token-helper'
 New-Item -ItemType Directory -Force -Path $Output | Out-Null
 $Output = (Resolve-Path $Output).Path
 
 Push-Location $source
-$saved = @{ GOOS = $env:GOOS; GOARCH = $env:GOARCH; CGO_ENABLED = $env:CGO_ENABLED }
 try {
+    bun install --frozen-lockfile | Out-Host
+    if ($LASTEXITCODE) { throw 'bun install failed' }
     if (-not $SkipTests) {
-        & $go test ./... | Out-Host
-        if ($LASTEXITCODE) { throw 'Go tests failed' }
+        Push-Location src-tauri
+        try {
+            cargo test | Out-Host
+            if ($LASTEXITCODE) { throw 'cargo test failed' }
+        } finally { Pop-Location }
     }
-    $env:CGO_ENABLED = '0'
-    $ldflags = "-s -w -X main.version=$Version"
-    $builds = @(
-        @{ os = 'windows'; arch = 'amd64'; out = 'NorthstarPS4TokenHelper.exe' },
-        @{ os = 'darwin'; arch = 'arm64'; out = 'macos-arm64.tmp' },
-        @{ os = 'darwin'; arch = 'amd64'; out = 'macos-x64.tmp' },
-        @{ os = 'linux'; arch = 'amd64'; out = 'NorthstarPS4TokenHelper-linux' })
-    foreach ($build in $builds) {
-        $env:GOOS = $build.os; $env:GOARCH = $build.arch
-        & $go build -trimpath -ldflags $ldflags -o (Join-Path $Output $build.out) .
-        if ($LASTEXITCODE) { throw "go build failed for $($build.os)/$($build.arch)" }
-    }
+    $arguments = @('tauri', 'build')
+    if ($Bundle) { $arguments += @('--bundles', 'nsis') } else { $arguments += '--no-bundle' }
+    bun @arguments | Out-Host
+    if ($LASTEXITCODE) { throw 'bun tauri build failed' }
 } finally {
-    foreach ($name in $saved.Keys) { Set-Item "env:$name" $saved[$name] }
     Pop-Location
 }
 
-# Universal macOS binary: a big-endian fat header, then each Mach-O slice
-# aligned to 2^14 bytes, with the CPU type and subtype from its own header.
-function Read-UInt32LE([byte[]] $data, [int] $at) { [BitConverter]::ToUInt32($data, $at) }
-function Write-UInt32BE($stream, [uint32] $value) {
-    $bytes = [BitConverter]::GetBytes($value); [Array]::Reverse($bytes); $stream.Write($bytes, 0, 4)
+$release = Join-Path $source 'src-tauri\target\release'
+$exe = if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'NorthstarPS4TokenHelper.exe' } else { 'NorthstarPS4TokenHelper' }
+Copy-Item -LiteralPath (Join-Path $release $exe) -Destination $Output -Force
+if ($Bundle) {
+    Get-ChildItem (Join-Path $release 'bundle\nsis') -Filter *.exe | Copy-Item -Destination $Output -Force
 }
-$slices = foreach ($name in 'macos-arm64.tmp', 'macos-x64.tmp') {
-    $data = [IO.File]::ReadAllBytes((Join-Path $Output $name))
-    # MH_MAGIC_64, 0xfeedfacf (PowerShell reads hex literals that large as negative)
-    if ((Read-UInt32LE $data 0) -ne 4277009103) { throw "$name is not a 64-bit Mach-O file" }
-    , @($data, (Read-UInt32LE $data 4), (Read-UInt32LE $data 8))
-}
-$align = 14
-$fat = New-Object IO.MemoryStream
-Write-UInt32BE $fat 3405691582  # FAT_MAGIC, 0xcafebabe
-Write-UInt32BE $fat ([uint32]$slices.Count)
-$offset = [uint32](1 -shl $align)
-$offsets = @()
-foreach ($slice in $slices) {
-    Write-UInt32BE $fat $slice[1]; Write-UInt32BE $fat $slice[2]
-    Write-UInt32BE $fat $offset; Write-UInt32BE $fat ([uint32]$slice[0].Length); Write-UInt32BE $fat ([uint32]$align)
-    $offsets += $offset
-    $offset = [uint32]([Math]::Ceiling(($offset + $slice[0].Length) / (1 -shl $align)) * (1 -shl $align))
-}
-for ($i = 0; $i -lt $slices.Count; $i++) {
-    $fat.SetLength($offsets[$i])
-    $fat.Position = $offsets[$i]
-    $fat.Write($slices[$i][0], 0, $slices[$i][0].Length)
-}
-[IO.File]::WriteAllBytes((Join-Path $Output 'NorthstarPS4TokenHelper-macOS'), $fat.ToArray())
-Remove-Item -LiteralPath (Join-Path $Output 'macos-arm64.tmp'), (Join-Path $Output 'macos-x64.tmp')
-
-Get-ChildItem $Output -File | Where-Object Name -like 'NorthstarPS4TokenHelper*' |
-    ForEach-Object { '{0,-36} {1,12:N0} bytes' -f $_.Name, $_.Length }
+Get-ChildItem $Output -File | Where-Object Name -like 'NorthstarPS4*' |
+    ForEach-Object { '{0,-48} {1,12:N0} bytes' -f $_.Name, $_.Length }

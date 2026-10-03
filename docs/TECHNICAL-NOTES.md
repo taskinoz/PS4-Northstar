@@ -6415,3 +6415,55 @@ the page polls `/api/state` and posts `signin`, `retry` and `quit`.
 - Whether the macOS EA app serves the same LSX on 127.0.0.1:3216 is untested; it needs a Mac.
 - Unsigned binaries: SmartScreen warns on Windows, and Gatekeeper needs "Open Anyway" on macOS.
 - The Windows exe has no icon or version resource yet.
+
+## Token helper as a Tauri app (2026-10-04)
+
+The token helper is now one Tauri 2 app (`token-helper/`). It replaces the Go program and its
+browser page, and keeps the same protocol on both sides.
+- **Tools.** Bun installs the Tauri CLI (`package.json`, `bun.lock`), and `bun tauri build` builds
+  it.
+- **Rust** (`src-tauri/src`):
+  - `lsx.rs`: the EA app protocol, using the `aes` and `roxmltree` crates;
+  - `service.rs`: tokens, game sign-in, and serving tokens with `tiny_http`, plus `ureq` for HTTP;
+  - `options.rs`: options, paths, pairing state;
+  - `cli.rs`: the terminal mode;
+  - `gui.rs`: the window's flow, as Tauri commands;
+  - `tests.rs`: Rust fakes of the EA app, Atlas and console.
+- **The page** (`ui/`: `index.html`, `style.css`, `app.js`, no bundler) calls `get_state`,
+  `sign_in` and `retry` over Tauri's IPC (`withGlobalTauri`). Nothing listens for it, so the
+  earlier page server and its Host and session guards are gone. CSP: `script-src 'self'`.
+- **Theme:**
+  - PS4/PS5 dashboard: deep-blue gradient, the PS4 light wave (an animated SVG), faint △ ○ ✕ □
+    shapes, frosted tiles, a white focus glow on the chosen option, a white pill button with a ✕
+    glyph, and face-button colours for status (triangle green ok, circle red error, cross blue);
+  - Northstar: an uppercase spaced wordmark and a four-point north-star mark.
+  - The icon (a white north star on a PlayStation-blue tile) is drawn by `make-icon.ps1` into
+    `app-icon.png`, and `bun tauri icon` makes every size.
+
+**One program, two modes.** On Windows the release exe is a window app (`windows_subsystem`). With
+`--console`, `--local`, `--once` or `--cli` it runs `cli.rs` instead of opening the window, and
+writes to the console it was started from (`AttachConsole(ATTACH_PARENT_PROCESS)` when it has no
+standard output), or to the pipe it was given. A shell does not wait for a window app, so scripts
+use `start /wait` or `Start-Process -Wait`. That is also why the terminal mode no longer prompts:
+the shell would read the same keyboard. Instead, `--cli` with no game found saves the sign-in for
+shadPS4 here and names `--console`. Ctrl+C is handled with `SetConsoleCtrlHandler`.
+
+**Builds.** Each system builds its own app.
+- Windows, here: `scripts/Build-TokenHelper.ps1` (`-Bundle` for the NSIS installer). The exe is
+  7.7 MB and the installer 2.1 MB; WebView2 comes with Windows 10 and 11.
+- macOS (`universal-apple-darwin`, `.dmg`) and Linux (AppImage and `.deb`):
+  `.github/workflows/token-helper.yml`, run from the Actions tab or by a `token-helper-v*` tag.
+
+**Tests.**
+- `cargo test`: 10 tests covering the key vector, AES, XML lookup, options, targets, the state
+  file, mint, sign-in and serving end to end, the EA app unreachable, and the window flow with
+  short, wrong and right codes.
+- `scripts/Test-AtlasTokenHelper.ps1`: 19/19 against the Python fakes, run through the window exe's
+  terminal mode with piped output.
+- The window was driven with UI Automation (WebView2 exposes the page): EA account, nothing found,
+  wrong code, right code, a token served, activity.
+  - UI Automation's Select checks a radio without a change event, so the page now re-reads the
+    chosen option on every refresh, which also suits assistive tools.
+- In game (shadPS4, fakes, no identity file, real identity set aside and restored):
+  - the window found the running game and signed it in, and Launch Northstar authenticated;
+  - `--local --once` signed it in from the terminal.

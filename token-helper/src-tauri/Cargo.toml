@@ -1,0 +1,35 @@
+[package]
+name = "northstarps4-token-helper"
+version = "1.0.0"
+description = "Signs Northstar on a PS4, or in shadPS4, in through the EA app."
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "NorthstarPS4TokenHelper"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+aes = "0.8"
+hex = "0.4"
+roxmltree = "0.20"
+ureq = "2"
+tiny_http = "0.12"
+getrandom = "0.2"
+dirs = "5"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Console"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
