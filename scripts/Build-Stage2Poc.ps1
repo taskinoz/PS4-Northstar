@@ -11,7 +11,9 @@ param(
     [switch] $EnableM6ScriptInject,
     [switch] $EnableM6ScriptInjectFromMods,
     [switch] $EnableRuntimeManifest,
-    [switch] $EnableM6Localise
+    [switch] $EnableM6Localise,
+    # Test builds only: every rel32 hook goes through a jump stub, as on a PS4.
+    [switch] $ForceBranchStubs
 )
 $ErrorActionPreference = 'Stop'
 if ($EnableRuntimeManifest) { $EnableM6FsOverlay = $true }
@@ -79,9 +81,12 @@ if ($EnableM6Localise) {
     $runtimeCompileArgs = @('-DNORTHSTAR_PS4_ENABLE_M6_LOCALISE=1') + $runtimeCompileArgs
 }
 if ($EnableRuntimeManifest) { $runtimeCompileArgs = @('-DNORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST=1') + $runtimeCompileArgs }
+if ($ForceBranchStubs) { $runtimeCompileArgs = @('-DNORTHSTAR_PS4_FORCE_BRANCH_STUBS=1') + $runtimeCompileArgs }
 & $clang @runtimeCompileArgs
 if ($LASTEXITCODE) { throw "OpenOrbis runtime compile failed: $LASTEXITCODE" }
-$linkArgs = @('-m','elf_x86_64','-pie','--script',(Join-Path $sourceRoot 'link.x'),'--eh-frame-hdr','-L',(Join-Path $toolchainRoot 'lib'),$object,$runtimeObject,'-lc','-lc++','-lkernel','-lSceNet','-lSceNetCtl','-lSceSsl','-lSceHttp','-lSceImeDialog','-lSceUserService','-lSceSystemService',(Join-Path $toolchainRoot 'lib\crtlib.o'),'-o',$elf)
+# GoldHEN's plugin loader looks these up by name on a PS4.
+$pluginExports = @('plugin_load','plugin_unload','g_pluginName','g_pluginDesc','g_pluginAuth','g_pluginVersion') | ForEach-Object { "--export-dynamic-symbol=$_" }
+$linkArgs = @('-m','elf_x86_64','-pie') + $pluginExports + @('--script',(Join-Path $sourceRoot 'link.x'),'--eh-frame-hdr','-L',(Join-Path $toolchainRoot 'lib'),$object,$runtimeObject,'-lc','-lc++','-lkernel','-lSceNet','-lSceNetCtl','-lSceSsl','-lSceHttp','-lSceImeDialog','-lSceUserService','-lSceSystemService',(Join-Path $toolchainRoot 'lib\crtlib.o'),'-o',$elf)
 & $lld @linkArgs
 if ($LASTEXITCODE) { throw "OpenOrbis link failed: $LASTEXITCODE" }
 # shadPS4 starts PRX DT_INIT but does not currently invoke OpenOrbis's hidden module_start.

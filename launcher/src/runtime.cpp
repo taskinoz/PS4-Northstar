@@ -89,11 +89,19 @@ static MuslLibcState& g_muslLibc = __libc;
 // as anonymous mmap memory is (musl's calloc relies on it).
 namespace heaparena {
 constexpr std::size_t kPage = 0x4000;
-constexpr std::size_t kArenaSize = 64u * 1024 * 1024;
+// On a PS4 the arena comes out of the game's flexible memory budget, which
+// has about 45 MiB left once client.prx is loaded: a 64 MiB arena left too
+// little for server.prx, and the game unloaded client.prx and stopped on a
+// black screen (2026-10-07). 16 MiB peaked at 4.3 MiB in the menus; the rest
+// is left to the game, which needs it to load maps. The runtime's use is
+// logged as it grows, and a full arena falls back to mmap.
+constexpr std::size_t kArenaSize = 8u * 1024 * 1024;
 constexpr std::size_t kPages = kArenaSize / kPage;
 unsigned char* g_base = nullptr;
 bool g_used[kPages];
 std::size_t g_hint = 0;
+std::size_t g_usedPages = 0;
+std::size_t g_peakPages = 0;
 std::atomic_flag g_busy = ATOMIC_FLAG_INIT;
 bool g_fullLogged = false;
 
@@ -128,6 +136,18 @@ void* Allocate(std::size_t length) noexcept {
         if (found == kPages) return nullptr;
         for (std::size_t i = 0; i < pages; ++i) g_used[found + i] = true;
         g_hint = found + pages;
+        g_usedPages += pages;
+        if (g_usedPages > g_peakPages) {
+            // Every 2 MiB of new peak.
+            const bool step = g_usedPages / 128 > g_peakPages / 128;
+            g_peakPages = g_usedPages;
+            if (step) {
+                char line[96];
+                std::snprintf(line, sizeof(line), "[NorthstarPS4] heap arena peak %zu KiB of %zu\n",
+                    g_peakPages * (kPage / 1024), kArenaSize / 1024);
+                sceKernelDebugOutText(0, line);
+            }
+        }
     }
     void* memory = g_base + found * kPage;
     std::memset(memory, 0, pages * kPage);
@@ -138,7 +158,10 @@ void Release(void* address, std::size_t length) noexcept {
     const std::size_t first = static_cast<std::size_t>(static_cast<unsigned char*>(address) - g_base) / kPage;
     const std::size_t pages = (length + kPage - 1) / kPage;
     Lock lock;
-    for (std::size_t i = first; i < first + pages && i < kPages; ++i) g_used[i] = false;
+    for (std::size_t i = first; i < first + pages && i < kPages; ++i) {
+        if (g_used[i]) --g_usedPages;
+        g_used[i] = false;
+    }
     if (first < g_hint) g_hint = first;
 }
 
@@ -341,6 +364,8 @@ void LogModule(OrbisKernelModule handle, const OrbisKernelModuleInfo& info) noex
     }
 }
 
+#include "runtime_hardware.inl"
+
 void ProbeRegistrationExports(
     OrbisKernelModule engineHandle, OrbisKernelModule vstdlibHandle) noexcept {
     constexpr const char* candidates[] = {
@@ -372,6 +397,7 @@ bool ValidateEnginePreimage(
     std::uintptr_t engineBase, std::size_t engineSize, std::uintptr_t va,
     const std::uint8_t* expected, std::size_t expectedSize) noexcept {
     if (engineBase == 0 || va > engineSize || expectedSize > engineSize - va) return false;
+    if (!CodeReadable(engineBase + va, expectedSize)) return false;
     return std::memcmp(reinterpret_cast<const void*>(engineBase + va), expected,
         expectedSize) == 0;
 }
@@ -839,8 +865,23 @@ std::int32_t gCollectedUiScriptCount = 0;
 #endif
 #if defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
 using namespace northstar::ps4::mods;
-constexpr const char* kProfileRoot = "/app0/R2Northstar";
-constexpr const char* kModsRoot = "/app0/R2Northstar/mods";
+// The installed profile. /app0 is read-only on a PS4, so there it is copied
+// over FTP into the app's writable storage; shadPS4 installs keep it in the
+// game folder. A profile in /data wins when it has a mods folder.
+const char* ProfileRoot() noexcept {
+    static int dataProfile = -1;
+    if (dataProfile < 0) {
+        struct stat info{};
+        dataProfile = stat("/data/northstar_ps4/R2Northstar/mods", &info) == 0 && S_ISDIR(info.st_mode) ? 1 : 0;
+        LogFormat("[NorthstarPS4] mod profile: %s\n",
+            dataProfile ? "/data/northstar_ps4/R2Northstar" : "/app0/R2Northstar");
+    }
+    return dataProfile ? "/data/northstar_ps4/R2Northstar" : "/app0/R2Northstar";
+}
+
+const char* ModsRoot() noexcept {
+    return ProfileRoot()[1] == 'd' ? "/data/northstar_ps4/R2Northstar/mods" : "/app0/R2Northstar/mods";
+}
 
 bool ReadFileIntoBuffer(const char* path, char* buffer,
     std::size_t capacity, std::size_t& sizeOut) noexcept {
@@ -891,7 +932,9 @@ std::uint64_t MaxSaveFolderSize() noexcept {
 
 bool ReadEnabledSettings(char* buffer, std::size_t capacity) noexcept {
     std::size_t size = 0;
-    const char* paths[] = {"/data/northstar_ps4/enabledmods.json", "/app0/R2Northstar/enabledmods.json"};
+    char profileSettings[64];
+    std::snprintf(profileSettings, sizeof(profileSettings), "%s/enabledmods.json", ProfileRoot());
+    const char* paths[] = {"/data/northstar_ps4/enabledmods.json", profileSettings};
     for (const char* path : paths) {
         struct stat info{};
         if (stat(path, &info) == 0) {
@@ -962,7 +1005,7 @@ void CollectModNamesLocked(ModDiscovery& discovery, bool includeDisabled) noexce
     char localDirectory[kModDirCapacity]{};
     auto collect = [&](const char* folder) {
         if (!IsModFolderName(folder)) return;
-        std::snprintf(localDirectory, sizeof(localDirectory), "%s/%s", kModsRoot, folder);
+        std::snprintf(localDirectory, sizeof(localDirectory), "%s/%s", ModsRoot(), folder);
         // Files beside the mods (the profile's profile-files.json) are not mods.
         if (!IsDirectory(localDirectory)) return;
         collectDir(folder, localDirectory, false);
@@ -998,15 +1041,15 @@ void CollectModNamesLocked(ModDiscovery& discovery, bool includeDisabled) noexce
         }
         closedir(remoteRoot);
     }
-    DIR* const dir = opendir(kModsRoot);
+    DIR* const dir = opendir(ModsRoot());
     if (dir != nullptr) {
         while (struct dirent* entry = readdir(dir)) collect(entry->d_name);
         closedir(dir);
     } else {
         // Emulator fallback only. Normal installs discover folders at each boot.
-        LogFormat("[NorthstarPS4] opendir failed: %s; using staging index\n", kModsRoot);
+        LogFormat("[NorthstarPS4] opendir failed: %s; using staging index\n", ModsRoot());
         static char buffer[kModJsonBufferSize];
-        std::snprintf(path, sizeof(path), "%s/.ns_mod_manifest", kModsRoot);
+        std::snprintf(path, sizeof(path), "%s/.ns_mod_manifest", ModsRoot());
         if (ReadFileIntoBuffer(path, buffer, sizeof(buffer), size)) {
             char* line = buffer;
             while (*line) {
@@ -1884,7 +1927,12 @@ std::uintptr_t g_fsVtableCopy[kFsVtableCopySlots]{};
 // map load, 3/3. That crash is gone in shadPS4 ca89b01 (buffer manager rewrite,
 // #5047), so the index is on; older emulator builds should keep it off.
 constexpr bool kModFileIndexEnabled = true;
-struct ModFileEntry { std::string key; std::int32_t root; };
+// `key` is the lower-case path matched against requests; `path` is the
+// file's own spelling, which is what gets opened. A PS4's /data is
+// case-sensitive: Northstar.Client asks for resource/UI/menus/panels/
+// mod_setting.res, which shadPS4 on Windows found and a PS4 did not
+// (2026-10-07).
+struct ModFileEntry { std::string key; std::int32_t root; std::string path; };
 
 // The enabled mods' roots and file index, as one immutable snapshot. File
 // opens arrive on several engine threads, and NSReloadMods replaces the set
@@ -1926,7 +1974,7 @@ void IndexModDirectory(std::vector<ModFileEntry>& index, std::int32_t root, cons
         struct stat info{};
         if (stat(childAbsolute.c_str(), &info) != 0) continue;
         if (S_ISDIR(info.st_mode)) IndexModDirectory(index, root, childAbsolute, childRelative, depth + 1);
-        else index.push_back({ModFileKey(childRelative.c_str()), root});
+        else index.push_back({ModFileKey(childRelative.c_str()), root, childRelative});
     }
     closedir(dir);
 }
@@ -1962,6 +2010,13 @@ ModOverlay* BuildModOverlay() noexcept {
 // The highest-priority root in `overlay` that ships `normalized`, or -1. Falls
 // back to the old per-root probe if the index was not built, so a failure
 // there can only cost speed, never mods.
+const ModFileEntry* FindModFileEntry(const ModOverlay& overlay, const char* normalized) noexcept {
+    const std::string key = ModFileKey(normalized);
+    auto it = std::lower_bound(overlay.index.begin(), overlay.index.end(), key,
+        [](const ModFileEntry& entry, const std::string& k) { return entry.key < k; });
+    return (it != overlay.index.end() && it->key == key) ? &*it : nullptr;
+}
+
 std::int32_t FindModFileRoot(const ModOverlay& overlay, const char* normalized) noexcept {
     if (!overlay.indexed) {
         for (std::int32_t i = static_cast<std::int32_t>(overlay.roots.size()) - 1; i >= 0; --i) {
@@ -1975,10 +2030,8 @@ std::int32_t FindModFileRoot(const ModOverlay& overlay, const char* normalized) 
         }
         return -1;
     }
-    const std::string key = ModFileKey(normalized);
-    auto it = std::lower_bound(overlay.index.begin(), overlay.index.end(), key,
-        [](const ModFileEntry& entry, const std::string& k) { return entry.key < k; });
-    return (it != overlay.index.end() && it->key == key) ? it->root : -1;
+    const ModFileEntry* entry = FindModFileEntry(overlay, normalized);
+    return entry ? entry->root : -1;
 }
 
 // The absolute path of the mod file that wins for `normalized`, if any
@@ -1986,9 +2039,19 @@ std::int32_t FindModFileRoot(const ModOverlay& overlay, const char* normalized) 
 bool ResolveModFile(const char* normalized, char* out, std::size_t capacity) noexcept {
     const ModOverlay* overlay = CurrentModOverlay();
     if (!overlay) return false;
-    const std::int32_t root = FindModFileRoot(*overlay, normalized);
+    std::int32_t root = -1;
+    const char* path = normalized;
+    if (overlay->indexed) {
+        const ModFileEntry* entry = FindModFileEntry(*overlay, normalized);
+        if (entry) {
+            root = entry->root;
+            path = entry->path.c_str();
+        }
+    } else {
+        root = FindModFileRoot(*overlay, normalized);
+    }
     if (root < 0) return false;
-    const int n = std::snprintf(out, capacity, "%s/%s", overlay->roots[root].c_str(), normalized);
+    const int n = std::snprintf(out, capacity, "%s/%s", overlay->roots[root].c_str(), path);
     return n > 0 && static_cast<std::size_t>(n) < capacity;
 }
 FsOpenFn g_originalFsOpen = nullptr;
@@ -2893,7 +2956,7 @@ void* ModuleTracker(void*) noexcept {
                     LogFormat("[NorthstarPS4] discovered module=%s handle=0x%x segments=%u\n",
                         info.name, handles[i], info.segmentCount);
                 }
-                if (infoResult == 0 && std::strcmp(info.name, "vstdlib.sprx") == 0) {
+                if (infoResult == 0 && ModuleNamed(info.name, "vstdlib")) {
                     vstdlibHandle = handles[i];
                 }
                 if (infoResult == 0 &&
@@ -2999,6 +3062,9 @@ void* ModuleTracker(void*) noexcept {
         ProbeCvarInterface(vstdlibHandle, engineBase, engineSize);
 #if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
         StartPcSignIn();  // after the identity file is read
+        // Now, while the game still has memory to spare: on a PS4 the SSL
+        // and HTTP pools come out of it, and by the menus it is nearly gone.
+        InitHttpTransport();
         RegisterNativeConCommands(engineBase, engineSize);
 #endif
         if (engineHandle != static_cast<OrbisKernelModule>(-1)) {
@@ -3012,6 +3078,7 @@ void* ModuleTracker(void*) noexcept {
     LogFormat(
         "[NorthstarPS4] module tracker complete engine=%d client=%d\n",
         engineSeen ? 1 : 0, clientSeen ? 1 : 0);
+    LogFlexibleMemory("after hooking");
 #if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
     if (localizeHandle != static_cast<OrbisKernelModule>(-1) && localizeBase != 0) {
         ProbeLocaliseInterface(localizeHandle, localizeBase, localizeSize);
@@ -3042,11 +3109,13 @@ bool Initialize(InitStage stage) noexcept {
     // this turns on is a spinlock.
     if (g_muslLibc.threadsMinus1 == 0) g_muslLibc.threadsMinus1 = 1;
     // Before any thread of this module starts allocating (see heaparena).
+    LogFlexibleMemory("before the heap arena");
     heaparena::Init();
+    threadstacks::Init();
     LogFormat("[NorthstarPS4] heap arena %s (%zu MiB)\n", heaparena::g_base ? "mapped" : "unavailable; using mmap",
         heaparena::kArenaSize / (1024 * 1024));
     OrbisPthread thread{};
-    const int result = scePthreadCreate(&thread, nullptr, ModuleTracker, nullptr, "NorthstarPS4");
+    const int result = StartRuntimeThread(&thread, ModuleTracker, nullptr, "NorthstarPS4");
     if (result != 0) {
         LogFormat("[NorthstarPS4] tracker thread creation failed: 0x%x\n", result);
         return false;

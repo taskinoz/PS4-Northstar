@@ -140,7 +140,18 @@ inline std::string FormatSignInCode(std::uint32_t random) {
 struct RequestHead {
     std::string method, path;
     std::size_t contentLength = 0;
+    std::string key;  // X-NorthstarPS4-Key: the helper asking whether it is paired
 };
+
+// Whether `offered` is this console's pairing key, compared in constant time.
+// An empty key on either side never matches.
+inline bool KeyMatches(const std::string& offered, const std::string& paired) {
+    if (offered.empty() || paired.empty() || offered.size() != paired.size()) return false;
+    unsigned char difference = 0;
+    for (std::size_t i = 0; i < paired.size(); ++i)
+        difference |= static_cast<unsigned char>(offered[i] ^ paired[i]);
+    return difference == 0;
+}
 
 inline bool ParseRequestHead(const std::string& head, RequestHead& out) {
     out = RequestHead{};
@@ -173,6 +184,12 @@ inline bool ParseRequestHead(const std::string& head, RequestHead& out) {
                 }
                 if (!digits) return false;
                 out.contentLength = value;
+            } else if (name == "x-northstarps4-key") {
+                std::size_t i = colon + 1;
+                while (i < header.size() && header[i] == ' ') ++i;
+                std::size_t last = header.size();
+                while (last > i && header[last - 1] == ' ') --last;
+                out.key = header.substr(i, last - i);
             }
         }
         at = end;
@@ -189,7 +206,7 @@ inline std::string CheckSignInPush(const IdentityFields& push, bool fromThisMach
     if (!IsDigits(push.uid) || !IsHex32(push.token) || !IsRefreshUrl(push.refreshUrl) || !IsHex32(push.refreshKey))
         return "the sign-in is incomplete or malformed";
     if (fromThisMachine) return "";
-    if (!pairedKey.empty() && push.refreshKey == pairedKey) return "";
+    if (KeyMatches(push.refreshKey, pairedKey)) return "";
     if (wrongCodes >= kMaxWrongCodes) return "too many wrong codes; restart the game to get a new one";
     if (code.empty() || push.code != code) {
         ++wrongCodes;

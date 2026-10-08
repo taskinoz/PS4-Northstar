@@ -406,7 +406,7 @@ void InstallHostOptions(std::uintptr_t engineBase, std::size_t engineSize) noexc
 
     constexpr std::uint8_t checkBytes[] = {0x48, 0x39, 0x8e, 0xd5, 0xd3, 0x02, 0x00, 0x0f, 0x84, 0x9a, 0x00, 0x00, 0x00};
     const auto check = engineBase + kDuplicateCheckVa;
-    const auto distance = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&DuplicateAccountCheck)) -
+    const auto distance = static_cast<std::int64_t>(Reachable(check + 5, reinterpret_cast<std::uintptr_t>(&DuplicateAccountCheck))) -
         static_cast<std::int64_t>(check + 5);
     if (!g_duplicateAccountsConVar ||
         !ValidateEnginePreimage(engineBase, engineSize, kDuplicateCheckVa, checkBytes, sizeof(checkBytes)) ||
@@ -493,7 +493,7 @@ void InstallConnectUid(std::uintptr_t engineBase, std::size_t engineSize) noexce
         0x00, 0x48, 0x89, 0xdf, 0x75, 0x19, 0x48, 0x8b, 0x05, 0xe8, 0x00, 0x8c, 0x01, 0x48, 0x8d, 0x3d, 0x84, 0x7c, 0x1f,
         0x00, 0x48, 0x8b, 0x40, 0x48, 0x48, 0x85, 0xc0, 0x48, 0x0f, 0x45, 0xf8};
     const auto site = engineBase + kConnectUidPickVa;
-    const auto distance = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&ConnectUidPick)) -
+    const auto distance = static_cast<std::int64_t>(Reachable(site + 5, reinterpret_cast<std::uintptr_t>(&ConnectUidPick))) -
         static_cast<std::int64_t>(site + 5);
     if (!ValidateEnginePreimage(engineBase, engineSize, kConnectUidPickVa, pickBytes, sizeof(pickBytes)) ||
         distance < -2147483648LL || distance > 2147483647LL) {

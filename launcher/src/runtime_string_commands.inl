@@ -248,7 +248,7 @@ void InstallStringCommandGuard(std::uintptr_t engineBase, std::size_t engineSize
     int patched = 0;
     for (const auto& site : sites) {
         const auto call = engineBase + site.va;
-        const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&StringCommandGuard)) -
+        const auto relative = static_cast<std::int64_t>(Reachable(call + 5, reinterpret_cast<std::uintptr_t>(&StringCommandGuard))) -
             static_cast<std::int64_t>(call + 5);
         if (relative < -2147483648LL || relative > 2147483647LL) continue;
         std::uint8_t bytes[5] = {0xe8};

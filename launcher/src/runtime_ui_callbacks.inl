@@ -118,19 +118,19 @@ bool PatchCallSite(std::uintptr_t va, const std::uint8_t (&preimage)[5], void* t
         return false;
     }
     const auto call = g_runtimeClientBase + va;
-    const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(target)) - static_cast<std::int64_t>(call + 5);
+    const auto relative = static_cast<std::int64_t>(Reachable(call + 5, reinterpret_cast<std::uintptr_t>(target))) - static_cast<std::int64_t>(call + 5);
     if (relative < -2147483648LL || relative > 2147483647LL) {
         LogFormat("[NorthstarPS4] %s hook refused: branch outside rel32 range\n", label);
         return false;
     }
     void* page = reinterpret_cast<void*>(call & ~std::uintptr_t(0x3fff));
-    if (sceKernelMprotect(page, 0x4000, 7) != 0) {
+    if (sceKernelMprotect(page, PageSpan(call, 5), 7) != 0) {
         LogFormat("[NorthstarPS4] %s hook: mprotect failed\n", label);
         return false;
     }
     const auto displacement = static_cast<std::int32_t>(relative);
     std::memcpy(reinterpret_cast<void*>(call + 1), &displacement, sizeof(displacement));
-    const int protection = sceKernelMprotect(page, 0x4000, 5);
+    const int protection = sceKernelMprotect(page, PageSpan(call, 5), 5);
     LogFormat("[NorthstarPS4] %s hook installed va=%lx protection=%d\n", label, va, protection);
     return protection == 0;
 }
@@ -198,26 +198,28 @@ bool InstallRuntimeUiDestroy() noexcept {
     };
     std::int32_t offsets[kSites];
     void* pages[kSites];
+    std::size_t spans[kSites];
     for (int i = 0; i < kSites; ++i) {
         if (!ValidateEnginePreimage(g_runtimeClientBase, g_runtimeClientSpan, sites[i].va, sites[i].bytes, 5)) {
             LogFormat("[NorthstarPS4] destroy hook preimage mismatch va=%lx\n", sites[i].va);
             return false;
         }
         const auto address = g_runtimeClientBase + sites[i].va;
-        const auto distance = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&RuntimeUiDestroy)) - static_cast<std::int64_t>(address + 5);
+        const auto distance = static_cast<std::int64_t>(Reachable(address + 5, reinterpret_cast<std::uintptr_t>(&RuntimeUiDestroy))) - static_cast<std::int64_t>(address + 5);
         if (distance < -2147483648LL || distance > 2147483647LL) return false;
         offsets[i] = static_cast<std::int32_t>(distance);
         pages[i] = reinterpret_cast<void*>(address & ~std::uintptr_t(0x3fff));
+        spans[i] = PageSpan(address, 5);
     }
     // Acquire every page before changing any instruction.
-    for (int i = 0; i < kSites; ++i) if (sceKernelMprotect(pages[i], 0x4000, 7) != 0) {
-        for (int j = 0; j < i; ++j) sceKernelMprotect(pages[j], 0x4000, 5);
+    for (int i = 0; i < kSites; ++i) if (sceKernelMprotect(pages[i], spans[i], 7) != 0) {
+        for (int j = 0; j < i; ++j) sceKernelMprotect(pages[j], spans[j], 5);
         return false;
     }
     for (int i = 0; i < kSites; ++i)
         std::memcpy(reinterpret_cast<void*>(g_runtimeClientBase + sites[i].va + 1), &offsets[i], 4);
     int protection = 0;
-    for (int i = 0; i < kSites; ++i) protection |= sceKernelMprotect(pages[i], 0x4000, 5);
+    for (int i = 0; i < kSites; ++i) protection |= sceKernelMprotect(pages[i], spans[i], 5);
     installed = true;
     LogFormat("[NorthstarPS4] VM destroy hooks installed count=%d protection=%d\n", kSites, protection);
     return protection == 0;

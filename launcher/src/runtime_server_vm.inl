@@ -356,23 +356,24 @@ bool InstallRuntimeServerVm(OrbisKernelModule serverHandle) noexcept {
                                      reinterpret_cast<std::uintptr_t>(&RuntimeServerDestroy),
                                      reinterpret_cast<std::uintptr_t>(&RuntimeServerDestroy)};
     constexpr int kHookCount = sizeof(calls) / sizeof(calls[0]);
-    std::int32_t offsets[kHookCount]; void* pages[kHookCount];
+    std::int32_t offsets[kHookCount]; void* pages[kHookCount]; std::size_t spans[kHookCount];
     for (int i = 0; i < kHookCount; ++i) {
         const auto call = g_runtimeServerBase + calls[i];
-        const auto relative = static_cast<std::int64_t>(targets[i]) - static_cast<std::int64_t>(call + 5);
+        const auto relative = static_cast<std::int64_t>(Reachable(call + 5, targets[i])) - static_cast<std::int64_t>(call + 5);
         if (relative < -2147483648LL || relative > 2147483647LL) return false;
         offsets[i] = static_cast<std::int32_t>(relative);
         pages[i] = reinterpret_cast<void*>(call & ~std::uintptr_t(0x3fff));
+        spans[i] = PageSpan(call, 5);
     }
     // Acquire every code page before writing any hook; avoid partial install.
-    for (int i = 0; i < kHookCount; ++i) if (sceKernelMprotect(pages[i], 0x4000, 7) != 0) {
-        for (int j = 0; j < i; ++j) sceKernelMprotect(pages[j], 0x4000, 5);
+    for (int i = 0; i < kHookCount; ++i) if (sceKernelMprotect(pages[i], spans[i], 7) != 0) {
+        for (int j = 0; j < i; ++j) sceKernelMprotect(pages[j], spans[j], 5);
         return false;
     }
     for (int i = 0; i < kHookCount; ++i)
         std::memcpy(reinterpret_cast<void*>(g_runtimeServerBase + calls[i] + 1), &offsets[i], 4);
     int protection = 0;
-    for (auto page : pages) protection |= sceKernelMprotect(page, 0x4000, 5);
+    for (int i = 0; i < kHookCount; ++i) protection |= sceKernelMprotect(pages[i], spans[i], 5);
     g_runtimeServerVmHooked = true;
     InstallServerExploitFixes(g_runtimeServerBase);
     LogFormat("[NorthstarPS4] SERVER VM init, MapSpawn and destroy hooks installed base=%p protection=%d\n",
@@ -406,7 +407,7 @@ void TryInstallServerVm() noexcept {
         OrbisKernelModuleInfo info{};
         info.size = sizeof(info);
         if (sceKernelGetModuleInfo(handles[i], &info) != 0) continue;
-        if (!std::strstr(info.name, "server.sprx")) continue;
+        if (!ModuleNamed(info.name, "server")) continue;
         LogFormat("[NorthstarPS4] server.prx loaded; installing SERVER VM hook\n");
         // Found but unusable means the profile does not match this build, and
         // retrying cannot change that.

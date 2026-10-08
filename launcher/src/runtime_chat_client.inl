@@ -255,7 +255,7 @@ void InstallClientChat(std::uintptr_t clientBase, std::size_t clientSpan) noexce
     constexpr std::uint8_t nextBytes[] = {0x4d, 0x8b, 0xa4, 0x24, 0xf0, 0x02, 0x00, 0x00, 0x4d, 0x85, 0xe4, 0x0f,
         0x85, 0xdf, 0xfc, 0xff, 0xff, 0x48, 0x8b, 0x05, 0x08, 0x6b, 0x8c, 0x00, 0x48, 0x8b, 0x00};
     const auto hook = clientBase + uiapi::kChatReceiveHookVa;
-    const auto distance = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&ClientChatReceiveStub)) -
+    const auto distance = static_cast<std::int64_t>(Reachable(hook + 5, reinterpret_cast<std::uintptr_t>(&ClientChatReceiveStub))) -
         static_cast<std::int64_t>(hook + 5);
     if (!clientBase ||
         !ValidateEnginePreimage(clientBase, clientSpan, uiapi::kChatSayTextHandlerVa, handlerBytes, sizeof(handlerBytes)) ||

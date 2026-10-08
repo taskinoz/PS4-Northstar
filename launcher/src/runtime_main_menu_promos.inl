@@ -51,7 +51,7 @@ int RequestPromos(void*) {
     hasMainMenuPromos = false;
     OrbisPthread thread{};
     if (!InitHttpTransport() ||
-        scePthreadCreate(&thread, nullptr, MainMenuPromoWorker, nullptr, "NSMainMenuPromo") != 0) {
+        StartRuntimeThread(&thread, MainMenuPromoWorker, nullptr, "NSMainMenuPromo") != 0) {
         LogFormat("[NorthstarPS4] main-menu promos failed: could not start request\n");
         promoFetchOk = false;
         promoFetchState.store(kFetchReady, std::memory_order_release);

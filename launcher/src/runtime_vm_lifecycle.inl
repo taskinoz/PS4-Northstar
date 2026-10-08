@@ -70,13 +70,13 @@ bool InstallRuntimeVmInit() noexcept {
     }
     if (!InstallRuntimeUiDestroy()) return false;
     const auto call = g_runtimeClientBase + 0x6717af;
-    const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&RuntimeVmInit)) - static_cast<std::int64_t>(call + 5);
+    const auto relative = static_cast<std::int64_t>(Reachable(call + 5, reinterpret_cast<std::uintptr_t>(&RuntimeVmInit))) - static_cast<std::int64_t>(call + 5);
     if (relative < -2147483648LL || relative > 2147483647LL) return false;
     void* page = reinterpret_cast<void*>(call & ~std::uintptr_t(0x3fff));
-    if (sceKernelMprotect(page, 0x4000, 7) != 0) return false;
+    if (sceKernelMprotect(page, PageSpan(call, 5), 7) != 0) return false;
     const auto displacement = static_cast<std::int32_t>(relative);
     std::memcpy(reinterpret_cast<void*>(call + 1), &displacement, sizeof(displacement));
-    const int protection = sceKernelMprotect(page, 0x4000, 5);
+    const int protection = sceKernelMprotect(page, PageSpan(call, 5), 5);
     g_runtimeVmInitHooked = true;
     LogFormat("[NorthstarPS4] VM init hook installed protection=%d\n", protection);
     return true;

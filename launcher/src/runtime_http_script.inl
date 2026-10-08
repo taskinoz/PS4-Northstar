@@ -354,7 +354,7 @@ int MakeScriptHttpRequest(void* vm, int context) {
     request->userAgent = userAgent;
     const int handle = request->handle;
     OrbisPthread thread{};
-    if (scePthreadCreate(&thread, nullptr, ScriptHttpWorker, request, "NSHttpRequest") != 0) {
+    if (StartRuntimeThread(&thread, ScriptHttpWorker, request, "NSHttpRequest") != 0) {
         LogFormat("[NorthstarPS4] NS_InternalMakeHttpRequest: could not start the request thread\n");
         delete request;
         Integer(vm, -1);

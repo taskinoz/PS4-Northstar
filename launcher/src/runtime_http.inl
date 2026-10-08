@@ -19,8 +19,19 @@
 constexpr int kSceHttpMethodGet = 0;
 constexpr int kSceHttpVersion11 = 2;
 constexpr std::size_t kHttpNetPoolSize = 16 * 1024;
-constexpr std::size_t kHttpSslPoolSize = 96 * 1024;
-constexpr std::size_t kHttpPoolSize = 64 * 1024;
+// A PS4's SSL library (NanoSSL) parses the whole certificate chain from its
+// pool: with 96 KiB, every handshake with northstar.tf (Cloudflare, three
+// ECDSA certificates) failed with 0x809517d5, NanoSSL's -6101
+// ERR_MEM_ALLOC_FAIL (2026-10-07). shadPS4 does TLS on the host and never
+// used the pools. These are the sizes Sony's samples use, or more.
+constexpr std::size_t kHttpSslPoolSize = 384 * 1024;
+constexpr std::size_t kHttpPoolSize = 256 * 1024;
+
+// A readable reason for the failures seen on hardware.
+const char* HttpErrorText(int code) noexcept {
+    return static_cast<unsigned>(code) == 0x809517d5u ? " (SSL out of memory)" : "";
+}
+
 // Atlas only authenticates clients whose User-Agent starts with
 // `R2Northstar/<semver>` at or above its configured minimum
 // (Atlas-reference pkg/api/api0/api.go, CheckLauncherVersion); anything else
@@ -38,7 +49,7 @@ void BuildNorthstarUserAgent() noexcept {
     static char json[kModJsonBufferSize];
     std::size_t size = 0;
     char path[256];
-    std::snprintf(path, sizeof(path), "%s/Northstar.Client/mod.json", kModsRoot);
+    std::snprintf(path, sizeof(path), "%s/Northstar.Client/mod.json", ModsRoot());
     char version[32]{};
     const char* member = ReadFileIntoBuffer(path, json, sizeof(json), size)
         ? JsonFindMember(json, "Version") : nullptr;
@@ -114,7 +125,7 @@ bool HttpRequest(int method, const char* url, char* out, std::size_t capacity, i
     bool ok = false;
     const int sent = sceHttpSendRequest(request, nullptr, 0);
     if (sent < 0) {
-        LogFormat("[NorthstarPS4] http send failed 0x%x\n", sent);
+        LogFormat("[NorthstarPS4] http send failed 0x%x%s\n", sent, HttpErrorText(sent));
     } else if (sceHttpGetStatusCode(request, &status) < 0) {
         LogFormat("[NorthstarPS4] http status unavailable\n");
     } else {
@@ -161,7 +172,7 @@ bool HttpStream(const char* url, HttpChunkFn onChunk, void* user, std::uint64_t&
     bool ok = false;
     const int sent = sceHttpSendRequest(request, nullptr, 0);
     if (sent < 0) {
-        LogFormat("[NorthstarPS4] http send failed 0x%x\n", sent);
+        LogFormat("[NorthstarPS4] http send failed 0x%x%s\n", sent, HttpErrorText(sent));
     } else if (sceHttpGetStatusCode(request, &status) < 0) {
         LogFormat("[NorthstarPS4] http status unavailable\n");
     } else {

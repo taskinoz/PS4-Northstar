@@ -63,14 +63,14 @@ bool InstallRuntimeHostFrame(std::uintptr_t engineBase, std::size_t engineSpan) 
 
     const auto call = engineBase + kHostFrameUpdateCallVa;
     const auto relative = static_cast<std::int64_t>(
-        reinterpret_cast<std::uintptr_t>(&RuntimeHostFrameUpdate)) -
+        Reachable(call + 5, reinterpret_cast<std::uintptr_t>(&RuntimeHostFrameUpdate))) -
         static_cast<std::int64_t>(call + 5);
     if (relative < -2147483648LL || relative > 2147483647LL) {
         LogFormat("[NorthstarPS4] native async frame hook refused: branch outside rel32 range\n");
         return false;
     }
     void* const page = reinterpret_cast<void*>(call & ~std::uintptr_t(0x3fff));
-    if (sceKernelMprotect(page, 0x4000, 7) != 0) {
+    if (sceKernelMprotect(page, PageSpan(call, 5), 7) != 0) {
         LogFormat("[NorthstarPS4] native async frame hook: mprotect failed\n");
         return false;
     }
@@ -81,7 +81,7 @@ bool InstallRuntimeHostFrame(std::uintptr_t engineBase, std::size_t engineSpan) 
     const auto displacement = static_cast<std::int32_t>(relative);
     std::memcpy(reinterpret_cast<void*>(call + 1), &displacement,
         sizeof(displacement));
-    const int protection = sceKernelMprotect(page, 0x4000, 5);
+    const int protection = sceKernelMprotect(page, PageSpan(call, 5), 5);
     if (protection != 0) {
         LogFormat("[NorthstarPS4] native async frame hook: restore protection failed=%d\n",
             protection);

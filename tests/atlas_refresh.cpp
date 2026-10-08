@@ -51,7 +51,15 @@ int main() {
     RequestHead head;
     assert(ParseRequestHead("POST /northstar/signin HTTP/1.1\r\nHost: x\r\ncontent-LENGTH:  57\r\n", head));
     assert(head.method == "POST" && head.path == kSignInPath && head.contentLength == 57);
-    assert(ParseRequestHead("GET /northstar/hello HTTP/1.0", head) && head.contentLength == 0);
+    assert(ParseRequestHead("GET /northstar/hello HTTP/1.0", head) && head.contentLength == 0 && head.key.empty());
+    assert(ParseRequestHead("GET /northstar/hello HTTP/1.1\r\nx-NorthstarPS4-key:  0123456789abcdef0123456789abcdef \r\n",
+               head) && head.key == "0123456789abcdef0123456789abcdef");
+
+    // Whether a helper is paired: its key against the console's.
+    assert(KeyMatches("0123456789abcdef0123456789abcdef", "0123456789abcdef0123456789abcdef"));
+    assert(!KeyMatches("0123456789abcdef0123456789abcdee", "0123456789abcdef0123456789abcdef"));
+    assert(!KeyMatches("0123", "0123456789abcdef0123456789abcdef"));
+    assert(!KeyMatches("", "") && !KeyMatches("", "0123456789abcdef0123456789abcdef"));
     assert(!ParseRequestHead("GET /x", head) && !ParseRequestHead("GET x HTTP/1.1", head));
     assert(!ParseRequestHead("POST / HTTP/1.1\r\nContent-Length: 99999\r\n", head));
     assert(!ParseRequestHead("POST / HTTP/1.1\r\nContent-Length: x\r\n", head));

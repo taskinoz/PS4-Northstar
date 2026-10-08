@@ -161,7 +161,7 @@ bool AtlasHttp(const char* method, const std::string& url, const char* contentTy
     }
     sceHttpDeleteRequest(request);
     sceHttpDeleteConnection(connection);
-    if (result < 0) LogFormat("[NorthstarPS4] atlas %s failed 0x%x\n", method, static_cast<unsigned>(result));
+    if (result < 0) LogFormat("[NorthstarPS4] atlas %s failed 0x%x%s\n", method, static_cast<unsigned>(result), HttpErrorText(result));
     return result >= 0;
 }
 
@@ -517,7 +517,7 @@ void HandleAtlasPacket(const std::uint8_t* data, std::size_t size) {
     if (debug) LogFormat("[NorthstarPS4] got Atlas connectionless packet (size=%zu type=%s data=%s)\n", size, type.c_str(), json.c_str());
     auto* work = new ConnectRequestWork{json};
     OrbisPthread thread{};
-    if (scePthreadCreate(&thread, nullptr, ProcessSigreq1, work, "NSAtlasConnect") != 0) {
+    if (StartRuntimeThread(&thread, ProcessSigreq1, work, "NSAtlasConnect") != 0) {
         delete work;
         return;
     }
@@ -639,7 +639,7 @@ bool WriteRemotePdata(int client, std::uint64_t uid, const std::string& pdata, c
     auto* write = new PdataWrite{client, uid, pdata, reason};
     ++g_writesInFlight;
     OrbisPthread thread{};
-    if (scePthreadCreate(&thread, nullptr, WritePdataWorker, write, "NSPdataWrite") != 0) {
+    if (StartRuntimeThread(&thread, WritePdataWorker, write, "NSPdataWrite") != 0) {
         --g_writesInFlight;
         delete write;
         return false;
@@ -811,7 +811,7 @@ void InstallDisconnectWrite(std::uintptr_t engineBase, std::size_t engineSize) n
         0x48, 0x81, 0xec, 0xe8, 0x04, 0x00, 0x00, 0x48, 0x89, 0xfb, 0x89};
     constexpr std::size_t kMoved = 13;
     const auto site = engineBase + kDisconnectVa;
-    const auto distance = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&DisconnectWriteStub)) -
+    const auto distance = static_cast<std::int64_t>(Reachable(site + 5, reinterpret_cast<std::uintptr_t>(&DisconnectWriteStub))) -
         static_cast<std::int64_t>(site + 5);
     if (!ValidateEnginePreimage(engineBase, engineSize, kDisconnectVa, prologue, sizeof(prologue)) ||
         distance < -2147483648LL || distance > 2147483647LL) {
@@ -892,7 +892,7 @@ int UpdateServerPresence(void* vm) {
     bool expected = false;
     if (atlasserver::g_reporterStarted.compare_exchange_strong(expected, true)) {
         OrbisPthread thread{};
-        if (scePthreadCreate(&thread, nullptr, atlasserver::PresenceReporter, nullptr, "NSServerPresence") == 0)
+        if (StartRuntimeThread(&thread, atlasserver::PresenceReporter, nullptr, "NSServerPresence") == 0)
             scePthreadDetach(thread);
         else
             atlasserver::g_reporterStarted = false;

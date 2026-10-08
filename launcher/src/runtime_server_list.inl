@@ -112,7 +112,7 @@ int RequestServers(void*) {
     // threads never race through sceHttpInit.
     OrbisPthread thread{};
     if (!InitHttpTransport() ||
-        scePthreadCreate(&thread, nullptr, ServerListWorker, nullptr, "NSServerList") != 0) {
+        StartRuntimeThread(&thread, ServerListWorker, nullptr, "NSServerList") != 0) {
         LogFormat("[NorthstarPS4] server list request failed: could not start the request\n");
         fetchOk = false;
         fetched.clear();

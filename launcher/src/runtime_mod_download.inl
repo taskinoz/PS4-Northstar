@@ -49,7 +49,7 @@ bool StartModWorker(void* (*entry)(void*), void* argument, const char* name) noe
     bool expected = false;
     if (!modWorkerBusy.compare_exchange_strong(expected, true)) return false;
     OrbisPthread thread{};
-    if (!InitHttpTransport() || scePthreadCreate(&thread, nullptr, entry, argument, name) != 0) {
+    if (!InitHttpTransport() || StartRuntimeThread(&thread, entry, argument, name) != 0) {
         modWorkerBusy.store(false);
         return false;
     }

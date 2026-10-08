@@ -338,20 +338,20 @@ bool PatchRpakCallSite(std::uintptr_t base, std::size_t span, std::uintptr_t va,
         return false;
     }
     const std::uintptr_t call = base + va;
-    const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(target)) -
+    const auto relative = static_cast<std::int64_t>(Reachable(call + 5, reinterpret_cast<std::uintptr_t>(target))) -
         static_cast<std::int64_t>(call + 5);
     if (relative < -2147483648LL || relative > 2147483647LL) {
         LogFormat("[NorthstarPS4] mod rpak call site refused: branch outside rel32 range va=%lx\n", va);
         return false;
     }
     void* const page = reinterpret_cast<void*>(call & ~std::uintptr_t(0x3fff));
-    if (sceKernelMprotect(page, 0x4000, 7) != 0) {
+    if (sceKernelMprotect(page, PageSpan(call, 5), 7) != 0) {
         LogFormat("[NorthstarPS4] mod rpak call site: mprotect failed va=%lx\n", va);
         return false;
     }
     const auto displacement = static_cast<std::int32_t>(relative);
     std::memcpy(reinterpret_cast<void*>(call + 1), &displacement, sizeof(displacement));
-    const int protection = sceKernelMprotect(page, 0x4000, 5);
+    const int protection = sceKernelMprotect(page, PageSpan(call, 5), 5);
     LogFormat("[NorthstarPS4] mod rpak call site patched va=%lx protection=%d\n", va, protection);
     return protection == 0;
 }

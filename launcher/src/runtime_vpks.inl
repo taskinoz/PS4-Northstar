@@ -4,12 +4,84 @@ struct RuntimeModVpk { std::string path, stem; bool preload; };
 std::vector<RuntimeModVpk> g_modVpks;
 std::atomic_flag g_mountingModVpks = ATOMIC_FLAG_INIT;
 bool g_modVpkHookReady = false;
+
+// MountVPK lowercases the path it is given. A PS4's /data is case-sensitive,
+// so Northstar.Custom's archive under /data/northstar_ps4/R2Northstar never
+// mounted there (result 0), and fastball stopped on a BT animation only that
+// archive has (2026-10-08). Where the lowercased path does not reach a mod's
+// vpk/ folder, the folder is copied once to an all-lowercase one. (libkernel
+// exports no link(2), and a raw system call would run on the host under
+// shadPS4, whose case-insensitive host never needs the copy anyway.)
+constexpr const char* kVpkMirrorRoot = "/data/northstar_ps4/runtime/vpk";
+
+std::string LowerCase(std::string text) {
+    for (auto& c : text)
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    return text;
+}
+
+bool CopyFile(const char* from, const char* to) noexcept {
+    const int in = open(from, O_RDONLY);
+    if (in < 0) return false;
+    const std::string partial = std::string(to) + ".partial";
+    const int out = open(partial.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    bool ok = out >= 0;
+    static char buffer[256 * 1024];
+    while (ok) {
+        const ssize_t got = read(in, buffer, sizeof(buffer));
+        if (got <= 0) {
+            ok = got == 0;
+            break;
+        }
+        ok = write(out, buffer, static_cast<std::size_t>(got)) == got;
+    }
+    close(in);
+    if (out >= 0) close(out);
+    ok = ok && rename(partial.c_str(), to) == 0;
+    if (!ok) unlink(partial.c_str());
+    return ok;
+}
+
+// The lowercase folder holding `directory`'s files, or `directory` itself
+// when it is already lowercase or cannot be mirrored.
+std::string LowerCaseVpkFolder(const std::string& directory, const std::string& modFolder) {
+    if (directory == LowerCase(directory) || IsDirectory(LowerCase(directory).c_str())) return directory;
+    const std::string mirror = std::string(kVpkMirrorRoot) + "/" + LowerCase(modFolder);
+    if (!uiapi::MakeDirectories(mirror.c_str())) {
+        LogFormat("[NorthstarPS4] mod VPK mirror: could not create %s\n", mirror.c_str());
+        return directory;
+    }
+    DIR* dir = opendir(directory.c_str());
+    if (!dir) return directory;
+    int copied = 0, current = 0, failed = 0;
+    while (dirent* entry = readdir(dir)) {
+        if (entry->d_name[0] == '.') continue;
+        const std::string from = directory + "/" + entry->d_name;
+        const std::string to = mirror + "/" + LowerCase(entry->d_name);
+        struct stat source{}, target{};
+        if (stat(from.c_str(), &source) != 0 || !S_ISREG(source.st_mode)) continue;
+        std::uint64_t fromSize = 0, toSize = 0;
+        if (stat(to.c_str(), &target) == 0 && uiapi::FileSizeOf(from.c_str(), fromSize) &&
+            uiapi::FileSizeOf(to.c_str(), toSize) && fromSize == toSize && target.st_mtime >= source.st_mtime) {
+            ++current;
+            continue;
+        }
+        if (CopyFile(from.c_str(), to.c_str())) ++copied;
+        else ++failed;
+    }
+    closedir(dir);
+    LogFormat("[NorthstarPS4] mod VPK mirror %s: %d copied, %d current, %d failed\n", mirror.c_str(), copied, current,
+        failed);
+    return failed ? directory : mirror;
+}
+
 void DiscoverModVpks() {
     g_modVpks.clear();
     static ModDiscovery mods;
     CollectModNames(mods);
     for (int i = 0; i < mods.count; ++i) {
-        const std::string directory = std::string(mods.dirs[i]) + "/vpk";
+        const std::string modDirectory = mods.dirs[i];
+        const std::string directory = modDirectory + "/vpk";
         DIR* dir = opendir(directory.c_str());
         if (!dir) continue;
         std::vector<char> configBuffer(kModJsonBufferSize);
@@ -24,8 +96,10 @@ void DiscoverModVpks() {
         }
         closedir(dir);
         std::sort(stems.begin(), stems.end());
+        const std::string mountFolder = stems.empty() ? directory
+            : LowerCaseVpkFolder(directory, modDirectory.substr(modDirectory.find_last_of('/') + 1));
         for (const auto& stem : stems) {
-            const std::string path = directory + "/" + stem;
+            const std::string path = mountFolder + "/" + (mountFolder == directory ? stem : LowerCase(stem));
             // MountVPK formats "%s.pak000" into 0x104 bytes.
             if (path.size() + sizeof(".pak000") > 0x104) {
                 LogFormat("[NorthstarPS4] mod VPK path too long: %s\n", path.c_str()); continue;

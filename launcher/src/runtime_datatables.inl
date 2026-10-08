@@ -127,14 +127,14 @@ bool PatchDatatableRegistrarCalls(std::uintptr_t base, std::size_t span,
         std::memcpy(&displacement, call + 1, sizeof(displacement));
         const std::uintptr_t target = reinterpret_cast<std::uintptr_t>(call + 5) + displacement;
         if (target != base + registrarVa) continue;
-        const std::int64_t relative = static_cast<std::int64_t>(replacement) -
-            static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(call + 5));
+        const auto next = reinterpret_cast<std::uintptr_t>(call + 5);
+        const std::int64_t relative = static_cast<std::int64_t>(Reachable(next, replacement)) - static_cast<std::int64_t>(next);
         if (relative < INT32_MIN || relative > INT32_MAX) return false;
         void* page = reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(call) & ~std::uintptr_t(0x3fff));
-        if (sceKernelMprotect(page, 0x4000, 7) != 0) return false;
+        if (sceKernelMprotect(page, PageSpan(reinterpret_cast<std::uintptr_t>(call), 5), 7) != 0) return false;
         const auto newDisplacement = static_cast<std::int32_t>(relative);
         std::memcpy(call + 1, &newDisplacement, sizeof(newDisplacement));
-        if (sceKernelMprotect(page, 0x4000, 5) != 0) return false;
+        if (sceKernelMprotect(page, PageSpan(reinterpret_cast<std::uintptr_t>(call), 5), 5) != 0) return false;
         ++patched;
         va += 4;
     }

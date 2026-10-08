@@ -106,9 +106,12 @@ void Serve(int socket, std::uint32_t peer) noexcept {
         }
         if (request.size() >= headEnd + 4 + head.contentLength) break;
     }
+    // `paired` answers only whether the helper's own key matches, so the helper
+    // can leave out the code box for a console it is already paired with.
     if (head.method == "GET" && head.path == atlas::kHelloPath)
         return Reply(socket, 200, "OK", std::string("{\"app\":\"NorthstarPS4\",\"signedIn\":") +
-            (AtlasIdentityReady() ? "true}" : "false}"));
+            (AtlasIdentityReady() ? "true" : "false") + ",\"paired\":" +
+            (atlas::KeyMatches(head.key, g_atlasRefreshKey) ? "true}" : "false}"));
     if (head.method != "POST" || head.path != atlas::kSignInPath)
         return Reply(socket, 404, "Not Found", ErrorBody("not found"));
 
@@ -192,6 +195,6 @@ void StartPcSignIn() noexcept {
         return;
     }
     OrbisPthread thread{};
-    if (scePthreadCreate(&thread, nullptr, signin::Listener, nullptr, "NSPcSignIn") != 0)
+    if (StartRuntimeThread(&thread, signin::Listener, nullptr, "NSPcSignIn") != 0)
         LogFormat("[NorthstarPS4] PC sign-in unavailable: thread not started\n");
 }

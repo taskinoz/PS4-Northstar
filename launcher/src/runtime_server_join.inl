@@ -82,11 +82,15 @@ std::string AtlasTokenAdvice(const std::string& refreshReason) {
         if (g_pcSignInReady.load(std::memory_order_acquire)) return std::string(". ") + g_pcSignInHint + ".";
         return ". On a PC signed in to the EA app, run the NorthstarPS4 token helper to renew it.";
     }
+    // The address and code only when the helper no longer knows this console:
+    // a paired one is renewed by its key, and the code would not help.
     std::string advice = ". Token refresh failed: " + refreshReason + ".";
     if (refreshReason.find("could not be reached") != std::string::npos)
         advice += " Start the NorthstarPS4 token helper on your PC and try again.";
-    else if (g_pcSignInReady.load(std::memory_order_acquire))
+    else if (refreshReason.find("not paired") != std::string::npos && g_pcSignInReady.load(std::memory_order_acquire))
         advice += std::string(" ") + g_pcSignInHint + ".";
+    else
+        advice += " Check the NorthstarPS4 token helper on your PC and try again.";
     return advice;
 }
 
@@ -182,7 +186,7 @@ int TryRemoteAuth(void* vm) {
     if (!joinState.compare_exchange_strong(expected, kFetchRequesting)) return 0;
     OrbisPthread thread{};
     if (!InitHttpTransport() ||
-        scePthreadCreate(&thread, nullptr, ServerJoinWorker, nullptr, "NSServerJoin") != 0) {
+        StartRuntimeThread(&thread, ServerJoinWorker, nullptr, "NSServerJoin") != 0) {
         joinResult = ServerAuthResponse{};
         joinResult.failureReason = "Could not start the authentication request";
         joinState.store(kFetchReady, std::memory_order_release);
@@ -207,8 +211,15 @@ int TryRemoteAuth(void* vm) {
 // that expires, that would lock a PS4 player out of the lobby until they
 // re-export it, so here the lobby starts anyway with the local placeholder
 // save and the reason is logged.
+//
+// Except when Atlas refuses the token itself and the token helper cannot
+// renew it: the lobby would then start on the local save with no word to the
+// player, who may not know that signing in to Northstar elsewhere with the
+// same EA account replaced the PS4's sign-in (2026-10-08). That fails here as
+// on PC, with the reason and what to do in the error dialog.
 std::atomic<int> selfAuthState{kFetchIdle};
 SelfAuthResponse selfAuthResult;  // worker-owned while requesting
+bool selfAuthTokenRefused = false; // worker-owned while requesting
 std::string selfAuthToken;        // UI thread: set by a successful attempt
 
 void* SelfAuthWorker(void*) noexcept {
@@ -240,6 +251,11 @@ void* SelfAuthWorker(void*) noexcept {
         selfAuthResult.failureReason = "Master server returned a different account";
     }
     delete[] buffer;
+    selfAuthTokenRefused = !selfAuthResult.success && selfAuthResult.errorEnum == "INVALID_MASTERSERVER_TOKEN";
+    if (selfAuthTokenRefused) {
+        selfAuthResult.failureReason = "Your Northstar sign-in has run out, or was replaced: signing in to Northstar "
+            "somewhere else with the same EA account replaces it" + AtlasTokenAdvice(refreshReason);
+    }
     if (selfAuthResult.success) {
         if (g_addSelfAuthRecord)
             g_addSelfAuthRecord(std::strtoull(g_atlasUid, nullptr, 10), selfAuthResult.authToken, selfAuthResult.pdata);
@@ -254,8 +270,8 @@ void* SelfAuthWorker(void*) noexcept {
 
 void PublishSelfAuthResult() {
     if (selfAuthState.load(std::memory_order_acquire) != kFetchReady) return;
-    // The lobby starts either way; see above.
-    authSucceeded = true;
+    // The lobby starts either way, unless the token was refused; see above.
+    authSucceeded = !selfAuthTokenRefused;
     authFailure = selfAuthResult.success ? std::string() : selfAuthResult.failureReason;
     selfAuthToken = selfAuthResult.success ? selfAuthResult.authToken : std::string();
     selfAuthResult = SelfAuthResponse{};
@@ -277,8 +293,9 @@ int TryLocalAuth(void*) {
     int expected = kFetchIdle;
     if (!selfAuthState.compare_exchange_strong(expected, kFetchRequesting)) return 0;
     OrbisPthread thread{};
-    if (!InitHttpTransport() || scePthreadCreate(&thread, nullptr, SelfAuthWorker, nullptr, "NSSelfAuth") != 0) {
+    if (!InitHttpTransport() || StartRuntimeThread(&thread, SelfAuthWorker, nullptr, "NSSelfAuth") != 0) {
         selfAuthResult = SelfAuthResponse{};
+        selfAuthTokenRefused = false;
         selfAuthResult.failureReason = "Could not start the authentication request";
         selfAuthState.store(kFetchReady, std::memory_order_release);
         return 0;

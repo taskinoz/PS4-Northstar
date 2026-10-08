@@ -350,7 +350,7 @@ void InstallGetEntByIndexGuard(std::uintptr_t serverBase) noexcept {
         return;
     }
     const auto next = static_cast<std::int64_t>(serverBase + kGetEntByIndexLeaVa + sizeof(leaBytes));
-    const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&GetEntByIndexGuard)) - next;
+    const auto relative = static_cast<std::int64_t>(Reachable(next, reinterpret_cast<std::uintptr_t>(&GetEntByIndexGuard))) - next;
     if (relative < -2147483648LL || relative > 2147483647LL) {
         LogFormat("[NorthstarPS4] GetEntByIndex guard refused: guard outside rel32 range\n");
         return;
@@ -376,7 +376,7 @@ void InstallUsercmdChecks(std::uintptr_t serverBase) noexcept {
         return;
     }
     const auto callNext = static_cast<std::int64_t>(serverBase + kProcessUsercmdsCallVa + 5);
-    const auto callRelative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&ProcessUsercmdsGuard)) - callNext;
+    const auto callRelative = static_cast<std::int64_t>(Reachable(callNext, reinterpret_cast<std::uintptr_t>(&ProcessUsercmdsGuard))) - callNext;
     if (callRelative < -2147483648LL || callRelative > 2147483647LL) {
         LogFormat("[NorthstarPS4] usercmd checks refused: guard outside rel32 range\n");
         return;
@@ -466,8 +466,8 @@ template <bool Server, std::size_t N> void Install(std::uintptr_t base, const Si
     }
     int stubbed = 0;
     for (const auto& site : sites) {
-        const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(StubFor<Server>(site.name))) -
-            static_cast<std::int64_t>(base + site.leaVa + 7);
+        const auto relative = static_cast<std::int64_t>(Reachable(base + site.leaVa + 7,
+            reinterpret_cast<std::uintptr_t>(StubFor<Server>(site.name)))) - static_cast<std::int64_t>(base + site.leaVa + 7);
         if (relative < -2147483648LL || relative > 2147483647LL) continue;
         const auto value = static_cast<std::int32_t>(relative);
         if (WriteEngineCode(base + site.leaVa + 3, &value, sizeof(value))) ++stubbed;
@@ -510,7 +510,7 @@ void InstallLzssFix(std::uintptr_t engineBase) noexcept {
         LogFormat("[NorthstarPS4] LZSS fix refused: engine profile mismatch\n");
         return;
     }
-    const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&SafeUncompress)) -
+    const auto relative = static_cast<std::int64_t>(Reachable(function + 5, reinterpret_cast<std::uintptr_t>(&SafeUncompress))) -
         static_cast<std::int64_t>(function + 5);
     if (relative < -2147483648LL || relative > 2147483647LL) {
         LogFormat("[NorthstarPS4] LZSS fix refused: rewrite outside rel32 range\n");
@@ -581,8 +581,8 @@ void InstallBaselineOverflowFix(std::uintptr_t engineBase) noexcept {
         LogFormat("[NorthstarPS4] WriteBaselines fix refused: engine profile mismatch\n");
         return;
     }
-    const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&ns_baseline_overflow_thunk)) -
-        static_cast<std::int64_t>(engineBase + kHostErrorCallVa + 5);
+    const auto relative = static_cast<std::int64_t>(Reachable(engineBase + kHostErrorCallVa + 5,
+        reinterpret_cast<std::uintptr_t>(&ns_baseline_overflow_thunk))) - static_cast<std::int64_t>(engineBase + kHostErrorCallVa + 5);
     if (relative < -2147483648LL || relative > 2147483647LL) {
         LogFormat("[NorthstarPS4] WriteBaselines fix refused: thunk outside rel32 range\n");
         return;
@@ -668,7 +668,7 @@ bool CallTargets(std::uintptr_t engineBase, std::uintptr_t callVa, std::uintptr_
 }
 
 bool Redirect(std::uintptr_t engineBase, std::uintptr_t callVa, const void* guard) noexcept {
-    const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(guard)) -
+    const auto relative = static_cast<std::int64_t>(Reachable(engineBase + callVa + 5, reinterpret_cast<std::uintptr_t>(guard))) -
         static_cast<std::int64_t>(engineBase + callVa + 5);
     if (relative < -2147483648LL || relative > 2147483647LL) return false;
     const auto displacement = static_cast<std::int32_t>(relative);

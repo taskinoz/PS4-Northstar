@@ -109,7 +109,7 @@ void InstallBootLocalisation(std::uintptr_t engineBase, std::size_t engineSize) 
         return;
     }
     const auto call = engineBase + kBlockVa;
-    const auto relative = static_cast<std::int64_t>(reinterpret_cast<std::uintptr_t>(&EngineVguiLocaliseFiles)) -
+    const auto relative = static_cast<std::int64_t>(Reachable(call + 5, reinterpret_cast<std::uintptr_t>(&EngineVguiLocaliseFiles))) -
         static_cast<std::int64_t>(call + 5);
     if (relative < -2147483648LL || relative > 2147483647LL) {
         LogFormat("[NorthstarPS4] boot localisation hook refused: branch outside rel32 range\n");
