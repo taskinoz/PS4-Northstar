@@ -1,6 +1,6 @@
 [package]
 name = "northstarps4-token-helper"
-version = "1.0.0"
+version = "1.0.1"
 description = "Signs Northstar on a PS4, or in shadPS4, in through the EA app."
 edition = "2021"
 publish = false
