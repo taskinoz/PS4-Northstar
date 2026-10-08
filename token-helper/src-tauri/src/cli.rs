@@ -59,7 +59,7 @@ pub fn run(o: &Options) -> i32 {
             return 1;
         }
     };
-    println!("Signed in to EA as account {}.", identity.uid);
+    println!("Signed in to EA.");
 
     // Where the game is: None when the identity file is written instead.
     let address: Option<String> = if o.local {

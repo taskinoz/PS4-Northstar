@@ -5,7 +5,7 @@
 
 use crate::install::{self, FolderInfo, Sources};
 use crate::options::{HelperState, Options, VERSION};
-use crate::service::{is_address, Event, Identity, Service};
+use crate::service::{is_address, ConsoleStatus, Event, Identity, Service};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -27,6 +27,11 @@ pub struct View {
     pub address: String,
     pub form: u64, // bumped when the helper itself changes mode or address
     pub result: Message,
+    // The EA account ID, which the page shows only on request so it is not
+    // shared by accident in a screenshot.
+    pub account: String,
+    // The console this helper is paired with: its key, not a code, signs it in.
+    pub paired: String,
 }
 
 /// The Install tab.
@@ -133,8 +138,10 @@ impl Ui {
     pub fn reply(&self, since: u64, install_since: u64) -> StateReply {
         let install_events =
             self.install_log.lock().unwrap().1.iter().filter(|e| e.seq > install_since).cloned().collect();
+        let mut view = self.view.lock().unwrap().clone();
+        view.paired = self.remembered();
         StateReply {
-            view: self.view.lock().unwrap().clone(),
+            view,
             events: self.service.events_since(since),
             install: self.install.lock().unwrap().clone(),
             install_events,
@@ -305,13 +312,16 @@ impl Ui {
         let account = identity.uid.clone();
         *self.identity.lock().unwrap() = Some(identity);
         self.update(|v| {
-            v.ea = message(format!("Signed in to EA as account {account}."), "ok");
+            v.ea = message("Signed in to EA.", "ok");
+            v.account = account;
             v.ready = true;
             v.result = message("Looking for Northstar...", "");
         });
         let console = self.remembered();
         let here = self.service.hello("127.0.0.1");
-        let paired = !here && !console.is_empty() && self.service.hello(&console);
+        let status = if here || console.is_empty() { ConsoleStatus::default() } else { self.service.probe(&console) };
+        // A game too old to say whether it is paired is tried with the key.
+        let paired = status.found && status.paired != Some(false);
         self.end();
         if here {
             self.update(|v| {
@@ -326,6 +336,13 @@ impl Ui {
                 v.form += 1;
             });
             self.sign_in("remote", &console, "");
+        } else if status.found {
+            self.update(|v| {
+                v.mode = "remote".into();
+                v.address = console.clone();
+                v.form += 1;
+            });
+            self.result(format!("Northstar on {console} needs pairing again: type the code it shows."), "");
         } else if !console.is_empty() {
             self.result(format!("Northstar is not running on {console}. Start it, then select Sign in."), "");
         } else {
@@ -342,7 +359,13 @@ impl Ui {
                 return self.result("Type the address the game shows, for example 192.168.1.20.", "error");
             }
             let four_digits = code.len() == 4 && code.bytes().all(|b| b.is_ascii_digit());
-            if !four_digits && !(code.is_empty() && target == self.remembered()) {
+            // No code for a console that says it holds this helper's key, or,
+            // when it is too old to say, for the one paired last time.
+            let paired = match self.service.probe(&target).paired {
+                Some(paired) => paired,
+                None => target == self.remembered(),
+            };
+            if !four_digits && !(code.is_empty() && paired) {
                 return self.result("Type the 4-digit code the game shows.", "error");
             }
         }
@@ -439,6 +462,16 @@ fn uninstall_now(ui: tauri::State<Arc<Ui>>, remove_mods: bool) {
     thread::spawn(move || ui.run_uninstall(remove_mods));
 }
 
+/// Whether Northstar is running at an address, and paired with this helper,
+/// for the page to leave out the code box.
+#[tauri::command]
+async fn check_console(ui: tauri::State<'_, Arc<Ui>>, address: String) -> Result<ConsoleStatus, String> {
+    let ui = Arc::clone(&ui);
+    tauri::async_runtime::spawn_blocking(move || ui.service.probe(address.trim()))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn sign_in(ui: tauri::State<Arc<Ui>>, mode: String, address: String, code: String) -> bool {
     let ready = ui.view.lock().unwrap().ready;
@@ -472,6 +505,7 @@ pub fn run(o: &Options) -> i32 {
         .manage(Arc::clone(&ui))
         .invoke_handler(tauri::generate_handler![
             get_state,
+            check_console,
             sign_in,
             retry,
             choose_game_folder,

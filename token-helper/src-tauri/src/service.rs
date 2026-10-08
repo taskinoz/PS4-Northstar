@@ -50,6 +50,12 @@ struct Serving {
     all_interfaces: bool,
 }
 
+#[derive(Clone, Copy, Default, Serialize)]
+pub struct ConsoleStatus {
+    pub found: bool,
+    pub paired: Option<bool>,
+}
+
 pub struct Service {
     pub settings: Settings,
     pub key: String,
@@ -171,13 +177,27 @@ impl Service {
 
     /// Whether Northstar is running at that address and listening for a sign-in.
     pub fn hello(&self, address: &str) -> bool {
+        self.probe(address).found
+    }
+
+    /// Whether Northstar is running at `address`, and whether it is paired with
+    /// this helper: it is when it holds this helper's key, and then signs in
+    /// without a code. `paired` is None for a game too old to say.
+    pub fn probe(&self, address: &str) -> ConsoleStatus {
         if !is_address(address) {
-            return false;
+            return ConsoleStatus::default();
         }
-        let request = agent(Duration::from_secs(3)).get(&self.console_url(address, "/northstar/hello"));
-        match http(request, None) {
-            Some((200, body)) => serde_json::from_str::<Value>(&body).map(|v| v["app"] == "NorthstarPS4").unwrap_or(false),
-            _ => false,
+        let mut request = agent(Duration::from_secs(3)).get(&self.console_url(address, "/northstar/hello"));
+        if !self.key.is_empty() {
+            request = request.set("X-NorthstarPS4-Key", &self.key);
+        }
+        let reply = match http(request, None) {
+            Some((200, body)) => serde_json::from_str::<Value>(&body).ok(),
+            _ => None,
+        };
+        match reply {
+            Some(v) if v["app"] == "NorthstarPS4" => ConsoleStatus { found: true, paired: v["paired"].as_bool() },
+            _ => ConsoleStatus::default(),
         }
     }
 
@@ -334,7 +354,7 @@ impl Service {
                         self.note(&format!("could not update {}: {error}", self.settings.output.display()));
                     }
                 }
-                self.note(&format!("gave {peer} a new token for account {}", identity.uid));
+                self.note(&format!("gave {peer} a new token"));
                 reply(request, 200, json!({"uid": identity.uid, "playerToken": identity.token}));
             }
             Err(error) => {

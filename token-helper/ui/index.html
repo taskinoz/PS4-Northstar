@@ -85,7 +85,9 @@
       <div class="row">
         <div class="status" id="ea"><span class="dot"></span><span id="ea-text">Starting...</span></div>
         <button class="ghost" id="retry" hidden>Try again</button>
+        <button class="ghost" id="show-account" aria-pressed="false" hidden>Show account ID</button>
       </div>
+      <div class="account" id="account-row" hidden>EA account ID <code id="account-id"></code></div>
     </section>
 
     <section class="tile" aria-labelledby="game-title">
@@ -99,7 +101,9 @@
             <small>In the game, select Launch Northstar. It shows an address and a 4-digit code.</small></span></label>
         <div class="fields" id="fields">
           <label class="field">Address<input type="text" id="address" autocomplete="off" spellcheck="false" placeholder="192.168.1.20"></label>
-          <label class="field">Code<input type="text" id="code" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="0000"></label>
+          <label class="field" id="code-field">Code<input type="text" id="code" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="0000"></label>
+          <p class="note" id="paired-note" hidden>This console is paired with this computer, so it needs no code.
+            The code is only for a console signing in here for the first time.</p>
         </div>
         <div class="actions">
           <button type="submit" class="primary" id="submit" disabled><span class="glyph cross-glyph" aria-hidden="true">✕</span>Sign in</button>

@@ -76,16 +76,69 @@ function mode() {
   return checked ? checked.value : "local";
 }
 
-function showFields() { $("fields").hidden = mode() !== "remote"; }
+// A console paired with this computer signs in with its key; a code is only for
+// a new one. The game says whether it is paired; one too old to say counts as
+// paired when it is the console this helper signed in last.
+let paired = "", checked = { address: "", status: null }, checkTimer = 0;
+function isPaired() {
+  const address = $("address").value.trim();
+  const status = checked.address === address ? checked.status : null;
+  if (status && status.found && status.paired !== null) return status.paired;
+  return paired !== "" && address === paired;
+}
+
+function showFields() {
+  $("fields").hidden = mode() !== "remote";
+  const pairedHere = isPaired();
+  $("code-field").hidden = pairedHere;
+  $("paired-note").hidden = !pairedHere;
+  $("fields").classList.toggle("paired", pairedHere);
+}
+
+function checkConsole() {
+  clearTimeout(checkTimer);
+  const address = $("address").value.trim();
+  if (mode() !== "remote" || !address || checked.address === address) return;
+  checkTimer = setTimeout(async () => {
+    try {
+      const status = await invoke("check_console", { address });
+      if ($("address").value.trim() === address) {
+        checked = { address, status };
+        showFields();
+      }
+    } catch (_) { /* the box stays as it was */ }
+  }, 400);
+}
+
+// The account ID stays hidden unless asked for, so a screenshot of this
+// window does not share it by accident.
+let accountShown = false, lastAccount = "";
+function showAccount(account) {
+  lastAccount = account;
+  $("show-account").hidden = !account;
+  $("show-account").textContent = accountShown ? "Hide account ID" : "Show account ID";
+  $("show-account").setAttribute("aria-pressed", String(accountShown));
+  $("account-row").hidden = !account || !accountShown;
+  $("account-id").textContent = accountShown ? account : "";
+}
 
 function renderSignIn(state) {
   setMessage($("ea"), state.ea, true);
   $("retry").hidden = !state.retry;
   $("retry").disabled = state.busy;
+  if ((state.paired || "") !== paired) {
+    // A sign-in just paired a console: ask again rather than trust the last answer.
+    paired = state.paired || "";
+    checked = { address: "", status: null };
+    checkConsole();
+  }
+  showAccount(state.account || "");
   if (state.form !== form) {
     form = state.form;
     document.querySelector(`input[name=mode][value=${state.mode === "remote" ? "remote" : "local"}]`).checked = true;
     if (state.address) $("address").value = state.address;
+    checked = { address: "", status: null }; // the helper may have just paired or unpaired it
+    checkConsole();
   }
   showFields(); // also when the choice changed without a change event (assistive tools)
   $("submit").disabled = !state.ready || state.busy;
@@ -94,7 +147,10 @@ function renderSignIn(state) {
   if (seq) lastSeq = seq;
 }
 
-for (const radio of document.querySelectorAll("input[name=mode]")) radio.addEventListener("change", showFields);
+for (const radio of document.querySelectorAll("input[name=mode]"))
+  radio.addEventListener("change", () => { showFields(); checkConsole(); });
+$("address").addEventListener("input", () => { showFields(); checkConsole(); });
+$("show-account").addEventListener("click", () => { accountShown = !accountShown; showAccount(lastAccount); });
 $("code").addEventListener("input", () => { $("code").value = $("code").value.replace(/\D/g, "").slice(0, 4); });
 $("signin").addEventListener("submit", async (event) => {
   event.preventDefault();

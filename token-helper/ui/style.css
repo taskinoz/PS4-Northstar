@@ -115,6 +115,13 @@ h2 { display: flex; gap: 10px; align-items: center; margin: 0 0 12px; font-size:
 
 .fields { display: grid; grid-template-columns: 1fr 110px; gap: 12px; margin: 6px 0 4px 42px; }
 .fields[hidden] { display: none; }
+.fields.paired { grid-template-columns: 1fr; }
+#paired-note { margin: 0; font-size: 13px; }
+
+.account { margin: 10px 0 0 42px; color: var(--muted); font-size: 13px; }
+.account[hidden] { display: none; }
+.account code { margin-left: 6px; padding: 2px 8px; border-radius: 6px; color: var(--text); background: var(--field);
+  border: 1px solid var(--tile-line); font: 13px/1.5 "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace; }
 .field { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
 input[type=text] {
   width: 100%; margin-top: 4px; padding: 9px 12px; border-radius: 10px; font: 15px/1.4 inherit; letter-spacing: normal;

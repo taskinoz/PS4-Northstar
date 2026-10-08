@@ -118,7 +118,17 @@ fn fake_console() -> (u16, Arc<Mutex<Vec<Value>>>) {
         let mut paired = String::new();
         for mut request in server.incoming_requests() {
             match request.url() {
-                "/northstar/hello" => respond(request, 200, json!({"app": "NorthstarPS4", "signedIn": false})),
+                "/northstar/hello" => {
+                    // Paired: the helper's key is the one this console accepted.
+                    let offered = request
+                        .headers()
+                        .iter()
+                        .find(|h| h.field.equiv("X-NorthstarPS4-Key"))
+                        .map(|h| h.value.as_str().to_string())
+                        .unwrap_or_default();
+                    let is_paired = !paired.is_empty() && offered == paired;
+                    respond(request, 200, json!({"app": "NorthstarPS4", "signedIn": false, "paired": is_paired}))
+                }
                 "/northstar/signin" => {
                     let mut body = String::new();
                     request.as_reader().read_to_string(&mut body).unwrap();
@@ -176,6 +186,7 @@ fn mints_signs_in_and_serves() {
     assert_eq!(&identity.token, tokens.lock().unwrap().last().unwrap());
 
     assert!(service.hello("127.0.0.1"));
+    assert_eq!(service.probe("127.0.0.1").paired, Some(false));
     let wrong = service.sign_in("127.0.0.1", "1111", &identity).unwrap_err();
     assert!(wrong.contains("wrong code"), "{wrong}");
     service.sign_in("127.0.0.1", "48-21", &identity).unwrap();
@@ -184,6 +195,7 @@ fn mints_signs_in_and_serves() {
     assert_eq!(push["uid"], FAKE_UID);
     assert_eq!(push["refreshKey"], state.key.as_str());
     assert_eq!(push["refreshUrl"], service.local_refresh_url().as_str());
+    assert_eq!(service.probe("127.0.0.1").paired, Some(true));
     service.sign_in("127.0.0.1", "", &identity).unwrap(); // paired: no code
 
     service.start_serving(false).unwrap();

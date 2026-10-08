@@ -37,7 +37,9 @@ PC Northstar signs you in through the EA app. A PS4 has no EA app, so the **Nort
    - **On a PS4, or in shadPS4 on another computer:** start the game and select **Launch Northstar**. The message shows the console's address and a 4-digit code, for example `enter 192.168.1.20 4821`. Type them into **Address** and **Code** and select **Sign in**. The game signs in at once, so select Launch Northstar again.
 4. Keep the helper open while you play; minimising it is fine. A sign-in lasts about a day. When Northstar refuses the old one, the game asks the helper for a new one and carries on. Each time, a line appears under **Activity**, but never the token. Closing the helper stops it.
 
-Next time, the helper remembers the console and signs it in without the code; just have the game running when you open the helper.
+Next time, the helper remembers the console and signs it in without the code; just have the game running when you open the helper. The code is only for a console signing in on that computer for the first time: the game tells the helper whether it's paired, and the window hides the Code box when it is, even if the console's address has changed. In the game, the address and code only appear when a code is needed.
+
+The window doesn't show your EA account ID unless you select **Show account ID**, so a screenshot of it doesn't share it by accident.
 
 **Things to know:**
 - **One sign-in at a time.** Each new sign-in ends the previous one for your account. Starting PC Northstar, or Northstar on any other machine, signs the game out, and it then asks the helper again. Using the helper ends a PC Northstar session the same way.
