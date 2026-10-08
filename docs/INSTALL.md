@@ -1,10 +1,14 @@
 # Installing PS4 Northstar
 
-PS4 Northstar brings [Northstar](https://northstar.tf), the Titanfall 2 multiplayer mod platform, to the PS4 version of the game running in the [shadPS4](https://shadps4.net) emulator. You get Northstar's server browser, custom servers and mods, with your Northstar progress, on the same servers PC players use.
+PS4 Northstar brings [Northstar](https://northstar.tf), the Titanfall 2 multiplayer mod platform, to the PS4 version of the game. You get Northstar's server browser, custom servers and mods, with your Northstar progress, on the same servers PC players use.
+
+There are two ways to run it:
+- **In the [shadPS4](https://shadps4.net) emulator** on a computer. This is the most tested way, and the token helper installs it for you. Start at [What you need](#what-you-need).
+- **On a PS4 with GoldHEN**, as a GoldHEN plugin. This is newer and has been tested on one console. See [On a PS4](#on-a-ps4).
 
 This guide is for players. To build from source, see [BUILDING.md](BUILDING.md); for everything you can do once it's installed, see [USING.md](USING.md).
 
-> **Status.** Tested in shadPS4 only. Nothing has been tested on a real PS4 yet.
+> **Status.** Tested most in shadPS4. On a real PS4, the menus, signing in, the server browser, joining and hosting (with a PC player joining) have been tested on one console.
 
 ## What you need
 
@@ -116,9 +120,89 @@ When reporting a problem, include shadPS4's log (`%APPDATA%\shadPS4\log\shad_log
 
 Developers, or anyone without the token helper, can install from the release files and the repository's scripts instead; see [BUILDING.md](BUILDING.md#installing-a-release-by-hand).
 
+## On a PS4
+
+On a PS4, PS4 Northstar runs as a [GoldHEN](https://github.com/GoldHEN/GoldHEN) plugin. The game stays installed as normal and nothing in it is changed: GoldHEN loads the runtime when Titanfall 2 starts, and the mods live in the console's storage.
+
+### What you need on a PS4
+
+- **A jailbroken PS4 running GoldHEN 2.3 or newer**, with these turned on in GoldHEN's settings:
+  - **Plugins** (the plugin loader);
+  - **FTP server**, on port **2121**. The console's address is under **Settings → Network → View Connection Status** (IP Address).
+- **Titanfall 2 `CUSA04013`, updated to the final patch** (version 1.13, build `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM`), installed normally from the disc or PlayStation Store. Other regions' versions have not been tested.
+- From the [releases page](https://github.com/taskinoz/PS4-Northstar/releases), in a release from after v1.0.0-rc1 (rc1's runtime can't run as a plugin):
+  - `northstar_ps4.prx`;
+  - `northstar-mods-1.31.13.zip`, `northstar-ps4-mods-<version>.zip` and `northstar-custom-ps4-rpaks-<version>.zip`;
+  - the **NorthstarPS4 Token Helper** for your computer, for signing in (see [What you need](#what-you-need)).
+- An **FTP client** on your computer, such as [FileZilla](https://filezilla-project.org).
+- **An EA account that owns Titanfall 2**, signed in to the **EA app** on a computer on the same network as the PS4.
+
+### Install on a PS4
+
+1. **Put the mods together.** On your computer, make an empty folder and extract the three zips into it, in this order, letting each replace files from the one before:
+   1. `northstar-mods-1.31.13.zip`
+   2. `northstar-ps4-mods-<version>.zip`
+   3. `northstar-custom-ps4-rpaks-<version>.zip`
+
+   You now have an `R2Northstar\mods` folder with `Northstar.Client`, `Northstar.Custom`, `Northstar.CustomServers`, `Northstar.PS4` and `Northstar.DirectConnect` in it.
+2. **Connect to the PS4** with the FTP client: the console's address, port `2121`, no user name or password.
+3. **Upload the mods.** Create the folder `/data/northstar_ps4`, and upload the `R2Northstar` folder into it, so that the mods end up in `/data/northstar_ps4/R2Northstar/mods`. It's about 100 MB.
+4. **Upload the runtime** to `/data/GoldHEN/plugins/northstar_ps4.prx`.
+5. **Turn the plugin on for Titanfall 2.** Download `/data/GoldHEN/plugins.ini`, add these two lines at the end, keeping what's already there, and upload it back:
+
+   ```ini
+   [CUSA04013]
+   /data/GoldHEN/plugins/northstar_ps4.prx
+   ```
+
+6. **Start Titanfall 2.** The first start after installing takes a little longer: the runtime copies Northstar.Custom's archive to a folder of its own once (`/data/northstar_ps4/runtime/vpk`), because the PS4's storage is case-sensitive and the game looks for it in lowercase.
+
+When you're done, the console has:
+
+```text
+/data/GoldHEN/
+  plugins.ini                         ([CUSA04013] added)
+  plugins/northstar_ps4.prx           the runtime
+/data/northstar_ps4/
+  R2Northstar/mods/                   Northstar's mods, Northstar.PS4, your mods
+  runtime/                            made by the runtime
+```
+
+### Sign in on a PS4
+
+1. On your computer, open the **EA app** and the **token helper**, and select the token helper's **Sign in** tab.
+2. On the PS4, select **Launch Northstar**. The message shows the console's address and a 4-digit code, for example `enter 192.168.1.20 4821`.
+3. In the token helper, select **On a PS4, or in shadPS4 on another computer**, type the address and code, and select **Sign in**. Select **Launch Northstar** again: you land in the Northstar lobby.
+4. The code is only needed the first time: the console and that computer are now paired, and the token helper hides the Code box for this console.
+5. **Keep the token helper open while you play.** Your sign-in lasts about a day; when it runs out, the game asks the token helper for a new one by itself. Signing in to Northstar somewhere else with the same EA account (for example on a PC) also replaces the PS4's sign-in. If the token helper isn't open then, Launch Northstar says so and asks you to start it.
+
+### Update on a PS4
+
+Upload the new release's `northstar_ps4.prx` over the old one, and the new mod zips as in step 1 to 3 of [Install on a PS4](#install-on-a-ps4), replacing files. Your settings, enabled mods, sign-in and mod save data are in `/data/northstar_ps4` and are kept.
+
+### Uninstall on a PS4
+
+Remove the `[CUSA04013]` lines from `/data/GoldHEN/plugins.ini`: the game starts as normal again. To remove everything, also delete `/data/GoldHEN/plugins/northstar_ps4.prx` and the `/data/northstar_ps4` folder (that also deletes your sign-in and settings).
+
+### Troubleshooting on a PS4
+
+| What you see | What to do |
+| --- | --- |
+| Titanfall 2 starts as normal, with no Launch Northstar | Check that GoldHEN's plugin loader is on, that `plugins.ini` has the `[CUSA04013]` lines, and that the runtime is at `/data/GoldHEN/plugins/northstar_ps4.prx`. GoldHEN has to be running: after a restart of the PS4, run it again before starting the game. |
+| The game crashes straight away | Check that the runtime is from a release after v1.0.0-rc1, and that the game has the final patch. |
+| The Mods list is empty | The mods aren't in `/data/northstar_ps4/R2Northstar/mods`. Check the folder names: the PS4's storage is case-sensitive. |
+| Launch Northstar says **Your Northstar sign-in has run out, or was replaced** | Open the token helper on your computer and select Launch Northstar again. |
+| You're disconnected with **Resetting invalid loadout** | You have Northstar's progression turned on, and a loadout uses items your account hasn't unlocked yet. The item is put back to its default, as on PC. |
+| The PS4 seems frozen after a crash | It is saving a crash report. Give it a minute before restarting. |
+
+Large mods have less room on a PS4 than in shadPS4: the game leaves little memory spare. If a mod stops the game from starting, remove it from `/data/northstar_ps4/R2Northstar/mods`.
+
+To report a problem, GoldHEN's kernel log (TCP port 3232 on the console) has the runtime's `[NorthstarPS4]` lines. Share only those lines, and check them first.
+
 ## What's not supported
 
-- Real PS4 hardware: untested.
+- Real PS4 hardware without GoldHEN, and Titanfall 2 versions other than `CUSA04013` at the final patch.
+- Installing on a PS4 with the token helper's Install tab: it installs into a shadPS4 game folder only. Install on a PS4 by hand, as above.
 - Plugins (Windows DLLs): can't run on a PS4.
 - Hosting dedicated servers on the PS4: you can host matches from your game, but not a dedicated server.
 - Mods whose RPak files are compressed, patch, model or UI-image paks: not readable yet.

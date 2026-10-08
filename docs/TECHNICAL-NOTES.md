@@ -6555,3 +6555,49 @@ game folder in `token-helper.json` (`gameFolder`) and uses the system folder pic
   - uninstall gave back the original eboot and kept the mods.
 - **The window**, driven with UI Automation: the remembered folder, the latest release, Install
   with progress, then Reinstall offered.
+
+## On a real PS4, as a GoldHEN plugin (2026-10-07/08)
+
+The runtime runs on a jailbroken PS4 (GoldHEN 2.3+, plugin loader on) for the retail game: a disc
+install of `CUSA04013` with PSN patch 1.13, the same build as the shadPS4 copy
+(`r2dlc11_598`, `gameversion.txt` v2.0.11.0), so every offset carries over. `plugins.ini` lists
+`/data/GoldHEN/plugins/northstar_ps4.prx` under `[CUSA04013]`. Nothing in the game is changed.
+
+Each fault below was found from GoldHEN's kernel log (TCP 3232), which carries the runtime's
+`[NorthstarPS4]` lines and the kernel's crash report (registers and the module map):
+
+| Fault on the PS4 | Cause | Fix |
+| --- | --- | --- |
+| SIGBUS in `vfprintf` at the first formatted log line | The PS4 calls DT_INIT with the stack 8 bytes off the ABI's alignment; `movaps` faulted | `force_align_arg_pointer` on `NorthstarPs4Init`, `plugin_load`, `plugin_unload` |
+| Stack overflow in mod discovery | The default thread stack is too small for `ParseModMetadata`'s 47 KiB frame | Runtime threads get their own stacks (below) |
+| 19 hooks refused, "branch outside rel32 range" | GoldHEN maps the PRX near `0x800000000`, gigabytes from the game's modules (`0x8xxxxxxx`) | `Reachable()` (`runtime_hardware.inl`): a 14-byte `jmp [rip]` stub in a page mapped within reach, searched from far below the modules (a nearer page took the address `client.prx` would load at), or in int3 padding |
+| Write fault one byte into the next page | A patched displacement at `client+0x1cfffb` straddled two 16 KiB pages; only the first was unprotected. shadPS4 does not enforce it | `PageSpan()` for every 5-byte patch |
+| `vstdlib`/`server` not found | Module names are `.prx` on the PS4, `.sprx` in shadPS4 | `ModuleNamed()` accepts both |
+| `client.prx` unmapped, black screen | The 64 MiB heap arena left too little flexible memory: the game loaded `server.prx`, then unloaded `client.prx` and stopped | Arena 16, then 8 MiB (peak 4.3 MiB in the menus) |
+| No thread for the server list | By the menus the game has used nearly all flexible memory, so a new thread gets no stack | 12 stacks of 256 KiB reserved at startup; a slot is reused a second after its thread finished |
+| Every HTTPS request failed `0x809517d5` | NanoSSL `-6101` ERR_MEM_ALLOC_FAIL: a 96 KiB SSL pool cannot parse Cloudflare's three ECDSA certificates | SSL/HTTP pools 384/256 KiB, created right after hooking |
+| Mod settings menu without its buttons | `/data` is case-sensitive; Northstar asks for `resource/UI/menus/panels/mod_setting.res` | The mod file index opens each file by its own spelling |
+| Northstar.Custom's VPK did not mount (fastball's BT animation missing) | `MountVPK` lowercases its path | The mod's `vpk/` is copied once to `/data/northstar_ps4/runtime/vpk/<mod>`; skipped where the lowercase path already resolves (Windows) |
+
+`/app0` is read-only on a PS4, so installed mods are read from `/data/northstar_ps4/R2Northstar`
+when it has a `mods` folder, else from `/app0/R2Northstar` as before; downloaded mods, settings and
+saves were already in `/data`. Free flexible memory was 332 MiB when the runtime started and about
+24-32 MiB once it had hooked the game.
+
+GoldHEN's FTP server reports a `.prx`'s decrypted size from `SIZE` and sends it decrypted on `RETR`;
+check an upload by the `LIST` size. Its kernel log serves one reader at a time and answers "failed
+to open klog" (-16) while an earlier connection is still held.
+
+Verified there: the main menu with Northstar's UI; network sign-in; Atlas own-server auth with the
+account's pdata (56 KB) and pdata written back; the server browser; a hosted match a PC player joined
+through the browser; fastball with BT. Sign-in follow-up from the same tests: when Atlas refuses the
+token and the token helper cannot renew it, Launch Northstar now fails with the reason (as on PC),
+since signing in elsewhere with the same EA account replaces the PS4's token. The hello reply says
+whether the asking helper is paired, so the helper hides the Code box for a paired console.
+
+Open: a "Resetting invalid loadout" kick on the PS4 host (`FailsItemLockedValidationCheck` for
+`redline_sight`, then `pas_fast_ads`, in pilot loadout 3) although `everything_unlocked` was 1. The
+only path past that ConVar is Northstar's progression mode (`DevEverythingUnlocked` returns false for
+a player with `ns_progression 1`), so the player most likely has progression on and the items are
+locked on the account, which PC would also reset. Not yet confirmed against the account on PC; if
+the items are unlocked there, the PS4 is misreading unlock data.

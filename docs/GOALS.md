@@ -1,6 +1,6 @@
 # Northstar PS4 feature-completeness goals
 
-Updated 2026-10-01. **This is the current tracker for every agent.** Earlier tracker states are in [GOALS-HISTORY-2026-09-17.md](GOALS-HISTORY-2026-09-17.md) and [GOALS-HISTORY-2026-09-27.md](GOALS-HISTORY-2026-09-27.md); they are not current status. Exact native profiles and experiments belong in [TECHNICAL-NOTES.md](TECHNICAL-NOTES.md), which is chronological: a later entry can correct an earlier one.
+Updated 2026-10-08. **This is the current tracker for every agent.** Earlier tracker states are in [GOALS-HISTORY-2026-09-17.md](GOALS-HISTORY-2026-09-17.md) and [GOALS-HISTORY-2026-09-27.md](GOALS-HISTORY-2026-09-27.md); they are not current status. Exact native profiles and experiments belong in [TECHNICAL-NOTES.md](TECHNICAL-NOTES.md), which is chronological: a later entry can correct an earlier one.
 
 ## Target and baseline
 
@@ -12,7 +12,7 @@ Authentication uses an **Atlas identity minted on a PC**: by the token helper th
 
 Emulator: shadPS4 nightly **`2b5666b3`** is still the documented build. Builds before `ca89b01` crash on every exit from a loaded map. Builds from `c6fa48c7` (#5110) up to the #5133 fix (`f6cd16e8`) draw levels black ([shadPS4#5124](https://github.com/shadps4-emu/shadPS4/issues/5124)). Newer builds with the fix (`4cbd23ef`, prerelease `94e21778`) have run the user's sessions, including remote servers; G25 tracks the longer testing needed before the documented build moves. Check `Run: Revision` in the log first when a crash or rendering fault appears.
 
-Status vocabulary: **Verified** = named acceptance scenario passed with evidence; **Partial** = useful implementation but incomplete behavior or validation; **Adapter** = registered fallback/stub; **Missing** = not implemented; **Investigating** = concrete failure being traced. Emulator and hardware results are separate; nothing here is verified on PS4 hardware.
+Status vocabulary: **Verified** = named acceptance scenario passed with evidence; **Partial** = useful implementation but incomplete behavior or validation; **Adapter** = registered fallback/stub; **Missing** = not implemented; **Investigating** = concrete failure being traced. Emulator and hardware results are separate; hardware results are listed on their own below.
 
 ## Current state (2026-10-04, release v1.0.0-rc1)
 
@@ -31,8 +31,16 @@ Verified on shadPS4 (details and build hashes in TECHNICAL-NOTES):
 - Thunderstore mods (2026-10-01): two weapon skin packs (converted RPak textures), a weapon sound pack and a HUD script mod with Mod Settings entries; mod `ConCommands`; bans; pad navigation in Mod Settings and the Mods list (details in G08, G12, G13, G22, G23).
 - Weapon and font-table KeyValues patches apply (2026-09-28): Northstar.Custom's six weapon patches and the font table. Before this the engine's file cache served those files without reaching the merge, so only the playlist (at boot) and `npc_pilot_elite` (at map load) were merged. A hosted Kodai match plays with all nine.
 
+Verified on a PS4 (2026-10-08, one console, GoldHEN plugin; see [INSTALL.md](INSTALL.md#on-a-ps4) and TECHNICAL-NOTES):
+
+- The runtime loads as a GoldHEN plugin for the retail game (disc install, final patch), with mods in `/data/northstar_ps4/R2Northstar`, and boots to the main menu with Northstar's UI.
+- Network sign-in through the token helper, Atlas own-server auth with the account's pdata, the server browser, and pdata written back on disconnect.
+- Hosting a private match that a PC player joined through the server browser; fastball with Northstar.Custom's BT (mod VPK mounted from a lowercase copy).
+- The sign-in-replaced message: when Atlas refuses the token and the token helper is closed, Launch Northstar says so; with the helper open it renews the token and continues.
+
 Known limits:
 
+- On a PS4 the game's flexible memory is nearly used up by the menus; the runtime keeps to an 8 MiB heap arena and 12 reserved thread stacks. Large mods have not been tried there.
 - Atlas-authenticated host and remote-player persistence uses READY_REMOTE and writes changed data back; insecure fallback remains policy-controlled. Early-leave and Atlas-unreachable failure tests remain.
 - Mod RPaks load in normal builds, but only as PS4-layout copies made by the profile tools' `-ConvertRpaksForPs4`; a PC-layout pak copied in by hand is refused at runtime. The converter handles uncompressed v7 texture/material paks and refuses compressed, patch, array and other asset layouts (models, UI images, shaders). Two texture-only Thunderstore skin packs are tested (G12); none of the archived 4K or model-replacing packs are.
 - A live reload cannot unload the localisation of mods it disables (the engine's full reload races other threads and was replaced); those tokens stay until the next boot.

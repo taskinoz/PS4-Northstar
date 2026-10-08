@@ -7,7 +7,7 @@ It runs Northstar's own, unchanged mods through a native PS4 runtime. You get:
 - **Hosting:** host matches that appear in the browser.
 - **Mods:** install mods as on PC, and join servers that download their mods.
 
-**Status:** tested in shadPS4 only, not on a real PS4.
+**Status:** tested most in shadPS4. It also runs on a real PS4 with GoldHEN, as a plugin: tested on one console ([installing on a PS4](docs/INSTALL.md#on-a-ps4)).
 
 ## Guides
 
@@ -19,7 +19,7 @@ Downloads, with notes and known issues for each version, are on the [releases pa
 
 ## How it works
 
-- **The runtime:** a PS4 module, `bin/ps4_retail/northstar_ps4.prx`. A few bytes added to the game's `eboot.bin` make it load the runtime.
+- **The runtime:** a PS4 module, `northstar_ps4.prx`. In shadPS4 it sits at `bin/ps4_retail/northstar_ps4.prx`, and a few bytes added to the game's `eboot.bin` make it load the runtime. On a PS4, GoldHEN loads it as a plugin, and the mods are in `/data/northstar_ps4/R2Northstar`.
 - **What the runtime does:**
   - serves mod files from `R2Northstar/mods` through the game's own filesystem;
   - hooks the UI, CLIENT and SERVER script VMs to run Northstar's scripts and natives;
