@@ -1,13 +1,13 @@
 # PS4 Northstar
 
-[Northstar](https://northstar.tf), the Titanfall 2 multiplayer mod platform, for the PS4 version of Titanfall 2 running in the [shadPS4](https://shadps4.net) emulator (`CUSA04013`, final patch `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM`).
+[Northstar](https://northstar.tf), the Titanfall 2 multiplayer mod platform, for the PS4 version of Titanfall 2, in the [shadPS4](https://shadps4.net) emulator or on a PS4 with GoldHEN (`CUSA04013`, final patch `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM`).
 
 It runs Northstar's own, unchanged mods through a native PS4 runtime. You get:
 - **Northstar's server browser:** join PC and PS4 servers, with your Northstar account and progress.
 - **Hosting:** host matches that appear in the browser.
 - **Mods:** install mods as on PC, and join servers that download their mods.
 
-**Status:** tested most in shadPS4. It also runs on a real PS4 with GoldHEN, as a plugin: tested on one console ([installing on a PS4](docs/INSTALL.md#on-a-ps4)).
+**Status:** tested most in shadPS4. It also runs on a real PS4 with GoldHEN, as a plugin: tested on a standard PS4 on firmware 9.00 ([installing on a PS4](docs/INSTALL.md#on-a-ps4)).
 
 ## Guides
 

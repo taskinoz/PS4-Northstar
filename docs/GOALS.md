@@ -31,7 +31,7 @@ Verified on shadPS4 (details and build hashes in TECHNICAL-NOTES):
 - Thunderstore mods (2026-10-01): two weapon skin packs (converted RPak textures), a weapon sound pack and a HUD script mod with Mod Settings entries; mod `ConCommands`; bans; pad navigation in Mod Settings and the Mods list (details in G08, G12, G13, G22, G23).
 - Weapon and font-table KeyValues patches apply (2026-09-28): Northstar.Custom's six weapon patches and the font table. Before this the engine's file cache served those files without reaching the merge, so only the playlist (at boot) and `npc_pilot_elite` (at map load) were merged. A hosted Kodai match plays with all nine.
 
-Verified on a PS4 (2026-10-08, one console, GoldHEN plugin; see [INSTALL.md](INSTALL.md#on-a-ps4) and TECHNICAL-NOTES):
+Verified on a PS4 (2026-10-08, one console: a standard PS4 on firmware 9.00, GoldHEN plugin; see [INSTALL.md](INSTALL.md#on-a-ps4) and TECHNICAL-NOTES):
 
 - The runtime loads as a GoldHEN plugin for the retail game (disc install, final patch), with mods in `/data/northstar_ps4/R2Northstar`, and boots to the main menu with Northstar's UI.
 - Network sign-in through the token helper, Atlas own-server auth with the account's pdata, the server browser, and pdata written back on disconnect.

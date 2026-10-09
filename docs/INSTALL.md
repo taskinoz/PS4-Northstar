@@ -4,11 +4,11 @@ PS4 Northstar brings [Northstar](https://northstar.tf), the Titanfall 2 multipla
 
 There are two ways to run it:
 - **In the [shadPS4](https://shadps4.net) emulator** on a computer. This is the most tested way, and the token helper installs it for you. Start at [What you need](#what-you-need).
-- **On a PS4 with GoldHEN**, as a GoldHEN plugin. This is newer and has been tested on one console. See [On a PS4](#on-a-ps4).
+- **On a PS4 with GoldHEN**, as a GoldHEN plugin. This is newer and has been tested on one console, a standard PS4 on firmware 9.00. See [On a PS4](#on-a-ps4).
 
 This guide is for players. To build from source, see [BUILDING.md](BUILDING.md); for everything you can do once it's installed, see [USING.md](USING.md).
 
-> **Status.** Tested most in shadPS4. On a real PS4, the menus, signing in, the server browser, joining and hosting (with a PC player joining) have been tested on one console.
+> **Status.** Tested most in shadPS4. On a real PS4, the menus, signing in, the server browser, joining and hosting (with PC and shadPS4 players joining) have been tested on one console: a standard PS4 on firmware 9.00.
 
 ## What you need
 
@@ -126,7 +126,7 @@ On a PS4, PS4 Northstar runs as a [GoldHEN](https://github.com/GoldHEN/GoldHEN) 
 
 ### What you need on a PS4
 
-- **A jailbroken PS4 running GoldHEN 2.3 or newer**, with these turned on in GoldHEN's settings:
+- **A jailbroken PS4 running GoldHEN 2.3 or newer**. Tested on a standard PS4 (not Slim or Pro) on firmware 9.00; other models and firmware versions that GoldHEN supports are untested. Turn these on in GoldHEN's settings:
   - **Plugins** (the plugin loader);
   - **FTP server**, on port **2121**. The console's address is under **Settings → Network → View Connection Status** (IP Address).
 - **Titanfall 2 `CUSA04013`, updated to the final patch** (version 1.13, build `R2PS4_r2dlc11_598_CL297590_2017_12_05_12_36_PM`), installed normally from the disc or PlayStation Store. Other regions' versions have not been tested.
