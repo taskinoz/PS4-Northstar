@@ -1,7 +1,10 @@
-# Local, machine-specific configuration. Copy config/project.example.json
-# to config/local.json and edit it instead of committing paths from your
-# own machine.
-config/local.json
+# This machine's settings for scripts/: copy .env.example to .env.
+.env
+config/
+
+# Agent session files; the project's skills are tracked.
+.claude/*
+!.claude/skills/
 
 # Generated build output and the staging/test workspace. Everything here is
 # reproducible from tracked source plus the tools/ dependencies below.

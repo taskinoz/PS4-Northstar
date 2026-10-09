@@ -1,6 +1,3 @@
-#if defined(NORTHSTAR_PS4_ENABLE_M6_FS_OVERLAY) && !defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
-#define NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA 1
-#endif
 #include "northstar_ps4/runtime.h"
 #include "northstar_ps4/mod_catalog.h"
 #include "northstar_ps4/mod_settings.h"
@@ -81,7 +78,7 @@ static MuslLibcState& g_muslLibc = __libc;
 // sceKernelMapNamedDirectMemory with in_addr), and under shadPS4 an mmap from
 // another thread in between can be handed that range: one boot logged this
 // module's mmap returning 0x23af7c000, a game thread failing "Unable to map
-// 0xc000 bytes at address 0x23af7c000", and a crash (2026-10-02). So the
+// 0xc000 bytes at address 0x23af7c000", and a crash. So the
 // module maps its arena once, while the game is still starting, and musl's
 // internal __mmap/__munmap (which resolve to these definitions instead of
 // libc.a's) serve anonymous requests from it in 16 KiB pages. Anything else,
@@ -92,7 +89,7 @@ constexpr std::size_t kPage = 0x4000;
 // On a PS4 the arena comes out of the game's flexible memory budget, which
 // has about 45 MiB left once client.prx is loaded: a 64 MiB arena left too
 // little for server.prx, and the game unloaded client.prx and stopped on a
-// black screen (2026-10-07). 16 MiB peaked at 4.3 MiB in the menus; the rest
+// black screen. 16 MiB peaked at 4.3 MiB in the menus; the rest
 // is left to the game, which needs it to load maps. The runtime's use is
 // logged as it grows, and a full arena falls back to mmap.
 constexpr std::size_t kArenaSize = 8u * 1024 * 1024;
@@ -230,10 +227,6 @@ constexpr std::uintptr_t kClientRunUiScriptRegistrationVa = 0x2f1554;
 constexpr std::uintptr_t kClientNativeRegistrationBlockVa = 0x2e7ef0;
 constexpr std::uintptr_t kClientNativeRegistrationCallerVa = 0x2e1a15;
 constexpr std::uintptr_t kClientRegistrationVmGlobalVa = 0x19d4fe8;
-constexpr std::uintptr_t kClientUiRegistrationTreeAVa = 0x1e42240;
-constexpr std::uintptr_t kClientUiRegistrationTreeBVa = 0x1e422b0;
-constexpr std::uintptr_t kClientRunUiScriptRecordVa = 0x19d3860;
-constexpr std::uintptr_t kClientRunUiScriptNameVa = 0x8e673a;
 constexpr std::uintptr_t kClientFindUiFunctionVa = 0x6799f0;
 constexpr std::uintptr_t kClientUiRegistrationStartupVa = 0x31e23f;
 constexpr std::int32_t kClientUiTreeBExpectedCountA = 135;
@@ -270,48 +263,6 @@ constexpr std::uint8_t kClientUiRegistrationStartupPreimage[] = {
     0x48, 0x8d, 0x35, 0xfa, 0x3f, 0xb2, 0x01, 0xe8,
     0x95, 0xf8, 0x35, 0x00, 0x48, 0x8b, 0x3d, 0x66,
 };
-#if defined(NORTHSTAR_PS4_ENABLE_M6_SCRIPT_PROBE)
-constexpr std::uintptr_t kClientUiInitVa = 0x31dc50;
-constexpr std::uintptr_t kClientRsonLoaderVa = 0x2f5310;
-constexpr std::uintptr_t kClientScriptSystemGlobalVa = 0x1afbfc0;
-constexpr std::uintptr_t kClientScriptCountTableVa = 0x1af4780;
-constexpr std::uintptr_t kClientScriptPoolCurVa = 0x2564ea8;
-constexpr std::uintptr_t kClientScriptPoolEndVa = 0x2564eb0;
-constexpr std::uint8_t kClientUiInitPreimage[] = {
-    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
-    0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x83, 0xec,
-    0x18, 0x48, 0x8b, 0x0d, 0x18, 0x4b, 0x78, 0x00,
-};
-constexpr std::uint8_t kClientRsonLoaderPreimage[] = {
-    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
-    0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x81, 0xec,
-    0xb8, 0x40, 0x00, 0x00, 0x48, 0x8b, 0x05, 0x55,
-};
-// Candidate "CompileList(owner, ctx, paths, count)" used by the client's own
-// boot-time RSON-driven script loader (references kClientScriptCountTableVa
-// internally at VA 0x1af4780, confirmed by static disassembly). Never proven
-// safe to call from a thread the engine did not create: see
-// kClientCompileListGatePtrVa below and docs/TECHNICAL-NOTES.md run
-// 20260806-214046.
-constexpr std::uintptr_t kClientCompileListVa = 0x3153f0;
-constexpr std::uint8_t kClientCompileListPreimage[] = {
-    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
-    0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x81, 0xec,
-};
-// Global pointer-to-object dereferenced by CompileList before touching each
-// path (client VA 0x315470 / 0x315500: `mov rdi,[this]; mov rax,[rdi];
-// call [rax+0x58]`, args esi=-1 edx=0, matching a lock/wait-style virtual
-// call). The object and its vtable are populated by the time the engine's
-// own boot compile pass runs (152 real UI scripts already loaded by the time
-// our probe polls), but vtable slot +0x58 was observed null when this same
-// call executed on our own detached NorthstarPS4 thread instead of the
-// thread the engine used for its own compile pass. Gate on the full object
-// -> vtable -> slot chain and refuse rather than dereference a null call
-// target.
-constexpr std::uintptr_t kClientCompileListGatePtrVa = 0xb2f0d0;
-constexpr std::uintptr_t kClientCompileListGateVtableSlot = 0x58;
-#endif
-#if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
 // PS4 localize.prx (CUSA04013 2017-12-05 build). CLocalise::AddFile is called
 // directly (this=rdi, fileName=rsi, pathId=rdx, includeFallbackSearchPaths=ecx);
 // it resolves a %language% token internally and loads the file through the engine
@@ -331,7 +282,6 @@ constexpr std::uint8_t kLocalizeAddFilePreimage[] = {
 constexpr std::uint8_t kLocalizeAccessorPreimage[] = {
     0x48, 0x8d, 0x05, 0xe9, 0x82, 0x01, 0x00, 0xc3,
 };
-#endif
 
 
 
@@ -366,33 +316,6 @@ void LogModule(OrbisKernelModule handle, const OrbisKernelModuleInfo& info) noex
 
 #include "runtime_hardware.inl"
 
-void ProbeRegistrationExports(
-    OrbisKernelModule engineHandle, OrbisKernelModule vstdlibHandle) noexcept {
-    constexpr const char* candidates[] = {
-        "ConVar_Register",
-        "_ZN6ConVarC1EPKcS1_iS1_",
-        "_ZN6ConVarC2EPKcS1_iS1_",
-        "_ZN6ConVarC1EPKcS1_iS1_bfbfPFvPS_S1_fE",
-        "_ZN6ConVarC2EPKcS1_iS1_bfbfPFvPS_S1_fE",
-    };
-    const struct {
-        const char* name;
-        OrbisKernelModule handle;
-    } modules[] = {
-        {"engine", engineHandle},
-        {"vstdlib", vstdlibHandle},
-    };
-
-    for (const auto& module : modules) {
-        for (const char* candidate : candidates) {
-            void* address = nullptr;
-            const int result = sceKernelDlsym(
-                static_cast<int32_t>(module.handle), candidate, &address);
-            LogFormat("[NorthstarPS4] registration export module=%s symbol=%s result=0x%x address=%p\n",
-                module.name, candidate, result, address);
-        }
-    }
-}
 bool ValidateEnginePreimage(
     std::uintptr_t engineBase, std::size_t engineSize, std::uintptr_t va,
     const std::uint8_t* expected, std::size_t expectedSize) noexcept {
@@ -402,468 +325,6 @@ bool ValidateEnginePreimage(
         expectedSize) == 0;
 }
 
-#if defined(NORTHSTAR_PS4_ENABLE_DIAGNOSTIC_UI_NATIVE)
-alignas(16) std::uint8_t gDiagnosticUiRecords[(kClientUiTreeBExpectedCountA + 1) * 0x68]{};
-void* gOriginalUiRecords = nullptr;
-std::int32_t gOriginalUiRecordCount = 0;
-bool gDiagnosticUiRecordInstalled = false;
-std::uintptr_t gDiagnosticUiClientBase = 0;
-void* gDiagnosticUiInternalVm = nullptr;
-void* gDiagnosticUiTable = nullptr;
-
-std::int64_t DiagnosticUiNative(void*) noexcept;
-
-bool InsertDiagnosticNativeIntoVm(
-    std::uintptr_t clientBase, void* uiVm) noexcept {
-    if (uiVm == nullptr) return false;
-    void* internalVm = *reinterpret_cast<void**>(
-        reinterpret_cast<std::uintptr_t>(uiVm) + 0x50);
-    if (internalVm == nullptr) return false;
-    void* stringTable = *reinterpret_cast<void**>(
-        reinterpret_cast<std::uintptr_t>(internalVm) + 0x4048);
-    void* table = *reinterpret_cast<void**>(
-        reinterpret_cast<std::uintptr_t>(internalVm) + 0x40d0);
-    if (stringTable == nullptr || table == nullptr) return false;
-
-    using InternFn = void* (*)(void*, const char*, std::int32_t);
-    using NewClosureFn = std::uintptr_t (*)(void*, void*, std::int32_t);
-    using NewSlotFn = std::int32_t (*)(void*, const void*, const void*);
-    auto intern = reinterpret_cast<InternFn>(clientBase + 0x6a96a0);
-    auto newClosure = reinterpret_cast<NewClosureFn>(clientBase + 0x683730);
-    auto newSlot = reinterpret_cast<NewSlotFn>(clientBase + 0x6ab3e0);
-
-    static constexpr char name[] = "NSStage2Ping";
-    void* const internedName = intern(stringTable, name, -1);
-    if (internedName == nullptr) return false;
-    const std::uintptr_t slotAddress =
-        newClosure(uiVm, reinterpret_cast<void*>(&DiagnosticUiNative), 0);
-    std::uintptr_t closureRecord = 0;
-    if (slotAddress > 0x100000000ULL && slotAddress < 0x40000000000ULL) {
-        closureRecord =
-            *reinterpret_cast<const std::uintptr_t*>(slotAddress + 8);
-    }
-    if (closureRecord == 0) return false;
-    const std::uint64_t key[2] = {
-        0x8000010ULL, reinterpret_cast<std::uintptr_t>(internedName),
-    };
-    const std::uint64_t value[2] = { 0x8000200ULL, closureRecord };
-    const std::int32_t result = newSlot(table, key, value);
-    LogFormat("[NorthstarPS4] UI native ensure-in-vm uiVm=%p internal=%p t40d0=%p str=%p result=%d\n",
-        uiVm, internalVm, table, internedName, result);
-    return true;
-}
-
-std::int64_t DiagnosticUiNative(void*) noexcept {
-    LogFormat("[NorthstarPS4] NSStage2Ping invoked\n");
-    if (gDiagnosticUiClientBase != 0) {
-        auto ownerSlot = reinterpret_cast<void**>(
-            gDiagnosticUiClientBase + kClientScriptOwnerGlobalVa);
-        void* owner = *ownerSlot;
-        void* uiVm = owner != nullptr
-            ? *reinterpret_cast<void**>(reinterpret_cast<std::uintptr_t>(owner) + 8)
-            : nullptr;
-        void* internalVm = uiVm != nullptr
-            ? *reinterpret_cast<void**>(reinterpret_cast<std::uintptr_t>(uiVm) + 0x50)
-            : nullptr;
-        void* currentTable = internalVm != nullptr
-            ? *reinterpret_cast<void**>(reinterpret_cast<std::uintptr_t>(internalVm) + 0x40d0)
-            : nullptr;
-        LogFormat("[NorthstarPS4] UI native invoke context owner=%p uiVm=%p internal=%p table=%p handledInternal=%p handledTable=%p\n",
-            owner, uiVm, internalVm, currentTable,
-            gDiagnosticUiInternalVm, gDiagnosticUiTable);
-        if (internalVm != nullptr &&
-            (internalVm != gDiagnosticUiInternalVm || currentTable != gDiagnosticUiTable)) {
-            LogFormat("[NorthstarPS4] UI native invoke saw new VM context, inserting\n");
-            InsertDiagnosticNativeIntoVm(gDiagnosticUiClientBase, uiVm);
-            gDiagnosticUiInternalVm = internalVm;
-            gDiagnosticUiTable = currentTable;
-        }
-    }
-    return 0;
-}
-
-bool InstallDiagnosticUiRecord(
-    std::uintptr_t clientBase, std::size_t clientSpan) noexcept {
-    const bool dispatcherMatches = ValidateEnginePreimage(
-        clientBase, clientSpan, 0x67dae0,
-        reinterpret_cast<const std::uint8_t*>("\x55\x48\x89\xe5\x41\x57\x41\x56"),
-        8);
-    const bool registerMatches = ValidateEnginePreimage(
-        clientBase, clientSpan, kClientRegisterSquirrelFuncVa,
-        kClientRegisterSquirrelFuncPreimage,
-        sizeof(kClientRegisterSquirrelFuncPreimage));
-    const bool startupMatches = ValidateEnginePreimage(
-        clientBase, clientSpan, kClientUiRegistrationStartupVa,
-        kClientUiRegistrationStartupPreimage,
-        sizeof(kClientUiRegistrationStartupPreimage));
-    LogFormat("[NorthstarPS4] UI native install gate dispatcher=%d register=%d startup=%d\n",
-        dispatcherMatches ? 1 : 0, registerMatches ? 1 : 0,
-        startupMatches ? 1 : 0);
-    if (!dispatcherMatches || !registerMatches || !startupMatches ||
-        kClientUiRegistrationTreeBVa + 0x60 > clientSpan)
-        return false;
-
-    auto ownerSlot = reinterpret_cast<void**>(
-        clientBase + kClientScriptOwnerGlobalVa);
-    auto tree = reinterpret_cast<std::uint8_t*>(
-        clientBase + kClientUiRegistrationTreeBVa);
-    auto recordsSlot = reinterpret_cast<void**>(tree + 0x20);
-    auto countSlot = reinterpret_cast<std::int32_t*>(tree + 0x38);
-    auto otherRecordsSlot = reinterpret_cast<void**>(tree + 0x40);
-    auto otherCountSlot = reinterpret_cast<std::int32_t*>(tree + 0x58);
-    std::int32_t lastStateCount = -1;
-    void* lastStateRecords = reinterpret_cast<void*>(~std::uintptr_t{0});
-    for (std::uint32_t attempt = 0; attempt < 600; ++attempt) {
-        if (*ownerSlot != nullptr) {
-            LogFormat("[NorthstarPS4] UI native install refused: UI owner already exists\n");
-            return false;
-        }
-        const std::int32_t currentCount = *countSlot;
-        void* const currentRecords = *recordsSlot;
-        if (currentCount != lastStateCount || currentRecords != lastStateRecords) {
-            LogFormat("[NorthstarPS4] UI native install state attempt=%u list=A count=%d records=%p otherList=B otherCount=%d otherRecords=%p\n",
-                attempt, currentCount, currentRecords, *otherCountSlot,
-                *otherRecordsSlot);
-            lastStateCount = currentCount;
-            lastStateRecords = currentRecords;
-        }
-        if (currentCount == kClientUiTreeBExpectedCountA)
-            break;
-        if (attempt == 599) {
-            LogFormat("[NorthstarPS4] UI native install refused: tree B A-list not ready count=%d\n",
-                currentCount);
-            return false;
-        }
-        sceKernelUsleep(10000);
-    }
-
-    gOriginalUiRecords = *recordsSlot;
-    gOriginalUiRecordCount = *countSlot;
-    std::memcpy(gDiagnosticUiRecords, gOriginalUiRecords,
-        static_cast<std::size_t>(gOriginalUiRecordCount) * 0x68);
-    std::uint8_t* record =
-        gDiagnosticUiRecords + gOriginalUiRecordCount * 0x68;
-    std::memset(record, 0, 0x68);
-    static constexpr char name[] = "NSStage2Ping";
-    static constexpr char cppName[] = "Script_NSStage2Ping";
-    static constexpr char help[] = "Northstar PS4 Stage 2 UI diagnostic";
-    static constexpr char returnType[] = "void";
-    static constexpr char argTypes[] = "";
-    *reinterpret_cast<const void**>(record + 0x00) = name;
-    *reinterpret_cast<const void**>(record + 0x08) = cppName;
-    *reinterpret_cast<const void**>(record + 0x10) = help;
-    *reinterpret_cast<const void**>(record + 0x18) = returnType;
-    *reinterpret_cast<const void**>(record + 0x20) = argTypes;
-    *reinterpret_cast<const void**>(record + 0x60) =
-        reinterpret_cast<const void*>(&DiagnosticUiNative);
-    LogFormat("[NorthstarPS4] UI native record uses exact zero-initialized PS4 shape\n");
-
-    *recordsSlot = gDiagnosticUiRecords;
-    *countSlot = gOriginalUiRecordCount + 1;
-    gDiagnosticUiRecordInstalled = true;
-    LogFormat("[NorthstarPS4] UI native record installed before owner creation original=%p count=%d replacement=%p count=%d\n",
-        gOriginalUiRecords, gOriginalUiRecordCount, gDiagnosticUiRecords,
-        gOriginalUiRecordCount + 1);
-    if (gOriginalUiRecordCount > 1) {
-        const std::uintptr_t first = *reinterpret_cast<const std::uintptr_t*>(
-            gDiagnosticUiRecords);
-        const std::uintptr_t lastReal = *reinterpret_cast<const std::uintptr_t*>(
-            gDiagnosticUiRecords + (gOriginalUiRecordCount - 1) * 0x68);
-        LogFormat("[NorthstarPS4] UI native records first=%p lastOriginal=%p our=%p name=%s\n",
-            reinterpret_cast<void*>(first), reinterpret_cast<void*>(lastReal),
-            reinterpret_cast<const void*>(*reinterpret_cast<const void**>(record + 0x00)),
-            name);
-    }
-    return true;
-}
-
-void VerifyAndRestoreDiagnosticUiRecord(
-    std::uintptr_t clientBase, std::size_t clientSpan, void* uiVm) noexcept {
-    if (!gDiagnosticUiRecordInstalled) return;
-    const bool registerSequenceMatches =
-        ValidateEnginePreimage(clientBase, clientSpan, kClientUiVmLoadVa,
-            kClientUiVmLoadPreimage, sizeof(kClientUiVmLoadPreimage)) &&
-        ValidateEnginePreimage(clientBase, clientSpan, kClientRegisterSquirrelFuncVa,
-            kClientRegisterSquirrelFuncPreimage,
-            sizeof(kClientRegisterSquirrelFuncPreimage));
-    if (!registerSequenceMatches) {
-        LogFormat("[NorthstarPS4] UI native verify refused: register sequence preimage mismatch gate=0\n");
-        return;
-    }
-
-    auto tree = reinterpret_cast<std::uint8_t*>(
-        clientBase + kClientUiRegistrationTreeBVa);
-    auto recordsSlot = reinterpret_cast<void**>(tree + 0x20);
-    auto countSlot = reinterpret_cast<std::int32_t*>(tree + 0x38);
-    auto otherRecordsSlot = reinterpret_cast<void**>(tree + 0x40);
-    auto otherCountSlot = reinterpret_cast<std::int32_t*>(tree + 0x58);
-    void* previousRecords = reinterpret_cast<void*>(~std::uintptr_t{0});
-    std::int32_t previousCount = -1;
-
-    auto logTree = [&](const char* tag) {
-        const std::int32_t countA = *countSlot;
-        void* const recordsA = *recordsSlot;
-        const std::int32_t countB = *otherCountSlot;
-        void* const recordsB = *otherRecordsSlot;
-        LogFormat("[NorthstarPS4] UI native %s treeB recordsA=%p countA=%d recordsB=%p countB=%d ours=%d\n",
-            tag, recordsA, countA, recordsB, countB,
-            recordsA == reinterpret_cast<void*>(gDiagnosticUiRecords) ? 1 : 0);
-    };
-
-    sceKernelUsleep(50000);
-
-    static constexpr char name[] = "NSStage2Ping";
-    constexpr const char* probeTargets[] = {
-        name, "SetImage", "RuiSetImage", "Hud_GetChild",
-    };
-    constexpr std::size_t targetCount =
-        sizeof(probeTargets) / sizeof(probeTargets[0]);
-
-    auto internalVm = reinterpret_cast<void*>(
-        *reinterpret_cast<std::uintptr_t*>(
-            reinterpret_cast<std::uintptr_t>(uiVm) + 0x50));
-    auto vmField = [&](std::uintptr_t offset) -> void* {
-        if (internalVm == nullptr) return nullptr;
-        return *reinterpret_cast<void**>(
-            reinterpret_cast<std::uintptr_t>(internalVm) + offset);
-    };
-    void* stringTable = vmField(0x4048);
-    void* templateVm = vmField(0x4168);
-    const struct {
-        const char* tag;
-        std::uintptr_t offset;
-        void* table;
-    } tables[] = {
-        {"t40d0", 0x40d0, vmField(0x40d0)},
-        {"t40e0", 0x40e0, vmField(0x40e0)},
-        {"t40f0", 0x40f0, vmField(0x40f0)},
-        {"t4120", 0x4120, vmField(0x4120)},
-        {"t4180", 0x4180, vmField(0x4180)},
-        {"t4188", 0x4188, vmField(0x4188)},
-        {"t4190", 0x4190, vmField(0x4190)},
-        {"t41b0", 0x41b0, vmField(0x41b0)},
-    };
-    LogFormat("[NorthstarPS4] UI native vm uiVm=%p internal=%p strings=%p t4168=%p\n",
-        uiVm, internalVm, stringTable, templateVm);
-
-    using InternFn = void* (*)(void*, const char*, std::int32_t);
-    using NewClosureFn = std::uintptr_t (*)(void*, void*, std::int32_t);
-    using NewSlotFn = std::int32_t (*)(void*, const void*, const void*);
-    auto intern = reinterpret_cast<InternFn>(clientBase + 0x6a96a0);
-    auto newClosure = reinterpret_cast<NewClosureFn>(clientBase + 0x683730);
-    auto newSlot = reinterpret_cast<NewSlotFn>(clientBase + 0x6ab3e0);
-    const std::uintptr_t callbackVa =
-        reinterpret_cast<std::uintptr_t>(&DiagnosticUiNative);
-    auto globalHashTable = reinterpret_cast<const std::uintptr_t*>(
-        clientBase + 0x25859d0);
-
-    auto isPlausiblePointer = [](std::uintptr_t value) -> bool {
-        return value > 0x100000000ULL && value < 0x40000000000ULL;
-    };
-    auto globalHashScan = [&]() -> std::int32_t {
-        std::int32_t hits = 0;
-        for (std::int32_t i = 0; i < 0x2000; ++i) {
-            if (globalHashTable[i * 2 + 1] == callbackVa) ++hits;
-        }
-        return hits;
-    };
-    struct TableLayout {
-        bool valid;
-        std::uint32_t numBuckets;
-        std::uint32_t used;
-        std::uintptr_t buckets;
-    };
-    auto tableLayout = [&](void* table) -> TableLayout {
-        if (table == nullptr) return {false, 0, 0, 0};
-        const auto fields = reinterpret_cast<const std::uintptr_t*>(table);
-        const std::uintptr_t buckets = fields[7];
-        const std::uint32_t numBuckets = static_cast<std::uint32_t>(fields[8]);
-        const std::uint32_t used = static_cast<std::uint32_t>(fields[8] >> 32);
-        const bool valid = numBuckets >= 1 && numBuckets <= 0x400000 &&
-            used <= numBuckets && isPlausiblePointer(buckets);
-        return {valid, numBuckets, used, buckets};
-    };
-    auto dumpTable = [&](const char* tag, void* table) {
-        const TableLayout layout = tableLayout(table);
-        LogFormat("[NorthstarPS4] UI native table %s=%p buckets=%p num=%u used=%u valid=%d\n",
-            tag, table, reinterpret_cast<void*>(layout.buckets),
-            layout.numBuckets, layout.used, layout.valid ? 1 : 0);
-    };
-    void* targetStrings[targetCount]{};
-    for (std::size_t i = 0; i < targetCount; ++i) {
-        if (intern != nullptr && stringTable != nullptr) {
-            targetStrings[i] = intern(stringTable, probeTargets[i], -1);
-        }
-    }
-    auto scanTable = [&](const char* tag, void* table) {
-        const TableLayout layout = tableLayout(table);
-        if (!layout.valid) {
-            LogFormat("[NorthstarPS4] UI native scan %s invalid table=%p\n",
-                tag, table);
-            return;
-        }
-        std::int32_t bucketHits[targetCount]{};
-        for (std::uint32_t i = 0; i < layout.numBuckets; ++i) {
-            std::uintptr_t entry =
-                layout.buckets + static_cast<std::uintptr_t>(i) * 0x28;
-            for (std::int32_t depth = 0; depth < 64; ++depth) {
-                if (!isPlausiblePointer(entry)) break;
-                const std::int32_t keyType =
-                    *reinterpret_cast<const std::int32_t*>(entry + 0x10);
-                if (keyType == 0x8000010) {
-                    const void* keyValue =
-                        *reinterpret_cast<const void* const*>(entry + 0x18);
-                    for (std::size_t t = 0; t < targetCount; ++t) {
-                        if (targetStrings[t] != nullptr && keyValue == targetStrings[t])
-                            ++bucketHits[t];
-                    }
-                }
-                const std::uintptr_t next =
-                    *reinterpret_cast<const std::uintptr_t*>(entry + 0x20);
-                if (next == 0) break;
-                entry = next;
-            }
-        }
-        for (std::size_t t = 0; t < targetCount; ++t) {
-            LogFormat("[NorthstarPS4] UI native scan %s name=%s hits=%d\n",
-                tag, probeTargets[t], bucketHits[t]);
-        }
-    };
-    auto dumpNodes = [&](const char* tag, void* table, std::uint32_t maxNodes) {
-        const TableLayout layout = tableLayout(table);
-        if (!layout.valid) return;
-        std::uint32_t dumped = 0;
-        for (std::uint32_t i = 0; i < layout.numBuckets && dumped < maxNodes; ++i) {
-            std::uintptr_t entry =
-                layout.buckets + static_cast<std::uintptr_t>(i) * 0x28;
-            for (std::int32_t depth = 0; depth < 64; ++depth) {
-                if (!isPlausiblePointer(entry)) break;
-                const std::int32_t keyType =
-                    *reinterpret_cast<const std::int32_t*>(entry + 0x10);
-                const std::int32_t keyHash =
-                    *reinterpret_cast<const std::int32_t*>(entry + 0x14);
-                const std::uintptr_t keyValue =
-                    *reinterpret_cast<const std::uintptr_t*>(entry + 0x18);
-                const std::int32_t valueType =
-                    *reinterpret_cast<const std::int32_t*>(entry + 0x00);
-                const std::uintptr_t valuePtr =
-                    *reinterpret_cast<const std::uintptr_t*>(entry + 0x08);
-                char keyTextBuf[24]{};
-                if (keyType == 0x8000010 && isPlausiblePointer(keyValue)) {
-                    const char* src =
-                        reinterpret_cast<const char*>(keyValue + 0x30);
-                    for (std::size_t k = 0; k < sizeof(keyTextBuf) - 1; ++k) {
-                        keyTextBuf[k] = src[k];
-                        if (src[k] == '\0') break;
-                    }
-                }
-                LogFormat("[NorthstarPS4] UI native node %s keyType=0x%x keyHash=0x%x key=%p keyText=%s valueType=0x%x value=%p\n",
-                    tag, keyType, keyHash, reinterpret_cast<void*>(keyValue),
-                    keyTextBuf, valueType, reinterpret_cast<void*>(valuePtr));
-                ++dumped;
-                const std::uintptr_t next =
-                    *reinterpret_cast<const std::uintptr_t*>(entry + 0x20);
-                if (next == 0) break;
-                entry = next;
-            }
-        }
-    };
-
-    LogFormat("[NorthstarPS4] UI native probe tables (pre-insert):\n");
-    for (const auto& entry : tables) {
-        dumpTable(entry.tag, entry.table);
-        scanTable(entry.tag, entry.table);
-    }
-    LogFormat("[NorthstarPS4] UI native node dump t4120 (pre-insert):\n");
-    dumpNodes("t4120", vmField(0x4120), 48);
-    LogFormat("[NorthstarPS4] UI native node dump t41b0 (pre-insert):\n");
-    dumpNodes("t41b0", vmField(0x41b0), 48);
-
-    void* const internedName =
-        intern != nullptr && stringTable != nullptr
-        ? intern(stringTable, name, -1)
-        : nullptr;
-    std::uintptr_t closureRecord = 0;
-    std::uint32_t closureSlotType = 0;
-    if (newClosure != nullptr) {
-        const std::uintptr_t slotAddress =
-            newClosure(uiVm, reinterpret_cast<void*>(&DiagnosticUiNative), 0);
-        if (isPlausiblePointer(slotAddress)) {
-            closureSlotType =
-                *reinterpret_cast<const std::uint32_t*>(slotAddress);
-            closureRecord =
-                *reinterpret_cast<const std::uintptr_t*>(slotAddress + 8);
-        }
-        LogFormat("[NorthstarPS4] UI native newClosure slot=%p type=0x%x record=%p\n",
-            reinterpret_cast<void*>(slotAddress), closureSlotType,
-            reinterpret_cast<void*>(closureRecord));
-    }
-    const std::uint64_t key[2] = {
-        0x8000010ULL,
-        reinterpret_cast<std::uintptr_t>(internedName),
-    };
-    const std::uint64_t value[2] = { 0x8000200ULL, closureRecord };
-    auto insertGlobal = [&](const char* tag, void* table) {
-        const TableLayout layout = tableLayout(table);
-        if (!layout.valid) {
-            LogFormat("[NorthstarPS4] UI native insert %s skipped invalid table=%p\n",
-                tag, table);
-            return;
-        }
-        if (internedName == nullptr || closureRecord == 0) {
-            LogFormat("[NorthstarPS4] UI native insert %s skipped missing name=%p record=%p\n",
-                tag, internedName, reinterpret_cast<void*>(closureRecord));
-            return;
-        }
-        const std::int32_t result = newSlot(table, key, value);
-        LogFormat("[NorthstarPS4] UI native insert %s key=%s str=%p valueType=0x%x record=%p result=%d\n",
-            tag, name, internedName, static_cast<std::uint32_t>(value[0]),
-            reinterpret_cast<void*>(closureRecord), result);
-    };
-    LogFormat("[NorthstarPS4] UI native direct register start uiVm=%p name=%s\n",
-        uiVm, name);
-    insertGlobal("t40d0", vmField(0x40d0));
-    gDiagnosticUiClientBase = clientBase;
-    gDiagnosticUiInternalVm = internalVm;
-    gDiagnosticUiTable = vmField(0x40d0);
-
-    LogFormat("[NorthstarPS4] UI native probe tables (post-insert):\n");
-    for (const auto& entry : tables) {
-        scanTable(entry.tag, entry.table);
-    }
-
-    for (std::uint32_t attempt = 0; attempt < 60; ++attempt) {
-        const std::int32_t countA = *countSlot;
-        void* const recordsA = *recordsSlot;
-        if (countA != previousCount || recordsA != previousRecords) {
-            logTree("state");
-            previousCount = countA;
-            previousRecords = recordsA;
-        }
-        if (attempt % 20 == 0) {
-            LogFormat("[NorthstarPS4] UI native periodic internal=%p strings=%p t4168=%p globalOurs=%d\n",
-                internalVm, vmField(0x4048), vmField(0x4168),
-                globalHashScan());
-            for (const auto& entry : tables) {
-                scanTable(entry.tag, vmField(entry.offset));
-            }
-        }
-        sceKernelUsleep(500000);
-    }
-}
-#endif
-#if defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA) && defined(NORTHSTAR_PS4_ENABLE_M6_SCRIPT_INJECT)
-// Bridges mod metadata discovery (parses each mod's Scripts[] entries whose
-// RunOn is exactly "UI") to the M6 script-inject CompileList call, which
-// otherwise only knows about one hardcoded probe path. Populated by
-// ProbeModMetadata (runs first, from ProbeCvarInterface) and consumed by
-// ProbeUiScriptSystem's M6_SCRIPT_INJECT block (runs later, both from
-// ModuleTracker), so no cross-thread synchronization is needed.
-constexpr std::size_t kMaxCollectedUiScripts = 64;
-char gCollectedUiScripts[kMaxCollectedUiScripts][96]{};
-std::int32_t gCollectedUiScriptCount = 0;
-#endif
-#if defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
 using namespace northstar::ps4::mods;
 // The installed profile. /app0 is read-only on a PS4, so there it is copied
 // over FTP into the app's writable storage; shadPS4 installs keep it in the
@@ -1082,7 +543,7 @@ void CollectModNamesLocked(ModDiscovery& discovery, bool includeDisabled) noexce
 // The scan above reads into function-level static buffers, and it is called
 // from the module tracker, the game's main thread (localisation at vgui init,
 // VM creation) and UI natives. Two at once overwrote each other's buffers; one
-// boot crashed in memcmp during the tracker's scan (2026-10-01).
+// boot crashed in memcmp during the tracker's scan.
 std::atomic_flag g_collectModNamesBusy = ATOMIC_FLAG_INIT;
 
 void CollectModNames(ModDiscovery& discovery, bool includeDisabled = false) noexcept {
@@ -1096,11 +557,9 @@ using ModConVarConstructorFn = void (*)(
     void*, const char*, const char*, int, const char*, void*);
 
 // Each registered ConVar keeps its object and strings for the rest of the
-// session: the engine's cvar list points at them. They used to share a fixed
-// pool of 32 slots across all mods, and the core Northstar mods already fill 30
-// of those, so a settings mod such as S2.SpeedometerV2 (8 ConVars) silently lost
-// most of its variables and its scripts then failed to find them. `count`
-// counts registrations.
+// session: the engine's cvar list points at them. Each has its own allocation;
+// the core Northstar mods alone declare 30 ConVars. `count` counts
+// registrations.
 struct ModConVarStorage {
     alignas(16) std::uint8_t object[0x90];
     char name[64];
@@ -1206,35 +665,10 @@ void ProbeModMetadata(void* cvar, ModFindVarFn findVar,
                 mod.name, s, mod.uiScripts[s]);
         }
         RegisterModConVars(mod, conVarSlot, cvar, findVar, constructor);
-#if defined(NORTHSTAR_PS4_ENABLE_M6_SCRIPT_INJECT)
-        // InitScript goes first: run 20260807-153420 showed
-        // ui/menu_ns_modmenu.nut fail to compile with "Expected type, found
-        // identifier ModInfo" because that struct is declared only in
-        // Northstar.Client's InitScript (cl_northstar_client_init.nut, no
-        // RunOn of its own). CompileList appears to build a single growing
-        // symbol table across one call's path list, so compiling InitScript
-        // first makes its struct/type declarations visible to the mod's UI
-        // scripts compiled after it in the same call.
-        if (mod.initScript[0] != '\0' &&
-            gCollectedUiScriptCount < static_cast<std::int32_t>(kMaxCollectedUiScripts)) {
-            std::strncpy(gCollectedUiScripts[gCollectedUiScriptCount], mod.initScript,
-                sizeof(gCollectedUiScripts[0]) - 1);
-            gCollectedUiScripts[gCollectedUiScriptCount][sizeof(gCollectedUiScripts[0]) - 1] = '\0';
-            ++gCollectedUiScriptCount;
-        }
-        for (std::int32_t s = 0; s < mod.uiScriptCount &&
-            gCollectedUiScriptCount < static_cast<std::int32_t>(kMaxCollectedUiScripts); ++s) {
-            std::strncpy(gCollectedUiScripts[gCollectedUiScriptCount], mod.uiScripts[s],
-                sizeof(gCollectedUiScripts[0]) - 1);
-            gCollectedUiScripts[gCollectedUiScriptCount][sizeof(gCollectedUiScripts[0]) - 1] = '\0';
-            ++gCollectedUiScriptCount;
-        }
-#endif
     }
     LogFormat("[NorthstarPS4] mod metadata probe complete convarsRegistered=%d\n",
         conVarSlot);
 }
-#endif
 #include "runtime_auth.inl"
 
 void ProbeCvarInterface(
@@ -1294,19 +728,7 @@ void ProbeCvarInterface(
     auto constructor = reinterpret_cast<ConVarConstructorFn>(
         engineBase + kConVarConstructorVa);
 
-#if defined(NORTHSTAR_PS4_ENABLE_DIAGNOSTIC_CONVAR)
-    alignas(16) static std::uint8_t diagnosticConVar[0x90]{};
-    void* registered = findVar(cvar, "ns_stage2_loaded");
-    if (registered == nullptr) {
-        constructor(diagnosticConVar, "ns_stage2_loaded", "1", 0,
-            "Northstar PS4 Stage 2 diagnostic", nullptr);
-        registered = findVar(cvar, "ns_stage2_loaded");
-    }
-    LogFormat("[NorthstarPS4] diagnostic convar registration result=%p expected=%p success=%d\n",
-        registered, diagnosticConVar, registered == diagnosticConVar ? 1 : 0);
-#else
     LogFormat("[NorthstarPS4] diagnostic convar disabled at build time\n");
-#endif
 
     // ns_allow_team_change and ns_has_agreed_to_send_token are always
     // registered (not build-flag-gated) because they are proven-required
@@ -1314,12 +736,9 @@ void ProbeCvarInterface(
     // ui/menu_ingame.nut and ui/menu_main.nut / ui/panel_mainmenu.nut
     // unconditionally call GetConVarBool()/GetConVarInt() on these, and the
     // engine throws a blocking "[UI] ConVar ... is not valid" dialog when
-    // either is missing. Confirmed live 2026-08-07 (first
-    // ns_allow_team_change, then ns_has_agreed_to_send_token) while testing
-    // a real server connection -- see docs/GOALS.md Goal 8 and
-    // docs/TECHNICAL-NOTES.md. `-EnableTeamChangesConVar` is kept as an
-    // accepted but now-redundant build flag for compatibility with existing
-    // scripts/docs.
+    // either is missing (seen for ns_allow_team_change, then
+    // ns_has_agreed_to_send_token, joining a server). They are registered in
+    // every build; the -EnableTeamChangesConVar build flag is redundant.
     alignas(16) static std::uint8_t teamChangesConVar[0x90]{};
     void* teamChangesRegistered = findVar(cvar, "ns_allow_team_change");
     if (teamChangesRegistered == nullptr) {
@@ -1338,7 +757,7 @@ void ProbeCvarInterface(
     // PS4 flag-bit semantics are verified, matching the existing mod-convar
     // convention (see ProbeModMetadata's ARCHIVE_PLAYERPROFILE note).
     //
-    // PS4-only default override (2026-08-07): defaulted to "1"
+    // PS4-only default override: defaulted to "1"
     // (NS_AGREED_TO_SEND_TOKEN) instead of upstream's "0". Live testing
     // showed ui/menu_main.nut's NorthstarMasterServerAuthDialog(), the
     // dialog shown when this convar is unset, does not respond to any
@@ -1349,10 +768,8 @@ void ProbeCvarInterface(
     // dismiss it. Pre-agreeing here skips the dialog entirely (see
     // menu_main.nut's `if ( !GetConVarBool( "ns_has_agreed_to_send_token" ) )
     // NorthstarMasterServerAuthDialog()` gate) so players can get past the
-    // main menu. The underlying dialog-input bug is still open -- see
-    // docs/TECHNICAL-NOTES.md -- and this default should be revisited once
-    // that's fixed, since it silently opts every player in to sending their
-    // origin token to the Northstar masterserver without asking.
+    // main menu. With this default every player is opted in to sending their
+    // token to the Northstar master server without being asked.
     alignas(16) static std::uint8_t agreedToSendTokenConVar[0x90]{};
     void* agreedToSendTokenRegistered = findVar(cvar, "ns_has_agreed_to_send_token");
     if (agreedToSendTokenRegistered == nullptr) {
@@ -1384,53 +801,7 @@ void ProbeCvarInterface(
         authAllowInsecureRegistered, authAllowInsecureConVar,
         authAllowInsecureRegistered == authAllowInsecureConVar ? 1 : 0);
 
-#if defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
     ProbeModMetadata(cvar, findVar, engineBase, engineSize);
-#endif
-}
-void ProbeUiRegistrationTree(
-    std::uintptr_t clientBase, std::size_t clientSpan,
-    std::uintptr_t treeVa, const char* label) noexcept {
-    const std::uintptr_t imageEnd = clientBase + clientSpan;
-    const std::uintptr_t target = clientBase + kClientRunUiScriptRecordVa;
-    std::uintptr_t node = clientBase + treeVa;
-    for (std::uint32_t depth = 0; depth < 32; ++depth) {
-        if (node < clientBase || node > imageEnd - 0x60) {
-            LogFormat("[NorthstarPS4] UI tree %s depth=%u invalid=%p\n",
-                label, depth, reinterpret_cast<void*>(node));
-            return;
-        }
-        auto fields = reinterpret_cast<const std::uintptr_t*>(node);
-        const auto countA = *reinterpret_cast<const std::int32_t*>(node + 0x38);
-        const auto countB = *reinterpret_cast<const std::int32_t*>(node + 0x58);
-        const std::uintptr_t recordsA = fields[4];
-        const std::uintptr_t recordsB = fields[8];
-        const std::uintptr_t targetName = clientBase + kClientRunUiScriptNameVa;
-        std::int32_t matchA = -1;
-        std::int32_t matchB = -1;
-        for (std::int32_t i = 0; recordsA != 0 && i < countA && i < 512; ++i) {
-            if (*reinterpret_cast<const std::uintptr_t*>(recordsA + i * 0x68) == targetName)
-                matchA = i;
-        }
-        for (std::int32_t i = 0; recordsB != 0 && i < countB && i < 512; ++i) {
-            if (*reinterpret_cast<const std::uintptr_t*>(recordsB + i * 0x68) == targetName)
-                matchB = i;
-        }
-        LogFormat("[NorthstarPS4] UI tree %s RunUIScript matchA=%d matchB=%d\n",
-            label, matchA, matchB);
-        const bool ownsA = countA > 0 && recordsA <= target &&
-            target < recordsA + static_cast<std::uintptr_t>(countA) * 0x68;
-        const bool ownsB = countB > 0 && recordsB <= target &&
-            target < recordsB + static_cast<std::uintptr_t>(countB) * 0x68;
-        LogFormat("[NorthstarPS4] UI tree %s depth=%u node=%p child=%p recordsA=%p countA=%d recordsB=%p countB=%d target=%d/%d\n",
-            label, depth, reinterpret_cast<void*>(node),
-            reinterpret_cast<void*>(fields[3]), reinterpret_cast<void*>(recordsA),
-            countA, reinterpret_cast<void*>(recordsB), countB,
-            ownsA ? 1 : 0, ownsB ? 1 : 0);
-        if (ownsA || ownsB || fields[3] == 0) return;
-        node = fields[3];
-    }
-    LogFormat("[NorthstarPS4] UI tree %s traversal limit reached\n", label);
 }
 void ProbeUiVm(std::uintptr_t clientBase, std::size_t clientSpan) noexcept {
     const bool runUiScriptMatches = ValidateEnginePreimage(
@@ -1494,47 +865,6 @@ void ProbeUiVm(std::uintptr_t clientBase, std::size_t clientSpan) noexcept {
                 registrationVm, uiVm, registrationVm == uiVm ? 1 : 0,
                 blockMatches ? 1 : 0, callerMatches ? 1 : 0);
 
-            ProbeUiRegistrationTree(clientBase, clientSpan, kClientUiRegistrationTreeAVa, "A");
-            ProbeUiRegistrationTree(clientBase, clientSpan, kClientUiRegistrationTreeBVa, "B");
-
-            // Read-only profile of internal_vm+0x40a0 and its neighbors
-            // during a normal boot, before any CompileList injection is
-            // attempted. This is the table CompileList reads (at its own
-            // +0x38) that faulted when compiling a real mod script with a
-            // typed struct parameter (ui/menu_ns_modmenu.nut, ModInfo) --
-            // see docs/TECHNICAL-NOTES.md and docs/GOALS.md Goal 6. Pure
-            // reads plus logging; no mutation, no dereference beyond one
-            // plausibility-gated level.
-            {
-                auto internalVmForDump = reinterpret_cast<const std::uintptr_t*>(fields[10]);
-                if (internalVmForDump != nullptr) {
-                    constexpr std::uintptr_t kOffsetsToProbe[] = {
-                        0x4090, 0x4098, 0x40a0, 0x40a8, 0x40b0,
-                    };
-                    for (std::uintptr_t off : kOffsetsToProbe) {
-                        const std::uintptr_t value = internalVmForDump[off / 8];
-                        LogFormat("[NorthstarPS4] UI VM internal+0x%zx=%p\n",
-                            off, reinterpret_cast<void*>(value));
-                    }
-                    const std::uintptr_t table40a0 = internalVmForDump[0x40a0 / 8];
-                    const bool plausible = table40a0 > 0x100000000ULL &&
-                        table40a0 < 0x40000000000ULL;
-                    if (plausible) {
-                        auto tableBytes = reinterpret_cast<const std::uintptr_t*>(table40a0);
-                        for (int i = 0; i < 8; ++i) {
-                            LogFormat("[NorthstarPS4] UI VM internal+0x40a0[+0x%x]=%p\n",
-                                i * 8, reinterpret_cast<void*>(tableBytes[i]));
-                        }
-                    } else {
-                        LogFormat("[NorthstarPS4] UI VM internal+0x40a0 is not a plausible pointer (value=%p)\n",
-                            reinterpret_cast<void*>(table40a0));
-                    }
-                }
-            }
-
-#if defined(NORTHSTAR_PS4_ENABLE_DIAGNOSTIC_UI_NATIVE)
-            VerifyAndRestoreDiagnosticUiRecord(clientBase, clientSpan, uiVm);
-#endif
             LogFormat("[NorthstarPS4] UI VM candidate discovered owner=%p uiVm=%p\n",
                 owner, uiVm);
             return;
@@ -1543,348 +873,6 @@ void ProbeUiVm(std::uintptr_t clientBase, std::size_t clientSpan) noexcept {
     }
     LogFormat("[NorthstarPS4] UI VM probe timed out\n");
 }
-#if defined(NORTHSTAR_PS4_ENABLE_M6_SCRIPT_PROBE)
-void ProbeUiScriptSystem(
-    std::uintptr_t clientBase, std::size_t clientSpan,
-    OrbisKernelModule fsHandle) noexcept {
-    const bool uiInitMatches = ValidateEnginePreimage(
-        clientBase, clientSpan, kClientUiInitVa,
-        kClientUiInitPreimage, sizeof(kClientUiInitPreimage));
-    const bool rsonLoaderMatches = ValidateEnginePreimage(
-        clientBase, clientSpan, kClientRsonLoaderVa,
-        kClientRsonLoaderPreimage, sizeof(kClientRsonLoaderPreimage));
-    const bool rangeOk =
-        kClientScriptSystemGlobalVa + sizeof(void*) <= clientSpan &&
-        kClientScriptCountTableVa + 8 * sizeof(std::int32_t) <= clientSpan;
-    LogFormat("[NorthstarPS4] M6 script probe gate uiInit=%d rsonLoader=%d rangeOk=%d span=0x%zx\n",
-        uiInitMatches ? 1 : 0, rsonLoaderMatches ? 1 : 0, rangeOk ? 1 : 0, clientSpan);
-    if (!uiInitMatches || !rsonLoaderMatches || !rangeOk) {
-        LogFormat("[NorthstarPS4] M6 script probe refused: client profile mismatch\n");
-        return;
-    }
-
-    auto ownerSlot = reinterpret_cast<void**>(clientBase + kClientScriptOwnerGlobalVa);
-    auto scriptSystemSlot = reinterpret_cast<void**>(clientBase + kClientScriptSystemGlobalVa);
-    auto countTable = reinterpret_cast<std::int32_t*>(clientBase + kClientScriptCountTableVa);
-
-    bool sawOwner = false;
-    bool sawSystem = false;
-    bool sawUiReady = false;
-    for (std::uint32_t attempt = 0; attempt < 600; ++attempt) {
-        void* owner = *ownerSlot;
-        void* uiVm = owner != nullptr
-            ? *reinterpret_cast<void**>(reinterpret_cast<std::uintptr_t>(owner) + 8)
-            : nullptr;
-        std::int32_t contextType = owner != nullptr
-            ? *reinterpret_cast<std::int32_t*>(reinterpret_cast<std::uintptr_t>(owner) + 0x3c)
-            : -1;
-        void* scriptSystem = *scriptSystemSlot;
-        const std::int32_t counts[8] = {
-            countTable[0], countTable[1], countTable[2], countTable[3],
-            countTable[4], countTable[5], countTable[6], countTable[7],
-        };
-        const bool uiReady = scriptSystem != nullptr && countTable[2] > 0;
-        const bool ownerNew = owner != nullptr && !sawOwner;
-        const bool systemNew = scriptSystem != nullptr && !sawSystem;
-        const bool readyNew = uiReady && !sawUiReady;
-        if (ownerNew || systemNew || readyNew || (attempt % 50 == 0)) {
-            LogFormat("[NorthstarPS4] M6 script probe attempt=%u owner=%p uiVm=%p ctx=%d system=%p counts=%d,%d,%d,%d,%d,%d,%d,%d\n",
-                attempt, owner, uiVm, contextType, scriptSystem,
-                counts[0], counts[1], counts[2], counts[3],
-                counts[4], counts[5], counts[6], counts[7]);
-        }
-        if (owner != nullptr) sawOwner = true;
-        if (scriptSystem != nullptr) sawSystem = true;
-        if (uiReady) {
-            sawUiReady = true;
-            break;
-        }
-        sceKernelUsleep(150000);
-    }
-
-    const std::int32_t counts[8] = {
-        countTable[0], countTable[1], countTable[2], countTable[3],
-        countTable[4], countTable[5], countTable[6], countTable[7],
-    };
-    LogFormat("[NorthstarPS4] M6 script probe final owner=%p system=%p counts=%d,%d,%d,%d,%d,%d,%d,%d\n",
-        *ownerSlot, *scriptSystemSlot, counts[0], counts[1], counts[2], counts[3],
-        counts[4], counts[5], counts[6], counts[7]);
-
-#if defined(NORTHSTAR_PS4_ENABLE_M6_SCRIPT_INJECT)
-    {
-        void* const owner = *ownerSlot;
-        if (owner == nullptr) {
-            LogFormat("[NorthstarPS4] M6 script inject skipped: owner null\n");
-        } else {
-            std::int32_t prevCount = -1;
-            std::uint32_t stableSamples = 0;
-            std::uint32_t settleAttempts = 0;
-            for (; settleAttempts < 120; ++settleAttempts) {
-                const std::int32_t cur = countTable[2];
-                if (cur == prevCount) {
-                    ++stableSamples;
-                } else {
-                    stableSamples = 0;
-                }
-                prevCount = cur;
-                if (stableSamples >= 20) break;
-                sceKernelUsleep(250000);
-            }
-            LogFormat("[NorthstarPS4] M6 script inject settle attempts=%u stable=%u count=%d\n",
-                settleAttempts, stableSamples, prevCount);
-            if (stableSamples < 20) {
-                LogFormat("[NorthstarPS4] M6 script inject skipped: UI script count unstable (race with engine loader)\n");
-            } else {
-                const bool findUiFunctionMatches = ValidateEnginePreimage(
-                    clientBase, clientSpan, kClientFindUiFunctionVa,
-                    kClientFindUiFunctionPreimage, sizeof(kClientFindUiFunctionPreimage));
-                LogFormat("[NorthstarPS4] M6 script inject gate findUiFunction=%d\n",
-                    findUiFunctionMatches ? 1 : 0);
-                if (!findUiFunctionMatches) {
-                    LogFormat("[NorthstarPS4] M6 script inject refused: findUiFunction preimage mismatch\n");
-                } else {
-                using FindUiFunctionFn = void* (*)(void*, const char*, std::int32_t, std::int32_t);
-                auto findUiFunction =
-                    reinterpret_cast<FindUiFunctionFn>(clientBase + kClientFindUiFunctionVa);
-                void* const uiVm =
-                    *reinterpret_cast<void**>(reinterpret_cast<std::uintptr_t>(owner) + 8);
-
-                // Safe, read-only check first: does the scripts.rson manifest overlay
-                // (New-Stage2R2Overlay.ps1 + Merge-Stage2ScriptsRson.ps1, staged under
-                // r2/scripts/vscripts/scripts.rson) already cause the engine's own
-                // boot-time compile pass to load and register ns_m6_probe.gnut? This
-                // answers the actual Milestone 6 question (manifest-driven script
-                // loading) without any risky call into the engine.
-                void* const ctrlScript = findUiFunction(uiVm, "ui_main_menu", 0, 0);
-                LogFormat("[NorthstarPS4] M6 script manifest verify FindUiFunction ui_main_menu=%p baseline=%d\n",
-                    ctrlScript, ctrlScript != nullptr ? 1 : 0);
-                void* const probeClosure = findUiFunction(uiVm, "NSM6ProbeMarker", 0, 0);
-                LogFormat("[NorthstarPS4] M6 script manifest verify FindUiFunction NSM6ProbeMarker=%p viaManifest=%d\n",
-                    probeClosure, probeClosure != nullptr ? 1 : 0);
-                void* const probeScript = findUiFunction(uiVm, "ns_m6_probe", 0, 0);
-                LogFormat("[NorthstarPS4] M6 script manifest verify FindUiFunction ns_m6_probe=%p viaManifest=%d\n",
-                    probeScript, probeScript != nullptr ? 1 : 0);
-
-                // Runtime compileList() injection candidate below. This previously
-                // crashed with an unhandled exception at RIP=0x0 (run 20260806-214046):
-                // CompileList's internal per-item call reads a global object's vtable
-                // and calls the pointer at slot +0x58, which was null when invoked from
-                // our own detached NorthstarPS4 thread rather than whatever thread the
-                // engine uses for its own compile pass. Validate the exact dependency
-                // chain and refuse instead of repeating that crash.
-                const bool compileListPrologueMatches = ValidateEnginePreimage(
-                    clientBase, clientSpan, kClientCompileListVa,
-                    kClientCompileListPreimage, sizeof(kClientCompileListPreimage));
-                void* compileListGateObject = nullptr;
-                void* compileListGateVtable = nullptr;
-                void* compileListGateSlot = nullptr;
-                if (compileListPrologueMatches &&
-                    kClientCompileListGatePtrVa + sizeof(void*) <= clientSpan) {
-                    compileListGateObject = *reinterpret_cast<void**>(
-                        clientBase + kClientCompileListGatePtrVa);
-                    if (compileListGateObject != nullptr) {
-                        compileListGateVtable =
-                            *reinterpret_cast<void**>(compileListGateObject);
-                    }
-                    if (compileListGateVtable != nullptr) {
-                        compileListGateSlot = *reinterpret_cast<void**>(
-                            reinterpret_cast<std::uintptr_t>(compileListGateVtable) +
-                            kClientCompileListGateVtableSlot);
-                    }
-                }
-                const bool compileListDependencyReady = compileListGateSlot != nullptr;
-                LogFormat("[NorthstarPS4] M6 script inject compileList gate prologue=%d object=%p vtable=%p slot58=%p ready=%d\n",
-                    compileListPrologueMatches ? 1 : 0, compileListGateObject,
-                    compileListGateVtable, compileListGateSlot,
-                    compileListDependencyReady ? 1 : 0);
-                if (!compileListPrologueMatches || !compileListDependencyReady) {
-                    LogFormat("[NorthstarPS4] M6 script inject refused: compileList dependency not safe from this thread; relying on the manifest verify result above\n");
-                } else {
-                    void* const poolCur =
-                        *reinterpret_cast<void**>(clientBase + kClientScriptPoolCurVa);
-                    void* const poolEnd =
-                        *reinterpret_cast<void**>(clientBase + kClientScriptPoolEndVa);
-                    void* const vmObj =
-                        uiVm != nullptr
-                            ? *reinterpret_cast<void**>(reinterpret_cast<std::uintptr_t>(uiVm) + 0x50)
-                            : nullptr;
-                    std::int32_t vmPoolCounter = -1;
-                    void* vmPoolPtr = nullptr;
-                    if (vmObj != nullptr) {
-                        vmPoolCounter =
-                            *reinterpret_cast<std::int32_t*>(reinterpret_cast<std::uintptr_t>(vmObj) + 0x4210);
-                        vmPoolPtr =
-                            *reinterpret_cast<void**>(reinterpret_cast<std::uintptr_t>(vmObj) + 0x4218);
-                    }
-                    LogFormat("[NorthstarPS4] M6 script inject pool cur=%p end=%p free=0x%zx vmObj=%p counter=%d vmPool=%p\n",
-                        poolCur, poolEnd,
-                        poolCur != nullptr && poolEnd != nullptr
-                            ? reinterpret_cast<std::uintptr_t>(poolEnd) - reinterpret_cast<std::uintptr_t>(poolCur)
-                            : 0,
-                        vmObj, vmPoolCounter, vmPoolPtr);
-                    {
-                        static std::uint8_t sInjectPool[0x1400000];
-                        *reinterpret_cast<void**>(clientBase + kClientScriptPoolCurVa) = sInjectPool;
-                        *reinterpret_cast<void**>(clientBase + kClientScriptPoolEndVa) =
-                            sInjectPool + sizeof(sInjectPool);
-                        LogFormat("[NorthstarPS4] M6 script inject pool staged static=%p\n",
-                            static_cast<void*>(sInjectPool));
-                    }
-                    using CompileListFn = bool (*)(void*, std::int32_t, const char* const*, std::int32_t);
-                    auto compileList =
-                        reinterpret_cast<CompileListFn>(clientBase + kClientCompileListVa);
-                    static const char* const kProbeInjectPaths[] = {
-                        "ns_m6_probe.gnut",
-                    };
-                    const char* const* injectPaths = kProbeInjectPaths;
-                    std::int32_t injectCount = static_cast<std::int32_t>(
-                        sizeof(kProbeInjectPaths) / sizeof(kProbeInjectPaths[0]));
-#if defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
-                    LogFormat("[NorthstarPS4] M6 script inject: %d mod UI script(s) collected (not injected unless -EnableM6ScriptInjectFromMods)\n",
-                        gCollectedUiScriptCount);
-#if defined(NORTHSTAR_PS4_ENABLE_M6_SCRIPT_INJECT_FROM_MODS)
-                    // Separately gated from mod discovery itself: run
-                    // 20260807-154245 reproduced a real (non-null) crash
-                    // compiling a real mod UI script (ui/menu_ns_modmenu.nut)
-                    // this way -- a read of internal_vm+0x40a0 that faulted,
-                    // most likely an internal type/struct registry not
-                    // populated the way it would be for the engine's own
-                    // boot-time compile pass. cl_northstar_client_init.nut
-                    // alone compiled cleanly; menu_ns_modmenu.nut (which
-                    // uses the ModInfo struct as a typed parameter) did not,
-                    // even paired with only that one dependency. Do not
-                    // enable this outside a deliberate, isolated experiment
-                    // until that table dependency is understood -- see
-                    // docs/TECHNICAL-NOTES.md and docs/GOALS.md (Goal 6).
-                    static const char* modInjectPaths[kMaxCollectedUiScripts];
-                    if (gCollectedUiScriptCount > 0) {
-                        for (std::int32_t i = 0; i < gCollectedUiScriptCount; ++i) {
-                            modInjectPaths[i] = gCollectedUiScripts[i];
-                        }
-                        injectPaths = modInjectPaths;
-                        injectCount = gCollectedUiScriptCount;
-                        LogFormat("[NorthstarPS4] M6 script inject using %d mod-discovered UI script(s) (EXPERIMENTAL, known to crash on some real scripts)\n",
-                            injectCount);
-                    } else {
-                        LogFormat("[NorthstarPS4] M6 script inject: no mod UI scripts collected, falling back to probe path\n");
-                    }
-#endif
-#endif
-                    const std::int32_t before = countTable[2];
-                    const bool compileOk =
-                        compileList(owner, 2, injectPaths, injectCount);
-                    const std::int32_t after = countTable[2];
-                    LogFormat("[NorthstarPS4] M6 script inject ctx=2 count=%d result=%d owner=%p before=%d after=%d\n",
-                        injectCount, compileOk ? 1 : 0, owner, before, after);
-                    for (std::int32_t i = 0; i < injectCount; ++i) {
-                        LogFormat("[NorthstarPS4] M6 script inject path[%d]=%s\n", i, injectPaths[i]);
-                    }
-                    void* const ctrlScript2 = findUiFunction(uiVm, "ui_main_menu", 0, 0);
-                    LogFormat("[NorthstarPS4] M6 script inject FindUiFunction ui_main_menu=%p ctrl=%d\n",
-                        ctrlScript2, ctrlScript2 != nullptr ? 1 : 0);
-                    void* const probeClosure2 = findUiFunction(uiVm, "NSM6ProbeMarker", 0, 0);
-                    LogFormat("[NorthstarPS4] M6 script inject FindUiFunction NSM6ProbeMarker=%p verified=%d\n",
-                        probeClosure2, probeClosure2 != nullptr ? 1 : 0);
-                    void* const probeScript2 = findUiFunction(uiVm, "ns_m6_probe", 0, 0);
-                    LogFormat("[NorthstarPS4] M6 script inject FindUiFunction ns_m6_probe=%p verified=%d\n",
-                        probeScript2, probeScript2 != nullptr ? 1 : 0);
-                }
-                }
-            }
-        }
-        sceKernelUsleep(20000000);
-    }
-#endif
-
-    if (fsHandle == static_cast<OrbisKernelModule>(-1)) {
-        LogFormat("[NorthstarPS4] M6 script probe fs skipped: filesystem_stdio unavailable\n");
-        return;
-    }
-
-    void* createInterfaceAddress = nullptr;
-    const int dlsymResult =
-        sceKernelDlsym(static_cast<std::int32_t>(fsHandle), "CreateInterface",
-            &createInterfaceAddress);
-    if (dlsymResult != 0 || createInterfaceAddress == nullptr) {
-        LogFormat("[NorthstarPS4] M6 script probe fs dlsym=0x%x addr=%p\n",
-            dlsymResult, createInterfaceAddress);
-        return;
-    }
-    using CreateInterfaceFn = void* (*)(const char*, int*);
-    using OpenFn = void* (*)(void**, const char*, const char*, const char*, std::int64_t);
-    using ReadFn = std::int32_t (*)(void**, void*, std::int32_t, void*);
-    using CloseFn = void (*)(void*, void*);
-    auto createInterface = reinterpret_cast<CreateInterfaceFn>(createInterfaceAddress);
-    int interfaceResult = -1;
-    void* const fs = createInterface("VFileSystem017", &interfaceResult);
-    if (fs == nullptr) {
-        LogFormat("[NorthstarPS4] M6 script probe fs interface failed result=%d\n",
-            interfaceResult);
-        return;
-    }
-    auto vtable2 = *reinterpret_cast<void***>(
-        reinterpret_cast<std::uintptr_t>(fs) + 8);
-    if (vtable2 == nullptr) {
-        LogFormat("[NorthstarPS4] M6 script probe fs invalid vtable2=%p\n",
-            vtable2);
-        return;
-    }
-    auto open = reinterpret_cast<OpenFn>(vtable2[2]);
-    auto read = reinterpret_cast<ReadFn>(vtable2[0]);
-    auto close = reinterpret_cast<CloseFn>(vtable2[3]);
-    void* const fsFieldAddr =
-        reinterpret_cast<void*>(reinterpret_cast<std::uintptr_t>(fs) + 8);
-    static std::uint8_t buffer[32768];
-
-    const struct { const char* tag; const char* file; } targets[] = {
-        { "scripts.rson", "scripts/vscripts/scripts.rson" },
-        { "probe.gnut", "scripts/vscripts/ns_m6_probe.gnut" },
-        { "init.nut", "scripts/vscripts/init.nut" },
-    };
-    for (const auto& target : targets) {
-        void* const handle = open(
-            reinterpret_cast<void**>(fsFieldAddr), target.file, "rb", "GAME", 0);
-        if (handle == nullptr) {
-            LogFormat("[NorthstarPS4] M6 script probe open %-12s failed\n",
-                target.tag);
-            continue;
-        }
-        const std::int32_t bytesRead =
-            read(reinterpret_cast<void**>(fsFieldAddr), buffer,
-                static_cast<std::int32_t>(sizeof(buffer)), handle);
-        close(fs, handle);
-        if (bytesRead <= 0) {
-            LogFormat("[NorthstarPS4] M6 script probe read %-12s bytes=%d\n",
-                target.tag, bytesRead);
-            continue;
-        }
-        const std::int32_t bytes =
-            bytesRead > static_cast<std::int32_t>(sizeof(buffer))
-                ? static_cast<std::int32_t>(sizeof(buffer)) : bytesRead;
-        LogFormat("[NorthstarPS4] M6 script probe read %-12s bytes=%d\n",
-            target.tag, bytes);
-        const std::int32_t head = bytes < 64 ? bytes : 64;
-        LogFormat("[NorthstarPS4] M6 script probe %s head=%.*s\n",
-            target.tag, head, reinterpret_cast<const char*>(buffer));
-        const std::int32_t tailStart = bytes > 64 ? bytes - 64 : 0;
-        LogFormat("[NorthstarPS4] M6 script probe %s tail=%.*s\n",
-            target.tag, bytes - tailStart,
-            reinterpret_cast<const char*>(buffer + tailStart));
-        int markerHits = 0;
-        for (std::int32_t i = 0; i + 15 <= bytes; ++i) {
-            if (std::memcmp(buffer + i, "M6 script probe", 15) == 0) ++markerHits;
-        }
-        int probeGnutHits = 0;
-        for (std::int32_t i = 0; i + 14 <= bytes; ++i) {
-            if (std::memcmp(buffer + i, "ns_m6_probe.gnut", 14) == 0) ++probeGnutHits;
-        }
-        LogFormat("[NorthstarPS4] M6 script probe %s markerM6=%d probeGnut=%d\n",
-            target.tag, markerHits, probeGnutHits);
-    }
-    LogFormat("[NorthstarPS4] M6 script probe done\n");
-}
-#endif
-#if defined(NORTHSTAR_PS4_ENABLE_M6_FS_OVERLAY)
 namespace {
 using FsOpenFn = void* (*)(void*, const char*, const char*, const char*, std::int64_t);
 using FsReadFn = std::int32_t (*)(void*, void*, std::int32_t, void*);
@@ -1892,46 +880,33 @@ using FsCloseFn = void (*)(void*, void*);
 
 // Mod search-path overlay. The game's IBaseFileSystem secondary vtable lives
 // at fs+8 and the engine dispatches open/read/close through it (slot 2 = open,
-// 0 = read, 3 = close, proven by the probe below). We copy the whole vtable
-// into writable memory, swap slot 2 for a resolution hook, and repoint fs+8.
-// The hook serves mod files from their own /app0/R2Northstar/mods/<Name>/mod dir first
-// (highest LoadPriority wins, mirroring PC AddSearchPath
-// semantics where the last-registered path wins), then falls through to the
-// engine's original search paths (loose /app0/r2 + VPK mounts). This replaces
-// the old "dump mod content into r2" staging: mods now live and load from
-// their own folder exactly like PC R2Northstar/mods/<Name>/mod.
+// 0 = read, 3 = close). The whole vtable is copied into writable memory, slot 2
+// swapped for a resolution hook, and fs+8 repointed. The hook serves a file
+// from the enabled mods' R2Northstar/mods/<Name>/mod folders first (highest
+// LoadPriority wins, as PC's AddSearchPath where the last-registered path
+// wins), then falls through to the engine's own search paths (loose /app0/r2
+// and VPK mounts).
 constexpr std::size_t kFsVtableCopySlots = 256;
 
 std::uintptr_t g_fsVtableCopy[kFsVtableCopySlots]{};
 
 // Every file under every mod root, indexed when the overlay is built.
 //
-// The overlay used to find mod files by trying `open()` on each mod root, for
-// every file the engine asked for. Nearly every request is for a stock file
-// no mod ships, so nearly every probe failed: in one session that joined a
-// server, 55,513 of 55,590 failed opens (99.9%) were these probes, 19,280 of
-// them between connecting and the "Connection to server timed out" - each a
-// host syscall plus two log lines, piled onto shadPS4's shader compiles in the
-// window where the client has to keep up with the server. PC Northstar
-// indexes mod files up front for the same reason (ModManager's file map).
+// Nearly every file the engine asks for is a stock file no mod ships, so
+// trying `open()` on each mod root per request fails tens of thousands of times
+// a session, each a host syscall, while a map loads. PC Northstar indexes mod
+// files up front for the same reason (ModManager's file map). With ~800 files
+// across 6 roots, failed opens per session drop from ~55,000 to ~100 and boot
+// to the Northstar lobby takes about 20 s less.
 //
-// Keys are lowercased because the host filesystem is case-insensitive and the
-// probe it replaces matched that way. A sorted vector rather than a map.
-//
-// 800 files across 6 roots: failed opens per session 55,590 -> 103, boot to the
-// Northstar lobby 70-74 s -> 52-57 s.
-//
-// It was disabled while shadPS4 5b92da8 was current: there the index turned the
-// emulator's level-transition crash (VCRUNTIME140+0x1cca7 on
-// GpuSchedPriorityPendingOpsRunner) from occasional into certain on the first
-// map load, 3/3. That crash is gone in shadPS4 ca89b01 (buffer manager rewrite,
-// #5047), so the index is on; older emulator builds should keep it off.
+// Keys are lowercased, as Windows (shadPS4's host) matches paths. A sorted
+// vector rather than a map. shadPS4 builds before ca89b01 crash on leaving a
+// map far more often with the index on.
 constexpr bool kModFileIndexEnabled = true;
 // `key` is the lower-case path matched against requests; `path` is the
 // file's own spelling, which is what gets opened. A PS4's /data is
 // case-sensitive: Northstar.Client asks for resource/UI/menus/panels/
-// mod_setting.res, which shadPS4 on Windows found and a PS4 did not
-// (2026-10-07).
+// mod_setting.res, which shadPS4 on Windows finds and a PS4 does not.
 struct ModFileEntry { std::string key; std::int32_t root; std::string path; };
 
 // The enabled mods' roots and file index, as one immutable snapshot. File
@@ -2008,8 +983,8 @@ ModOverlay* BuildModOverlay() noexcept {
 }
 
 // The highest-priority root in `overlay` that ships `normalized`, or -1. Falls
-// back to the old per-root probe if the index was not built, so a failure
-// there can only cost speed, never mods.
+// back to trying each root if the index was not built, so a failure there can
+// only cost speed, never mods.
 const ModFileEntry* FindModFileEntry(const ModOverlay& overlay, const char* normalized) noexcept {
     const std::string key = ModFileKey(normalized);
     auto it = std::lower_bound(overlay.index.begin(), overlay.index.end(), key,
@@ -2087,15 +1062,12 @@ std::size_t NormalizeRequestedPath(const char* in, char* out, std::size_t capaci
     return n;
 }
 
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 bool IsKeyValuePatched(const char* normalized) noexcept;  // runtime_keyvalues.inl
 bool ParticleManifestPath(const char* normalized) noexcept;  // runtime_particles.inl
-#endif
 
 bool ModReadFromCache(void* self, const char* fileName, void* result) noexcept {
     char normalized[256]{};
     if (NormalizeRequestedPath(fileName, normalized, sizeof(normalized))) {
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
         if (!std::strcmp(normalized, "cfg/server/persistent_player_data_version_929.pdef")) return false;
         if (ParticleManifestPath(normalized)) {
             LogFormat("[NorthstarPS4] bypass cached particles manifest\n");
@@ -2108,7 +1080,6 @@ bool ModReadFromCache(void* self, const char* fileName, void* result) noexcept {
             LogFormat("[NorthstarPS4] bypass cached keyvalues file: %s\n", normalized);
             return false;
         }
-#endif
         const ModOverlay* overlay = CurrentModOverlay();
         if (overlay && FindModFileRoot(*overlay, normalized) >= 0) {
             LogFormat("[NorthstarPS4] bypass cached mod file: %s\n", normalized);
@@ -2118,7 +1089,6 @@ bool ModReadFromCache(void* self, const char* fileName, void* result) noexcept {
     return g_originalFsReadCache(self, fileName, result);
 }
 
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 constexpr const char* kRuntimeRson = "/data/northstar_ps4/scripts.rson";
 FsReadFn g_originalFsRead = nullptr;
 FsCloseFn g_originalFsClose = nullptr;
@@ -2412,9 +1382,7 @@ bool BuildRuntimeManifest(void* self) noexcept {
 #include "runtime_keyvalues.inl"
 #include "runtime_particles.inl"
 #include "runtime_pdef.inl"
-#endif
 
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 // IBaseFileSystem::Size(fileName, pathID), primary vtable slot 135. A patched
 // file must report the length of the merged copy that Open will hand back, or
 // the engine allocates for the original and truncates the rest.
@@ -2451,30 +1419,21 @@ std::uint64_t ModSize(void* self, const char* fileName, const char* pathID) noex
 std::uint64_t ModSecondarySize(void* self, const char* fileName, const char* pathID) noexcept {
     return ModSize(reinterpret_cast<char*>(self) - 8, fileName, pathID);
 }
-#endif
 
 #include "runtime_vpks.inl"
 #include "runtime_rpaks.inl"
 #include "runtime_mod_reload.inl"
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 // After runtime_vpks.inl: the map command guard checks mod map archives.
 #include "runtime_concommands.inl"
 #include "runtime_chat_client.inl"
 #include "runtime_audio.inl"
-#if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
 // After runtime_mod_reload.inl and WriteEngineCode (runtime_concommands.inl).
 #include "runtime_localise_boot.inl"
-#endif
-#endif
 #include "runtime_server_vm.inl"
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 #include "runtime_mod_concommands.inl"
-#endif
-#include "runtime_console.inl"
 #include "runtime_http.inl"
 #include "runtime_http_script.inl"
 #include "runtime_host_frame.inl"
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 // After the HTTP transport (the Atlas template) and runtime_concommands.inl.
 #include "runtime_bans.inl"
 #include "runtime_string_commands.inl"
@@ -2483,7 +1442,6 @@ std::uint64_t ModSecondarySize(void* self, const char* fileName, const char* pat
 #include "runtime_materials.inl"
 #include "runtime_script_errors.inl"
 #include "runtime_signin.inl"
-#endif
 
 // IBaseFileSystem::ReadFile - secondary slot 14, filesystem_stdio+0xc3d0.
 //
@@ -2520,11 +1478,9 @@ bool PathIdIsGame(const char* pathID) noexcept {
 
 bool RewrittenByOpenEx(const char* normalized) noexcept {
     if (!std::strcmp(normalized, "scripts/vscripts/scripts.rson")) return true;
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     if (RuntimePdefPath(normalized)) return true;
     if (ParticleManifestPath(normalized)) return true;
     if (kKeyValuesMergeEnabled && IsKeyValuePatched(normalized)) return true;
-#endif
     return false;
 }
 
@@ -2532,7 +1488,6 @@ bool ModReadFile(void* self, const char* fileName, const char* pathID, void* buf
     int maxBytes, int startingByte, void* alloc) noexcept {
     char normalized[256]{};
     if (PathIdIsGame(pathID) && NormalizeRequestedPath(fileName, normalized, sizeof(normalized))) {
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
         if (RuntimePdefPath(normalized)) {
             if (RuntimePdefReady() && g_originalFsReadFile(self, kRuntimePdefOutput, pathID,
                     buffer, maxBytes, startingByte, alloc)) {
@@ -2549,7 +1504,6 @@ bool ModReadFile(void* self, const char* fileName, const char* pathID, void* buf
                 return true;
             }
         }
-#endif
         if (RewrittenByOpenEx(normalized)) {
             LogFormat("[NorthstarPS4] ReadFile of rewritten file left stock: %s\n", normalized);
         } else {
@@ -2580,7 +1534,6 @@ void* ModOpenEx(void* self, const char* fileName, const char* mode,
     const bool trace = fileName && (std::strstr(fileName, "scripts.rson") ||
         std::strstr(fileName, "_menus.nut") || std::strstr(fileName, "panel_mainmenu.nut"));
     if (trace) LogFormat("[NorthstarPS4] OpenEx requested=%s pathID=%s\n", fileName, pathID ? pathID : "(null)");
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     if (readOnly && NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
         RuntimePdefPath(normalized)) {
         if (!RuntimePdefReady()) {
@@ -2600,8 +1553,6 @@ void* ModOpenEx(void* self, const char* fileName, const char* mode,
             if (handle) return handle;
         }
     }
-#endif
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     if (readOnly && NormalizeRequestedPath(fileName, normalized, sizeof(normalized)) &&
         ParticleManifestPath(normalized) && ParticleManifestReady(self)) {
         void* handle = g_originalFsOpenEx(self, kParticleManifestOutput, mode, flags, pathID, resolved);
@@ -2629,7 +1580,6 @@ void* ModOpenEx(void* self, const char* fileName, const char* mode,
             LogFormat("[NorthstarPS4] keyvalues merged file would not open: %s\n", candidate);
         }
     }
-#endif
     if (readOnly && (!pathID || std::strcmp(pathID, "GAME") == 0) &&
         NormalizeRequestedPath(fileName, normalized, sizeof(normalized))) {
         char candidate[384];
@@ -2724,21 +1674,15 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
     if (!matches) return;
     g_originalFsOpen = originalOpen;
     g_originalFsOpenEx = reinterpret_cast<FsOpenExFn>(vtable[76]);
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     g_fsInstance = fs;
-#endif
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     g_originalFsRead = originalRead;
     g_originalFsClose = originalClose;
-#endif
     // Include the offset-to-top and RTTI entries preceding the vtable.
     for (std::int32_t i = -2; i < 166; ++i)
         g_primaryFsTable[i + 2] = reinterpret_cast<std::uintptr_t>(vtable[i]);
     g_primaryFsTable[78] = reinterpret_cast<std::uintptr_t>(&ModOpenEx);
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     g_originalFsSize = reinterpret_cast<FsSizeFn>(vtable[135]);
     g_primaryFsTable[137] = reinterpret_cast<std::uintptr_t>(&ModSize);
-#endif
     g_originalFsReadCache = reinterpret_cast<FsReadCacheFn>(vtable[97]);
     g_primaryFsTable[99] = reinterpret_cast<std::uintptr_t>(&ModReadFromCache);
     constexpr std::uint8_t mountBytes[] = {0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,0x28,0x02,0x00,0x00};
@@ -2788,9 +1732,7 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
     }
     g_fsHookInstalled = true;
     LogFormat("[NorthstarPS4] OpenEx hook installed roots=%d\n", ModRootCount());
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     CollectKeyValuePatches();
-#endif
 
     // Probe through the repointed (hooked) interface so results reflect mod
     // search-path resolution instead of the pre-hook function pointer.
@@ -2828,8 +1770,6 @@ void ProbeFilesystemInterface(OrbisKernelModule fsHandle) noexcept {
         tryOpen(probe.tag, probe.file);
     }
 }
-#endif
-#if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
 // Loads each mod's Localisation[] array through the game's native localise
 // interface (CLocalise::AddFile) so mod tokens resolve exactly like base game
 // localisation instead of depending on the VPK bake. Mirrors the PC hook in
@@ -2890,19 +1830,9 @@ void ProbeLocaliseInterface(OrbisKernelModule localizeHandle,
         g_localiseThis = thisAddr;
         g_localiseAddFile = reinterpret_cast<AddFileFn>(addFileSlot);
     }
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     LogFormat("[NorthstarPS4] localise probe complete engineLocalizeMatches=%d\n",
         BootLocalizeIs(thisAddr) ? 1 : 0);
-#else
-    // Diagnostic builds without the runtime manifest keep the old direct call.
-    std::int32_t totalFiles = 0;
-    std::int32_t loadedFiles = 0;
-    AddModLocalisationFiles(totalFiles, loadedFiles);
-    LogFormat("[NorthstarPS4] localise probe complete files=%d loaded=%d\n",
-        totalFiles, loadedFiles);
-#endif
 }
-#endif
 void* ModuleTracker(void*) noexcept {
 
     bool engineSeen = false;
@@ -2913,11 +1843,9 @@ void* ModuleTracker(void*) noexcept {
     OrbisKernelModule engineHandle = static_cast<OrbisKernelModule>(-1);
     OrbisKernelModule fsHandle = static_cast<OrbisKernelModule>(-1);
     OrbisKernelModule rtechHandle = static_cast<OrbisKernelModule>(-1);
-#if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
     OrbisKernelModule localizeHandle = static_cast<OrbisKernelModule>(-1);
     std::uintptr_t localizeBase = 0;
     std::size_t localizeSize = 0;
-#endif
     std::uintptr_t engineBase = 0;
     std::uintptr_t clientBase = 0;
     std::size_t clientSpan = 0;
@@ -2966,13 +1894,10 @@ void* ModuleTracker(void*) noexcept {
                 if (infoResult == 0 && std::strstr(info.name, "rtech_game") != nullptr) {
                     rtechHandle = handles[i];
                 }
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
                 if (infoResult == 0 && std::strstr(info.name, "materialsystem") != nullptr && info.segmentCount > 0) {
                     InstallLooseMaterialFallback(reinterpret_cast<std::uintptr_t>(info.segmentInfo[0].address));
                     InstallLooseTextureOverride(reinterpret_cast<std::uintptr_t>(info.segmentInfo[0].address));
                 }
-#endif
-#if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
                 if (infoResult == 0 && std::strstr(info.name, "localize") != nullptr) {
                     localizeHandle = handles[i];
                     if (info.segmentCount > 0) {
@@ -2991,7 +1916,6 @@ void* ModuleTracker(void*) noexcept {
                         }
                     }
                 }
-#endif
                 if (infoResult != 0 || !IsTarget(info.name)) continue;
                 const bool isEngine = std::strstr(info.name, "engine.prx") != nullptr ||
                     std::strstr(info.name, "engine.sprx") != nullptr;
@@ -3002,11 +1926,8 @@ void* ModuleTracker(void*) noexcept {
                     if (info.segmentCount > 0) {
                         engineBase = reinterpret_cast<std::uintptr_t>(info.segmentInfo[0].address);
                         engineSize = info.segmentInfo[0].size;
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST) && defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && \
-    defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
                         // Before the engine reaches vgui init, if possible.
                         InstallBootLocalisation(engineBase, engineSize);
-#endif
                     }
                 }
                 if (isClient && info.segmentCount > 0) {
@@ -3031,7 +1952,6 @@ void* ModuleTracker(void*) noexcept {
         }
         if (!(engineSeen && clientSeen)) sceKernelUsleep(100000);
     }
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     g_runtimeClientBase = clientBase;
     g_runtimeClientSpan = clientSpan;
     InstallRuntimeVmInit();
@@ -3041,8 +1961,6 @@ void* ModuleTracker(void*) noexcept {
     // Before the UI VM registers its natives.
     InstallClientUnsafeFuncStubs(clientBase);
     InstallRecoverableCompileErrors(clientBase);
-#endif
-#if defined(NORTHSTAR_PS4_ENABLE_M6_FS_OVERLAY)
     if (fsHandle != static_cast<OrbisKernelModule>(-1)) {
         ProbeFilesystemInterface(fsHandle);
     } else {
@@ -3054,22 +1972,14 @@ void* ModuleTracker(void*) noexcept {
     } else {
         LogFormat("[NorthstarPS4] mod rpak hook skipped: rtech_game handle unavailable\n");
     }
-#endif
-#if defined(NORTHSTAR_PS4_ENABLE_DIAGNOSTIC_UI_NATIVE)
-    if (clientBase != 0) InstallDiagnosticUiRecord(clientBase, clientSpan);
-#endif
     if (vstdlibHandle != static_cast<OrbisKernelModule>(-1)) {
         ProbeCvarInterface(vstdlibHandle, engineBase, engineSize);
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
         StartPcSignIn();  // after the identity file is read
         // Now, while the game still has memory to spare: on a PS4 the SSL
         // and HTTP pools come out of it, and by the menus it is nearly gone.
         InitHttpTransport();
         RegisterNativeConCommands(engineBase, engineSize);
-#endif
         if (engineHandle != static_cast<OrbisKernelModule>(-1)) {
-            ProbeRegistrationExports(engineHandle, vstdlibHandle);
-            ProbeEngineClientInterface(engineHandle, engineBase, engineSize);
         }
     } else {
         LogFormat("[NorthstarPS4] cvar probe skipped: vstdlib handle unavailable\n");
@@ -3079,21 +1989,14 @@ void* ModuleTracker(void*) noexcept {
         "[NorthstarPS4] module tracker complete engine=%d client=%d\n",
         engineSeen ? 1 : 0, clientSeen ? 1 : 0);
     LogFlexibleMemory("after hooking");
-#if defined(NORTHSTAR_PS4_ENABLE_M6_LOCALISE) && defined(NORTHSTAR_PS4_ENABLE_M6_MOD_METADATA)
     if (localizeHandle != static_cast<OrbisKernelModule>(-1) && localizeBase != 0) {
         ProbeLocaliseInterface(localizeHandle, localizeBase, localizeSize);
     } else {
         LogFormat("[NorthstarPS4] localise probe skipped: localize module unavailable\n");
     }
-#endif
     if (clientBase != 0) {
         ProbeUiVm(clientBase, clientSpan);
     }
-#if defined(NORTHSTAR_PS4_ENABLE_M6_SCRIPT_PROBE)
-    if (clientBase != 0) {
-        ProbeUiScriptSystem(clientBase, clientSpan, fsHandle);
-    }
-#endif
     return nullptr;
 }
 } // namespace
@@ -3105,7 +2008,7 @@ bool Initialize(InitStage stage) noexcept {
     // raises it. This module's threads come from scePthreadCreate and its hooks
     // run on the game's threads, so malloc ran unlocked from several threads at
     // once: boots crashed inside malloc or hung spinning on a corrupted free
-    // list (2026-10-01). OpenOrbis builds __wait as a bare return, so the lock
+    // list. OpenOrbis builds __wait as a bare return, so the lock
     // this turns on is a spinlock.
     if (g_muslLibc.threadsMinus1 == 0) g_muslLibc.threadsMinus1 = 1;
     // Before any thread of this module starts allocating (see heaparena).

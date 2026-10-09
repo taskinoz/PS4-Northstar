@@ -215,7 +215,7 @@ int TryRemoteAuth(void* vm) {
 // Except when Atlas refuses the token itself and the token helper cannot
 // renew it: the lobby would then start on the local save with no word to the
 // player, who may not know that signing in to Northstar elsewhere with the
-// same EA account replaced the PS4's sign-in (2026-10-08). That fails here as
+// same EA account replaced the PS4's sign-in. That fails here as
 // on PC, with the reason and what to do in the error dialog.
 std::atomic<int> selfAuthState{kFetchIdle};
 SelfAuthResponse selfAuthResult;  // worker-owned while requesting

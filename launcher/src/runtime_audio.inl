@@ -5,7 +5,7 @@
 // the two functions PC hooks have the same shape here:
 //   - client+0x22450 plays an event: its second argument holds the event's name
 //     at +0x30 (PC mileswin64+0x294C0, a2+0x30). It is reached from three call
-//     sites (0x162c4, 0x2bd0f, 0x2cc35), which now go through AudioEventStub to
+//     sites (0x162c4, 0x2bd0f, 0x2cc35), which go through AudioEventStub to
 //     note the name first.
 //   - client+0x99b0 is Miles' LoadSampleMetadata(sample, buffer, length, type)
 //     (PC mileswin64+0xF110; the same "Unknown File Type" and "Bink Audio

@@ -1,5 +1,5 @@
 // What a PS4 does differently from shadPS4, for the rest of the runtime.
-// Loaded as a GoldHEN plugin on a PS4 (2026-10-07), the first boots found:
+// Loaded as a GoldHEN plugin on a PS4:
 // - a thread's default stack is too small for mod discovery's 47 KiB frames;
 // - this PRX is mapped near 0x800000000, gigabytes from the game's modules,
 //   so a 5-byte call or jump from game code cannot reach it;
@@ -22,7 +22,7 @@ const OrbisPthreadAttr* RuntimeThreadAttr() noexcept {
 // The length of a protection change, from the page holding `address`, that
 // covers `size` bytes. A patched displacement can straddle two 16 KiB pages,
 // and a PS4 enforces protection per page: writing the second page's bytes
-// faulted in client.prx (2026-10-07). shadPS4 never caught it.
+// faulted in client.prx. shadPS4 never caught it.
 std::size_t PageSpan(std::uintptr_t address, std::size_t size) noexcept {
     const auto first = address & ~std::uintptr_t(0x3fff);
     const auto last = (address + size - 1) & ~std::uintptr_t(0x3fff);
@@ -30,8 +30,8 @@ std::size_t PageSpan(std::uintptr_t address, std::size_t size) noexcept {
 }
 
 // Whether `size` bytes at `address` can be read, page by page. On a PS4, a
-// read of client.prx's code faulted as "page not present" late in the boot
-// (2026-10-07), although the same code was read earlier; an unusual page is
+// read of client.prx's code faulted as "page not present" late in the boot,
+// although the same code was read earlier; an unusual page is
 // logged with what the kernel reports, and refused.
 bool CodeReadable(std::uintptr_t address, std::size_t size) noexcept {
     const auto last = (address + size - 1) & ~std::uintptr_t(0x3fff);
@@ -76,7 +76,7 @@ void LogFlexibleMemory(const char* when) noexcept {
 
 // Thread stacks, reserved while the game is starting. Later, the game has
 // taken nearly all of its flexible memory, and a thread started from the menus
-// could not get a stack on a PS4: the server list never started (2026-10-07).
+// could not get a stack on a PS4: the server list never started.
 // A slot is reused only a second after its thread finished with it, so the
 // thread has left it before another starts on it.
 namespace threadstacks {
@@ -171,7 +171,7 @@ bool Reaches(std::uintptr_t from, std::uintptr_t to) noexcept {
 // Without MAP_FIXED the kernel takes the hint as where to start looking, so
 // the search starts as far below the game's modules as a rel32 reaches: the
 // first page found near the engine took the address client.prx would have
-// loaded at (2026-10-07). Then nearer, then above.
+// loaded at. Then nearer, then above.
 std::uintptr_t MapNear(std::uintptr_t site) noexcept {
     for (int attempt = 0; attempt < 224; ++attempt) {
         const int side = attempt < 112 ? 0 : 1;

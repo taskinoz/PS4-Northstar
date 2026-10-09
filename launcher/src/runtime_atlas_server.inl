@@ -591,8 +591,8 @@ bool TakeRemotePdata(int client, std::uint64_t uid, std::string& pdata) noexcept
 
 // PC: MasterServerManager::WritePlayerPersistentData, POST
 // /accounts/write_persistence?id=<uid>&serverId=<id> with the pdata as a
-// multipart file. On by default, as on PC, since a PC player's save was seen to
-// round-trip (docs/TECHNICAL-NOTES.md); +ns_ps4_write_remote_persistence 0 in
+// multipart file. On by default, as on PC (a PC player's save round-trips
+// through a PS4 host); +ns_ps4_write_remote_persistence 0 in
 // ns_startup_args.txt turns it off, and then what would be written is logged.
 struct PdataWrite {
     int client;

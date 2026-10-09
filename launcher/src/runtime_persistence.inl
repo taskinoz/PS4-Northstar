@@ -42,10 +42,8 @@
 // page protection is touched, because the object's vtable pointer is ordinary
 // writable data.
 //
-// **What the hook does, and why not simply return true.** The first version
-// forced the answer to true. The lobby came up, and then the game crashed
-// (access violation at engine+0x2dbd6b) once the lobby shut down. The engine
-// function behind the slot, engine.prx 0x2dba90, is:
+// **Why the hook does not simply return true.** The engine function behind
+// the slot, engine.prx 0x2dba90, is:
 //
 //   if (client >= clientCount)                  return false  ; engine+0x38188c0
 //   c = &clients[client]                        ; engine+0x3818680, stride 0x2d738
@@ -54,11 +52,10 @@
 //
 // and the persistence readers repeat that check inline: when it fails they
 // take a NULL buffer instead of `client + 0x74a` and read through it. Forcing
-// the vtable answer made the callers believe a buffer existed that the readers
-// then refused to hand out. That is exactly what happened after the lobby
-// shut down and the client slot emptied.
+// the vtable answer makes callers believe in a buffer the readers then refuse
+// to hand out, and the game faults (engine+0x2dbd6b) once a slot empties.
 //
-// So the hook now does what PC's AuthenticatePlayer does: it sets the client's
+// So the hook does what PC's AuthenticatePlayer does: it sets the client's
 // own `persistenceReady` field to READY_INSECURE, and only for a slot that is
 // fully connected, then lets the engine's function answer. Every reader
 // (through the vtable or inlined) sees one consistent state, a disconnected

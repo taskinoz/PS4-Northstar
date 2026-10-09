@@ -1,14 +1,14 @@
-# AI.Harness local game control
+# AI.Harness
 
-AI.Harness is an opt-in development mod. It runs commands on the UI script thread through the game's `ClientCommand`, without editing retail VPKs or upstream mods. There is no web listener or emulated controller dependency. It requires the PS4 runtime containing the `NSAIHarness*` natives.
+AI.Harness is a development mod for driving the game from a script. It runs commands on the UI script thread through the game's `ClientCommand` and replies through a mailbox in the data folder. It needs the runtime's `NSAIHarness*` natives, which only AI.Harness can call. It works in shadPS4; the mailbox is a host folder.
 
 ## Installation
 
-1. Build the runtime with `scripts/Build-Northstar.ps1 -EnableRuntimeManifest` and deploy it using the project's normal deployment script.
+1. Build and deploy the runtime ([BUILDING.md](BUILDING.md#the-runtime)).
 2. Copy `mods/AI.Harness` into the game's `R2Northstar/mods/AI.Harness` and ensure `AI.Harness` is enabled in `enabledmods.json` if explicitly listed there.
-3. Run the host helper below. It creates the mailbox under `%APPDATA%\shadPS4\data\northstar_ps4\ai_harness`. Use `-Mailbox` for another emulator user-data location.
+3. Run the host helper below. It creates the mailbox in `data\northstar_ps4\ai_harness` under shadPS4's user folder (`SHADPS4_USER_DIR`, default `%APPDATA%\shadPS4`); `-Mailbox` names another.
 
-Profile packaging excludes the harness unless `New-NorthstarProfile.ps1 -IncludeAIHarness` is specified. Disable or remove the mod when automation is not needed.
+`New-NorthstarProfile.ps1` leaves the harness out unless given `-IncludeAIHarness`. Disable or remove the mod when it is not needed.
 
 ## Commands
 
@@ -38,15 +38,15 @@ From the repository in PowerShell:
 # auth, download missing verified mods, switch client-required mods, ReloadMods, connect.
 ./scripts/Send-AIHarnessCommand.ps1 -Action join -Command 'VAMP D' -TimeoutSeconds 180
 
-# Explicitly submit the legacy console.txt contents (file remains intact).
+# Send the contents of console.txt in the data folder as console commands (the file is kept).
 ./scripts/Send-AIHarnessCommand.ps1 -FromConsoleFile
 ```
 
-`launch` follows Northstar's local authentication sequence, completes local authentication, then queues `setplaylist tdm` and `map mp_lobby`. Authentication failure is returned as an error. A successful reply says **queued**, not that the map loaded successfully. Check the fresh session log for script errors and actual lobby readiness. `status` confirms the UI polling thread is responding and now reports `connected`, `lobby`, `level`, `playlist` and `privateMatch` from game state (the last two only while connected). `cvar` returns a convar's value, `playlistvar` reads an effective playlist variable from `<playlist>|<name>|<fallback>`, `datatable` checks disk-CSV row count, column lookup, row search and scalar accessors, `datatablevector` checks vector access and matching when its development fixture is installed, and `localize` resolves a token; each result is in the reply's `json` field. These do not prove that every initialization callback succeeded; also inspect the current session for script errors.
+`launch` follows Northstar's local authentication sequence, completes local authentication, then queues `setplaylist tdm` and `map mp_lobby`. Authentication failure is returned as an error. A successful reply says **queued**, not that the map loaded successfully. Check the fresh session log for script errors and actual lobby readiness. `status` confirms the UI polling thread is responding and now reports `connected`, `lobby`, `level`, `playlist` and `privateMatch` from game state (the last two only while connected). `cvar` returns a convar's value, `playlistvar` reads an effective playlist variable from `<playlist>|<name>|<fallback>`, `datatable` checks disk-CSV row count, column lookup, row search and scalar accessors, `datatablevector` checks vector access and matching when its development fixture is installed, and `localize` resolves a token; each result is in the reply's `json` field. A reply does not show that every callback succeeded; check the session's log for script errors.
 
-`json` passes `-Command` through `DecodeJSON(text, true)` and `EncodeJSON` and returns the result in the reply's `json` field, to test the JSON natives in the UI VM. Member order follows the Squirrel table, not the input. `http` starts `NSHttpGet`, waits for its deferred success or failure callback, and returns `success|status|bodyLength` or `failure|code|message`; it verifies that the native host-frame queue drain delivers a real callback without the former script polling bridge.
+`json` passes `-Command` through `DecodeJSON(text, true)` and `EncodeJSON` and returns the result in the reply's `json` field, to test the JSON natives in the UI VM. Member order follows the Squirrel table, not the input. `http` starts `NSHttpGet`, waits for its deferred success or failure callback, and returns `success|status|bodyLength` or `failure|code|message`.
 
-`httpretire` is the destructive-generation acceptance action. Point it at a deliberately
+`httpretire` tests that a request outliving its VM is dropped. Point it at a deliberately
 delayed endpoint and use `-QueueOnly`: it starts the request, runs the normal `ReloadMods()`
 path and resets the UI VM. When the endpoint eventually responds, the runtime must log
 `dropped async result for retired context=2` and must not run the callback in the replacement
@@ -72,4 +72,4 @@ The helper publishes a UTF-8 JSON request atomically, with a unique ID and a 16 
 
 A timeout is an unknown outcome, not cancellation. Inspect `request.json`, `claimed.json`, `response.json` and the current game log before retrying. A crash after consumption does not replay the request on restart. If a stale request needs removing, first stop the game and check its ID. Do not send credentials through console commands or log them.
 
-The legacy native console dispatcher remains disabled because its profiled address sends commands to a server instead of executing locally. Its reader now leaves console.txt untouched while disabled. Use the explicit helper import above. The harness's own request parsing still uses its native field reader rather than DecodeJSON, and it avoids the incomplete HTTP callback API.
+Requests are parsed with the runtime's own field reader, not `DecodeJSON`.

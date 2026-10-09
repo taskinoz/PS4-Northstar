@@ -1,16 +1,15 @@
 // Native console commands that NorthstarLauncher adds to the engine.
 //
-// Northstar's scripts rely on commands the stock game does not have, and on PS4
-// they silently did nothing:
+// Northstar's scripts rely on commands the stock game does not have:
 //
 //   - `setplaylist` / `playlist` (shared/playlist.cpp). "Launch Northstar" runs
 //     `setplaylist tdm` before `map mp_lobby`. Without it the playlist stays at
-//     whatever was last set - "private_match" after a private match - so quitting
-//     to the main menu and entering multiplayer again rebuilt the private lobby
-//     (_lobby.gnut keys the lobby type off GetCurrentPlaylistName()).
+//     whatever was last set - "private_match" after a private match - and
+//     _lobby.gnut, which keys the lobby type off GetCurrentPlaylistName(),
+//     rebuilds the private lobby.
 //   - `ns_start_reauth_and_leave_to_lobby` (shared/misccommands.cpp). A server
-//     ends every "leave match" with ClientCommand( player, this ). Without it the
-//     player was left in the match with the leave already acknowledged.
+//     ends every "leave match" with ClientCommand( player, this ); without it
+//     the player stays in the match.
 //
 // **Engine profile.** `ConCommand::ConCommand(this, name, callback, help, flags,
 // completion)` is engine 0x204e60: the engine's own static constructors call it
@@ -435,16 +434,12 @@ void InstallHostOptions(std::uintptr_t engineBase, std::size_t engineSize) noexc
 // its listen server copies it into the local player's m_UID. The PS4 engine
 // keeps rewriting platform_user_id from the PSN account id, as `%llu`, or as
 // the literal "1" when there is none, which is always the case under shadPS4.
-// At least two places do it (engine+0xb87da and engine+0x1191b7). EnsureConnectUid
-// puts the Atlas uid back before a join, but hosting has no such step, so the
-// host's own player connected as uid 1 and player.GetUID() said "1" where PC
-// says the host's uid.
-//
-// So the imported uid goes in where the packet is built instead:
-// engine+0x155516 picks platform_user_id's string (or "" / the
-// FCVAR_NEVER_AS_STRING name), then strtoull's it at 0x155549 and writes the
-// number. The pick now returns the Atlas uid when one is imported, and runs as
-// before otherwise.
+// At least two places do it (engine+0xb87da and engine+0x1191b7). Hosting has
+// no step before the connect where EnsureConnectUid could run, so the uid is
+// supplied where the packet is built: engine+0x155516 picks platform_user_id's
+// string (or "" / the FCVAR_NEVER_AS_STRING name), then strtoull's it at
+// 0x155549 and writes the number. The pick returns the Atlas uid when one is
+// imported, and the engine's own choice otherwise.
 constexpr std::uintptr_t kConnectUidPickVa = 0x155516;
 constexpr std::uintptr_t kConnectUidPickEndVa = 0x155542;
 constexpr std::uintptr_t kPlatformUserIdFlagsVa = 0x1a15609;

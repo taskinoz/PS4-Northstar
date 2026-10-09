@@ -1,8 +1,11 @@
+# Builds and deploys the runtime (unless skipped), launches shadPS4 on the game,
+# and follows shadPS4's log until a line matches -SuccessPattern or
+# -FailurePattern, or -TimeoutSeconds pass. The new log lines and a result.json
+# go to work\test-boots\<time>. Throws unless the success pattern matched.
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string]$Config = (Join-Path $PSScriptRoot '..\config\local.json'),
-    [string]$ShadPs4Exe = 'C:\Users\tristan\AppData\Roaming\shadPS4QtLauncher\versions\Pre-release\shadPS4.exe',
-    [string]$ShadLog = 'C:\Users\tristan\AppData\Roaming\shadPS4\log\shad_log.txt',
+    [string]$ShadPs4Exe,
+    [string]$ShadLog,
     [string]$SuccessPattern = '\[NorthstarPS4\] module tracker complete engine=1 client=1',
     [string]$FailurePattern = 'SIGSEGV|access violation|guest crash|Unhandled exception|\[Debug\] <Critical>',
     [ValidateRange(5, 1800)]
@@ -10,30 +13,14 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipDeploy,
     [switch]$KeepRunning,
-    [switch]$NoLaunch,
-    [switch]$EnableDiagnosticConVar,
-    [switch]$EnableTeamChangesConVar,
-    [switch]$EnableDiagnosticUiNative,
-    [switch]$EnableM6FsOverlay,
-    [switch]$EnableM6ModMetadata,
-    [switch]$EnableM6Scripts,
-    [switch]$EnableM6ScriptProbe,
-    [switch]$EnableM6ScriptInject,
-    [switch]$EnableM6ScriptInjectFromMods,
-    [switch]$EnableM6Localise,
-    [switch]$EnableRuntimeManifest,
-    [switch]$SkipR2ModStage
+    [switch]$NoLaunch
 )
 
 $ErrorActionPreference = 'Stop'
-if ($EnableM6Scripts) { throw 'Use New-NorthstarProfile.ps1 to prepare R2Northstar/mods; runtime iterations never stage or merge scripts.' }
-$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$configPath = [IO.Path]::GetFullPath($Config)
-if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
-    throw "Configuration file not found: $configPath"
-}
-$settings = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
-$gameRoot = [IO.Path]::GetFullPath($settings.ps4GameRoot)
+. "$PSScriptRoot\Env.ps1"
+if (-not $ShadPs4Exe) { $ShadPs4Exe = Get-ShadPs4Exe }
+if (-not $ShadLog) { $ShadLog = Join-Path (Get-ShadPs4UserDir) 'log\shad_log.txt' }
+$gameRoot = Get-GameRoot
 $eboot = Join-Path $gameRoot 'eboot.bin'
 $prx = Join-Path $gameRoot 'bin\ps4_retail\northstar_ps4.prx'
 
@@ -44,15 +31,15 @@ foreach ($required in @($ShadPs4Exe, $eboot)) {
 }
 
 if (-not $SkipBuild) {
-    & (Join-Path $PSScriptRoot 'Build-Stage2Poc.ps1') -EnableDiagnosticConVar:$EnableDiagnosticConVar -EnableTeamChangesConVar:$EnableTeamChangesConVar -EnableDiagnosticUiNative:$EnableDiagnosticUiNative -EnableM6FsOverlay:$EnableM6FsOverlay -EnableM6ModMetadata:$EnableM6ModMetadata -EnableM6ScriptProbe:$EnableM6ScriptProbe -EnableM6ScriptInject:$EnableM6ScriptInject -EnableM6ScriptInjectFromMods:$EnableM6ScriptInjectFromMods -EnableM6Localise:$EnableM6Localise -EnableRuntimeManifest:$EnableRuntimeManifest
-    if (-not $?) { throw 'Stage 2 build failed.' }
+    & (Join-Path $PSScriptRoot 'Build-Northstar.ps1')
+    if (-not $?) { throw 'Build failed.' }
 }
 if (-not $SkipDeploy) {
-    & (Join-Path $PSScriptRoot 'Deploy-Stage2Poc.ps1') -Config $configPath
-    if (-not $?) { throw 'Stage 2 deployment failed.' }
+    & (Join-Path $PSScriptRoot 'Deploy-Runtime.ps1') -GameRoot $gameRoot
+    if (-not $?) { throw 'Deployment failed.' }
 }
 if (-not (Test-Path -LiteralPath $prx -PathType Leaf)) {
-    throw "Installed Stage 2 PRX not found: $prx"
+    throw "Installed runtime not found: $prx"
 }
 
 $installedHash = (Get-FileHash -LiteralPath $prx -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -67,7 +54,7 @@ if ($NoLaunch) {
     return
 }
 
-$iterationRoot = Join-Path $repoRoot ('work\stage2\iterations\' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$iterationRoot = Join-Path $RepoRoot ('work\test-boots\' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 [IO.Directory]::CreateDirectory($iterationRoot) | Out-Null
 $transcriptPath = Join-Path $iterationRoot 'shad-new-lines.log'
 $resultPath = Join-Path $iterationRoot 'result.json'

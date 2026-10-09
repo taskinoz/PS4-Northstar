@@ -66,13 +66,6 @@ The same app takes options. With any of these it works in the terminal instead o
 
 In the terminal it keeps serving new sign-ins until Ctrl+C, and exits with 0 when signed in, 1 when signing in failed, and 2 for a bad option. On Windows the app is a window app, so the shell doesn't wait for it: use `start /wait NorthstarPS4TokenHelper.exe --once ...` in cmd, or `Start-Process -Wait`, when a script needs the exit code. On macOS the program is inside the app at `NorthstarPS4 Token Helper.app/Contents/MacOS/NorthstarPS4TokenHelper`.
 
-### Signing in without the token helper
-
-A running PC Northstar can hand over its sign-in instead. It isn't renewed, so you repeat this when it runs out (about a day, or as soon as PC Northstar signs in again). From a copy of this repository:
-
-1. On the PC, start Northstar and wait for its log to say `Northstar origin authentication completed successfully`.
-2. Run `scripts\Export-AtlasCredentials.ps1`. It reads the account id and sign-in out of the running client, checks the id against the client's own log, and writes `atlas_identity.json` into the data folder (`-Output` writes it elsewhere, `-WhatIf` shows what it would do).
-
 ### What the game reports
 
 Launch Northstar says what's wrong, with the console's address and sign-in code, when it isn't signed in:
@@ -105,7 +98,7 @@ Mods go in `<game folder>\R2Northstar\mods`, one folder each, exactly as on PC; 
 - RPak texture and material packs (`paks/*.rpak`, `*.starpak`). PC-format paks can't be read on the PS4, and the game refuses them instead of crashing. Northstar.Custom's come converted in the release. For other mods, a copy of this repository converts them: `scripts\Sync-NorthstarProfile.ps1 -ConvertRpaksForPs4`, or `New-NorthstarProfile.ps1` with the same switch (see [BUILDING.md](BUILDING.md)). Converted packs tested so far: the smooshie CAR UwU and Volt UwU weapon skins, and S2Mods' Resonance Rifle.
 
 **Doesn't work yet:**
-- compressed or patch RPaks, and paks with models or UI images;
+- compressed or patch RPaks (no current tool makes them);
 - plugins (Windows DLLs).
 
 Other tested mods include Rwyn's Kraber reload sound pack, S2.SpeedometerV2 (a HUD with Mod Settings), the `bobthebob.mp_box` custom map and Moblin.Archon's particles.

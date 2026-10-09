@@ -1,9 +1,8 @@
 // Squirrel script output routed into the module log.
 //
-// On this port `print`, `printl`, `printt` and `Msg` all reach the log as
-// nothing at all. The Squirrel base library registers `print` at VA 0x6d0b30
-// (its registration record is at 0xa83ea8, naming the string at 0x92ddc5), and
-// that native ends in:
+// The Squirrel base library registers `print` at VA 0x6d0b30 (its
+// registration record is at 0xa83ea8, naming the string at 0x92ddc5), and that
+// native ends in:
 //
 //   006d0b84  mov  rax, qword ptr [rbx + 0x50]    ; sqvm -> SQSharedState
 //   006d0b88  mov  rcx, qword ptr [rax + 0x4350]  ; SQSharedState::_printfunc
@@ -12,10 +11,8 @@
 //   006d0b94  lea  rsi, [rip + ...]               ; "%s"
 //   006d0ba0  call rcx                            ; printfunc(vm, "%s", text)
 //
-// The pointer is *not* null here - a first run reported `previous=0x9603fae0`,
-// engine code - so script output was never being discarded, it was going to
-// the engine's own console sink, which does not reach shadPS4 stdout the way
-// this module's sceKernelDebugOutText output does. The hook below therefore
+// The engine installs its own console sink there, which does not reach the
+// log the way this module's sceKernelDebugOutText output does. The hook below
 // tees rather than replaces: it logs the text and then forwards to whatever
 // was installed, so the in-game console keeps working.
 // Vanilla script funnels everything through that one native:
@@ -33,12 +30,11 @@ constexpr std::size_t kSharedStatePrintFuncOffset = 0x4350;
 // lifecycle globals to name the context.
 //
 // Every VM creation allocates a fresh shared state, so entries accumulate
-// across map loads unless they are released. The first version of this sized
-// the table at 4 and refused once full, which silently stopped capturing
-// script output from the fourth VM onwards - the table must therefore be
-// released on VM teardown (see RemoveScriptPrint, called from the destroy
-// hook) and a full table evicts rather than refuses, because a stale entry
-// only ever refers to a shared state that has already been freed.
+// across map loads unless they are released. Entries are released on VM
+// teardown (see RemoveScriptPrint, called from the destroy hook), and a full
+// table evicts rather than refuses: a stale entry only ever refers to a shared
+// state that has already been freed, and refusing would stop capturing script
+// output for every later VM.
 constexpr std::size_t kMaxScriptPrintHooks = 16;
 struct ScriptPrintHook { void* shared; ScriptPrintFn original; const char* label; };
 ScriptPrintHook g_scriptPrintHooks[kMaxScriptPrintHooks]{};
@@ -50,9 +46,7 @@ const ScriptPrintHook* FindScriptPrintHook(void* shared) noexcept {
     return nullptr;
 }
 
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 void NoteScriptOutput(const char* label, const char* text) noexcept;  // runtime_script_errors.inl
-#endif
 
 void ScriptPrint(void* vm, const char* format, ...) noexcept {
     if (!format) return;
@@ -69,9 +63,7 @@ void ScriptPrint(void* vm, const char* format, ...) noexcept {
         ? FindScriptPrintHook(*reinterpret_cast<void**>(static_cast<char*>(vm) + 0x50))
         : nullptr;
     if (length) LogFormat("[NorthstarPS4] [%s script] %s\n", hook ? hook->label : "?", text);
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     if (length && hook) NoteScriptOutput(hook->label, text);
-#endif
     // Preserve whatever the engine had installed, if anything ever is. The
     // original takes varargs, so the already-formatted text is passed through
     // the same "%s" shape the caller used.

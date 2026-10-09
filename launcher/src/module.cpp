@@ -3,18 +3,18 @@
 
 // Entered from DT_INIT, .init_array and GoldHEN's plugin_load. A PS4 calls
 // DT_INIT with the stack 8 bytes off the ABI's alignment (shadPS4 does not), and
-// the first aligned SSE store in vfprintf faulted (2026-10-07), so the entry
+// the first aligned SSE store in vfprintf faulted, so the entry
 // points realign it.
 extern "C" __attribute__((constructor, force_align_arg_pointer)) void NorthstarPs4Init() {
     static bool initialized = false;
     if (initialized) return;
     initialized = true;
-    sceKernelDebugOutText(0, "[NorthstarPS4] Stage 2 PoC initializer executed\n");
+    sceKernelDebugOutText(0, "[NorthstarPS4] runtime loaded\n");
     northstar::ps4::Initialize(northstar::ps4::InitStage::ModuleLoaded);
 }
 
 extern "C" __attribute__((destructor)) void NorthstarPs4Fini() {
-    sceKernelDebugOutText(0, "[NorthstarPS4] Stage 2 PoC finalizer executed\n");
+    sceKernelDebugOutText(0, "[NorthstarPS4] runtime unloaded\n");
 }
 
 extern "C" int NorthstarPs4PocVersion() {

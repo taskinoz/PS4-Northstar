@@ -8,8 +8,9 @@ follows. This rewrites that one block as // comments; nothing else changes.
 import os
 
 NL = chr(10)
-SRC = ('D:/PS4/ShadPS4/CUSA04013/R2Northstar/mods/Northstar.Client/mod/'
-       'resource/ui/menus/colorsliders.menu')
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SRC = os.path.join(REPO, 'vendor', 'NorthstarMods', 'Northstar.Client', 'mod', 'resource', 'ui', 'menus',
+                   'colorsliders.menu')
 DST = 'mods/Northstar.PS4/mod/resource/ui/menus/colorsliders.menu'
 
 OPEN = chr(60) + '!--'

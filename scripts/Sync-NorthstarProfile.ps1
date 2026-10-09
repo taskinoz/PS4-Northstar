@@ -3,23 +3,15 @@
 Brings a deployed PS4 mod profile back in line with its sources.
 
 .DESCRIPTION
-New-NorthstarProfile.ps1 refuses to write into an existing directory, so once a
-profile is deployed there is no supported way to refresh it. That is not a
-theoretical gap: the deployed Northstar.Custom was missing all eight of its
-.mdl files - 125 files on PC against 117 deployed - which is why the twin-B
-shotgun rendered as the Source error model. Nothing could detect the drift,
-because the hash manifest the builder writes never reaches the game directory.
+New-NorthstarProfile.ps1 only writes new profiles. This script refreshes a
+deployed one: it compares every source file with the deployment, copies what is
+missing or changed, checks each copy by hash, and writes a manifest, so the next
+run reports drift.
 
-This script is the development-loop answer: compare every source file against
-the deployment, copy what is missing or changed, verify each copy by hash, and
-leave a manifest behind so the next run can report drift instead of discovering
-it months later.
-
-Mods come from two places, matching New-NorthstarProfile.ps1: the PC Northstar
-mods root from config/local.json, and this repository's own mods/ directory for
-port-specific ones such as Northstar.DirectConnect. A folder in the repository
-wins over one of the same name from the PC install, so a port-specific override
-is never clobbered by an upstream copy.
+Mods come from the same two places as New-NorthstarProfile.ps1: Northstar's mods
+(NORTHSTAR_MODS_ROOT, or -ModsRoot), and this repository's mods/ for the
+port's own (Northstar.PS4, Northstar.DirectConnect). A folder in the repository
+wins over one of the same name from Northstar's mods.
 
 Files the game writes itself are never touched. Only mods/ is synchronised;
 enabledmods.json is left alone once it exists, because it holds the player's own
@@ -36,26 +28,24 @@ Report drift without changing anything.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string] $Config = (Join-Path $PSScriptRoot '..\config\local.json'),
-    # Defaults to the deployed profile under the PS4 game root.
+    [string] $ModsRoot,
+    # Defaults to R2Northstar in the shadPS4 game folder.
     [string] $Destination,
     [switch] $IncludePs4CompatibilityMods = $true,
     [switch] $ConvertRpaksForPs4,
     [switch] $Prune
 )
 $ErrorActionPreference = 'Stop'
-$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if (-not (Test-Path -LiteralPath $Config -PathType Leaf)) { throw "Configuration file not found: $Config" }
-$settings = Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
-if (-not $Destination) {
-    $Destination = Join-Path ([IO.Path]::GetFullPath($settings.ps4GameRoot)) 'R2Northstar'
-}
+. "$PSScriptRoot\Env.ps1"
+$repositoryRoot = $RepoRoot
+if (-not $ModsRoot) { $ModsRoot = Get-NorthstarModsRoot }
+if (-not $Destination) { $Destination = Join-Path (Get-GameRoot) 'R2Northstar' }
 $Destination = [IO.Path]::GetFullPath($Destination)
 $modsDestination = Join-Path $Destination 'mods'
 
 # Lowest priority first, so a later source overrides an earlier one by folder
 # name. The repository's own mods come last and therefore win.
-$sources = @([IO.Path]::GetFullPath($settings.northstarModsRoot))
+$sources = @([IO.Path]::GetFullPath($ModsRoot))
 if ($IncludePs4CompatibilityMods) { $sources += (Join-Path $repositoryRoot 'mods') }
 foreach ($source in $sources) {
     if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Mod source not found: $source" }

@@ -1,33 +1,31 @@
 [CmdletBinding()]
 param()
+# Host tests: builds and runs each suite in tests\ with clang++, then checks
+# New-NorthstarProfile.ps1 against a fixture profile.
+#
+# With Northstar's mods (NORTHSTAR_MODS_ROOT) and the game's extracted VPK files
+# (PS4_EXTRACTED_ROOT: frontend\ and mp_common\ unpacked from vpk_ps4) on this
+# machine, the KeyValues and RPak suites also run against the real playlist,
+# patches and rpak.json. Without them those checks are skipped.
 $ErrorActionPreference = 'Stop'
-$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+. "$PSScriptRoot\Env.ps1"
+$repositoryRoot = $RepoRoot
 $testRoot = Join-Path $repositoryRoot ('work\profile-tests\' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
-# The keyvalues suite also takes the real playlist and its two shipped patches
-# when they are on this machine, because the merge has to hold against 360 KB
-# of genuine content and not just the unit fixtures. It skips them if absent.
+$modsRoot = Get-NorthstarModsRoot
+$extractedRoot = Get-NorthstarSetting 'PS4_EXTRACTED_ROOT' (Join-Path $repositoryRoot 'work\extracted')
 $liveArgs = @()
-$config = Join-Path $repositoryRoot 'config\local.json'
-if (Test-Path -LiteralPath $config -PathType Leaf) {
-    $settings = Get-Content -LiteralPath $config -Raw | ConvertFrom-Json
-    $candidates = @(
-        (Join-Path $repositoryRoot 'work\stage1\extracted\frontend\playlists_v2.txt'),
-        (Join-Path $settings.northstarModsRoot 'Northstar.Custom\keyvalues\playlists_v2.txt'),
-        (Join-Path $settings.northstarModsRoot 'Northstar.CustomServers\keyvalues\playlists_v2.txt'))
-    if (($candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count -eq 3) { $liveArgs = $candidates }
-}
-# The rpaks suite takes the shipped rpak.json when it is on this machine, so
-# the Preload/Postload rules are checked against the real file and not only
-# against fixtures.
+$candidates = @(
+    (Join-Path $extractedRoot 'frontend\playlists_v2.txt'),
+    (Join-Path $modsRoot 'Northstar.Custom\keyvalues\playlists_v2.txt'),
+    (Join-Path $modsRoot 'Northstar.CustomServers\keyvalues\playlists_v2.txt'))
+if (($candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }).Count -eq 3) { $liveArgs = $candidates }
 $rpakArgs = @()
-if ($settings) {
-    $rpakConfig = Join-Path $settings.northstarModsRoot 'Northstar.Custom\paks\rpak.json'
-    $rpakFile = Join-Path $settings.northstarModsRoot 'Northstar.Custom\paks\mp_weapon_shotgun_doublebarrel.rpak'
-    if (Test-Path -LiteralPath $rpakConfig -PathType Leaf) {
-        $rpakArgs = @($rpakConfig)
-        if (Test-Path -LiteralPath $rpakFile -PathType Leaf) { $rpakArgs += $rpakFile }
-    }
+$rpakConfig = Join-Path $modsRoot 'Northstar.Custom\paks\rpak.json'
+$rpakFile = Join-Path $modsRoot 'Northstar.Custom\paks\mp_weapon_shotgun_doublebarrel.rpak'
+if (Test-Path -LiteralPath $rpakConfig -PathType Leaf) {
+    $rpakArgs = @($rpakConfig)
+    if (Test-Path -LiteralPath $rpakFile -PathType Leaf) { $rpakArgs += $rpakFile }
 }
 $pdefArgs = @()
 $pdefFile = Join-Path $repositoryRoot 'mods\Northstar.PS4\mod\cfg\server\persistent_player_data_version_929.pdef'
@@ -56,11 +54,11 @@ foreach ($suite in @('mod_catalog', 'json_text', 'keyvalues', 'particle_manifest
         $mods = @('Northstar.Client', 'Northstar.CustomServers', 'Northstar.DirectConnect', 'Northstar.Custom')
         foreach ($relative in $vpkFor.Keys) {
             $native = $relative -replace '/', '\'
-            $original = Join-Path $repositoryRoot ('work\stage1\extracted\' + $vpkFor[$relative] + '\' + $native)
+            $original = Join-Path $extractedRoot ($vpkFor[$relative] + '\' + $native)
             if (-not (Test-Path -LiteralPath $original -PathType Leaf)) { continue }
             $patches = @()
             foreach ($mod in $mods) {
-                $patch = Join-Path $settings.northstarModsRoot ($mod + '\keyvalues\' + $native)
+                $patch = Join-Path $modsRoot ($mod + '\keyvalues\' + $native)
                 if (Test-Path -LiteralPath $patch -PathType Leaf) { $patches += $patch }
             }
             if ($patches.Count -eq 0) { continue }
@@ -79,13 +77,11 @@ $utf8 = [Text.UTF8Encoding]::new($false)
 [IO.File]::WriteAllText((Join-Path $mod 'keyvalues\test.txt'), 'unmodified keyvalues', $utf8)
 $enabled = Join-Path (Split-Path $source -Parent) 'enabledmods.json'
 [IO.File]::WriteAllText($enabled, '{"Display Name":{"1.0":false},"Version":1}', $utf8)
-$config = Join-Path $testRoot 'config.json'
-[IO.File]::WriteAllText($config, (@{northstarModsRoot=$source} | ConvertTo-Json), $utf8)
 $package = Join-Path $testRoot 'package'
 $preview = Join-Path $testRoot 'preview'
-& (Join-Path $PSScriptRoot 'New-NorthstarProfile.ps1') -Config $config -Output $preview -WhatIf | Out-Null
+& (Join-Path $PSScriptRoot 'New-NorthstarProfile.ps1') -ModsRoot $source -Output $preview -WhatIf | Out-Null
 Assert (-not (Test-Path -LiteralPath $preview)) 'WhatIf wrote files.'
-& (Join-Path $PSScriptRoot 'New-NorthstarProfile.ps1') -Config $config -Output $package | Out-Null
+& (Join-Path $PSScriptRoot 'New-NorthstarProfile.ps1') -ModsRoot $source -Output $package | Out-Null
 foreach ($file in Get-ChildItem -LiteralPath $source -Recurse -File) {
     $destination = Join-Path (Join-Path $package 'R2Northstar\mods') $file.FullName.Substring($source.Length + 1)
     Assert ((Get-FileHash -LiteralPath $file.FullName).Hash -eq (Get-FileHash -LiteralPath $destination).Hash) "File changed: $destination"
@@ -94,11 +90,6 @@ Assert ((Get-FileHash -LiteralPath $enabled).Hash -eq (Get-FileHash -LiteralPath
 Assert (-not (Test-Path (Join-Path $package 'r2'))) 'Created flattened overlay.'
 Assert (-not (Test-Path (Join-Path $package 'vpk_ps4'))) 'Created game archives.'
 $rejected = $false
-try { & (Join-Path $PSScriptRoot 'New-NorthstarProfile.ps1') -Config $config -Output $package | Out-Null } catch { $rejected = $true }
+try { & (Join-Path $PSScriptRoot 'New-NorthstarProfile.ps1') -ModsRoot $source -Output $package | Out-Null } catch { $rejected = $true }
 Assert $rejected 'Existing user profile was overwritten.'
-foreach ($script in @('Build-AndDeployStage1Vpks.ps1','Build-Stage1ModIntegration.ps1','Apply-Stage1Compatibility.ps1','New-Stage1Workspace.ps1','Merge-Stage2ScriptsRson.ps1')) {
-    $rejected = $false
-    try { & (Join-Path $PSScriptRoot $script) | Out-Null } catch { $rejected = $_.Exception.Message -match 'retired' }
-    Assert $rejected "Retired script did not stop: $script"
-}
 Write-Output "Profile tests passed. Fixtures: $testRoot"

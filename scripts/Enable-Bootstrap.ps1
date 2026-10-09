@@ -1,15 +1,21 @@
+# Adds the bootstrap to the shadPS4 game folder's eboot.bin, so the game loads
+# bin/ps4_retail/northstar_ps4.prx at startup. Patches only the original retail
+# eboot (checked by hash), keeps it as eboot.bin.northstar-stage2.bak (the name
+# the token helper's installer also uses), and -Disable puts it back.
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string]$GameRoot = 'D:\PS4\ShadPS4\CUSA04013',
+    [string]$GameRoot,
     [switch]$Disable
 )
 
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\Env.ps1"
+if (-not $GameRoot) { $GameRoot = Get-GameRoot }
 $expectedVanillaHash = '590956ab2c9251f588348a1c066ed4045ce94ffc87c25faa5872a1f92ec35824'
 $ebootPath = Join-Path $GameRoot 'eboot.bin'
 $backupPath = Join-Path $GameRoot 'eboot.bin.northstar-stage2.bak'
 $prxPath = Join-Path $GameRoot 'bin\ps4_retail\northstar_ps4.prx'
-$manifestPath = Join-Path $PSScriptRoot '..\dist\stage2-poc\bootstrap-manifest.json'
+$manifestPath = Join-Path $RepoRoot 'dist\bootstrap\bootstrap-manifest.json'
 
 if ($Disable) {
     if (-not (Test-Path -LiteralPath $backupPath)) { throw "Backup not found: $backupPath" }
@@ -20,7 +26,7 @@ if ($Disable) {
     return
 }
 
-if (-not (Test-Path -LiteralPath $prxPath)) { throw "PoC PRX not found: $prxPath" }
+if (-not (Test-Path -LiteralPath $prxPath)) { throw "Runtime not found: $prxPath (Deploy-Runtime.ps1 installs it)" }
 $actualHash = (Get-FileHash -LiteralPath $ebootPath -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($actualHash -ne $expectedVanillaHash) {
     throw "Refusing to patch unknown eboot. Expected $expectedVanillaHash, got $actualHash. Use -Disable to restore the recorded backup."
@@ -83,11 +89,11 @@ if (-not (Test-Path -LiteralPath $backupPath)) { Copy-Item -LiteralPath $ebootPa
 $callNext = 0x128d + 5
 [Array]::Copy(([byte[]](0xE8) + [BitConverter]::GetBytes([int]($stubVa - $callNext))), 0, $bytes, 0x528d, 5)
 
-$distPath = Join-Path $PSScriptRoot '..\dist\stage2-poc\eboot.stage2.bin'
+$distPath = Join-Path $RepoRoot 'dist\bootstrap\eboot.bin'
 [IO.Directory]::CreateDirectory((Split-Path $distPath)) | Out-Null
 [IO.File]::WriteAllBytes($distPath, $bytes)
 $patchedHash = (Get-FileHash -LiteralPath $distPath -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($PSCmdlet.ShouldProcess($ebootPath, 'Install hash-locked Stage 2 bootstrap')) {
+if ($PSCmdlet.ShouldProcess($ebootPath, 'Install the hash-locked bootstrap')) {
     Copy-Item -LiteralPath $distPath -Destination $ebootPath -Force
 }
 
@@ -99,5 +105,5 @@ if ($PSCmdlet.ShouldProcess($ebootPath, 'Install hash-locked Stage 2 bootstrap')
     LoaderPltVirtualAddress = '0x14e0'
     StubVirtualAddress = ('0x{0:x}' -f $stubVa)
 } | ConvertTo-Json | Set-Content -LiteralPath $manifestPath -Encoding utf8
-Write-Host "Stage 2 bootstrap enabled. Patched SHA256: $patchedHash"
-Write-Host "Rollback: .\scripts\Enable-Stage2Bootstrap.ps1 -Disable"
+Write-Host "Bootstrap enabled. Patched SHA256: $patchedHash"
+Write-Host "Rollback: .\scripts\Enable-Bootstrap.ps1 -Disable"

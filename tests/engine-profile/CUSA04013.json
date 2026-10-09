@@ -25,6 +25,6 @@
     "registerSquirrelFunc": { "virtualAddress": "0x67a3c0", "preimage": "554889e54157415641554154534883ec" },
     "runUiScriptRegistration": { "virtualAddress": "0x2f1554", "preimage": "488d3505236e0131d2b9010000004531" }
   },
-  "status": "diagnostic-convar-verified",
-  "notes": "Offsets are valid only for the exact hash above. Constructor signatures and slot 31 remain candidates until a harmless diagnostic ConVar is tested."
+  "status": "verified",
+  "notes": "Offsets are valid only for the engine.prx and client.prx with the hashes above."
 }

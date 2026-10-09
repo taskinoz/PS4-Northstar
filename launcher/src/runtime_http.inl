@@ -22,7 +22,7 @@ constexpr std::size_t kHttpNetPoolSize = 16 * 1024;
 // A PS4's SSL library (NanoSSL) parses the whole certificate chain from its
 // pool: with 96 KiB, every handshake with northstar.tf (Cloudflare, three
 // ECDSA certificates) failed with 0x809517d5, NanoSSL's -6101
-// ERR_MEM_ALLOC_FAIL (2026-10-07). shadPS4 does TLS on the host and never
+// ERR_MEM_ALLOC_FAIL. shadPS4 does TLS on the host and never
 // used the pools. These are the sizes Sony's samples use, or more.
 constexpr std::size_t kHttpSslPoolSize = 384 * 1024;
 constexpr std::size_t kHttpPoolSize = 256 * 1024;

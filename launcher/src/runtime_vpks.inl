@@ -8,7 +8,7 @@ bool g_modVpkHookReady = false;
 // MountVPK lowercases the path it is given. A PS4's /data is case-sensitive,
 // so Northstar.Custom's archive under /data/northstar_ps4/R2Northstar never
 // mounted there (result 0), and fastball stopped on a BT animation only that
-// archive has (2026-10-08). Where the lowercased path does not reach a mod's
+// archive has. Where the lowercased path does not reach a mod's
 // vpk/ folder, the folder is copied once to an all-lowercase one. (libkernel
 // exports no link(2), and a raw system call would run on the host under
 // shadPS4, whose case-insensitive host never needs the copy anyway.)
@@ -117,7 +117,6 @@ void* MountModVpks(void* self, const char* requested, void* result) {
         LogFormat("[NorthstarPS4] mod VPK mount: %s result=%p\n", vpk.path.c_str(), mounted);
         if (!result) result = mounted; // PC fallback for map-supplied mod archives
     }
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     // One diagnostic for the model that exposed the missing mount integration.
     // It is absent from stock frontend/MP VPKs; this proves engine lookup, not
     // just an allocated VPK handle. Rendering/material validation is separate.
@@ -132,7 +131,6 @@ void* MountModVpks(void* self, const char* requested, void* result) {
         LogFormat("[NorthstarPS4] VPK asset lookup: %s read=%d IDST=%d\n", asset, bytes,
             bytes == sizeof(header) && !std::memcmp(header, "IDST", 4));
     }
-#endif
     g_mountingModVpks.clear();
     return result;
 }

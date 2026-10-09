@@ -1,11 +1,10 @@
 // Mod localisation at boot, on the game's thread (PC client/modlocalisation.cpp).
 //
 // PC adds every enabled mod's Localisation files right after
-// CEngineVGui::Init has loaded the stock ones (r1, valve, dev). The PS4 runtime
-// used to call CLocalize::AddFile from its own module-tracker thread while the
-// game's main thread was still loading and using the same tables. That race
-// left boots hung on the Respawn logo with a busy CPU, in about one boot in
-// three (2026-10-01).
+// CEngineVGui::Init has loaded the stock ones (r1, valve, dev). Calling
+// CLocalize::AddFile from another thread while the game's main thread is still
+// loading and using the same tables hangs about one boot in three on the
+// Respawn logo, so the mods' files are added on the main thread, here.
 //
 // The PS4 engine's equivalent of CEngineVGui::Init loads its stock files at
 // engine+0x1cd4af..0x1cd518 through the CLocalize pointer at engine+0x51e9bf0

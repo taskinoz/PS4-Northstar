@@ -11,10 +11,9 @@
 // Here the request goes through sceHttp, as the port's other HTTP does
 // (runtime_http.inl); shadPS4 implements custom methods, request and response
 // headers, bodies and timeouts. The result is queued for the context that made
-// the request. The verified CHostState frame call in engine.prx drains every
-// currently bound VM after the original frame update, matching PC's placement.
-// NSPS4_RunAsyncCalls remains registered as a diagnostic/compatibility native,
-// but Northstar.PS4 no longer runs a script polling loop.
+// the request. The CHostState frame hook in engine.prx drains every bound VM
+// after the original frame update, as PC does. NSPS4_RunAsyncCalls drains the
+// calling VM's queue on demand.
 //
 // Launch options, from ns_startup_args.txt as on PC:
 //   -disablehttprequests  NSIsHttpEnabled() is false and requests return -1;

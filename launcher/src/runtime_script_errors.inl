@@ -1,8 +1,8 @@
 // Script compile errors (PC squirrel.cpp ScriptCompileErrorHook).
 //
 // A mod script that fails to compile while a CLIENT VM is being set up left
-// the PS4 game on a black loading screen with a spinner indefinitely (a
-// Resonance Rifle install without its dependency, 2026-10-02). PC logs the
+// the PS4 game on a black loading screen with a spinner indefinitely (for
+// example a mod installed without a mod it depends on). PC logs the
 // error with the mod that owns the file and, when the error is fatal, runs
 //
 //   disconnect "Encountered CLIENT script compilation error, see console for details."

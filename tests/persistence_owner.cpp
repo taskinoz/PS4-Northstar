@@ -13,7 +13,7 @@ static void Check(bool ok, const char* what, int line) {
 #define CHECK(x) Check((x), #x, __LINE__)
 
 int main() {
-    constexpr std::uint64_t sameAccount = 1000108120826ull;
+    constexpr std::uint64_t sameAccount = 1000000000001ull;
     SlotCandidate slots[] = {
         {sameAccount, 8, false, true},  // PS4 listen host
         {sameAccount, 1, false, false}, // PC joining with the same Atlas account

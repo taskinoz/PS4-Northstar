@@ -39,7 +39,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pdef_size import size_of  # noqa: E402
+from northstar_env import game_root  # noqa: E402
 
 NL = chr(10)
 TAB = chr(9)
@@ -47,7 +49,8 @@ TAB = chr(9)
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 # The vendored NorthstarMods pin (vendor/northstar-release.json).
 PC_231 = os.path.join(REPO, "vendor", "NorthstarMods", "Northstar.CustomServers", "mod", "cfg", "server", "persistent_player_data_version_231.pdef")
-STOCK_929 = "D:/PS4/ShadPS4/CUSA04013/r2/cfg/server/persistent_player_data_version_929.pdef"
+# The game's own save definition, loose in its r2 folder.
+STOCK_929 = os.path.join(game_root(), "r2", "cfg", "server", "persistent_player_data_version_929.pdef")
 OUTPUT = "mods/Northstar.PS4/mod/cfg/server/persistent_player_data_version_929.pdef"
 
 # Top-level console members that stock PS4 scripts still use. Found by

@@ -145,8 +145,8 @@ int main(int argc, char** argv) {
     {
         SelfAuthResponse self;
         assert(ParseSelfAuthResponse(
-            "{\"success\":true,\"id\":\"1000108120826\",\"authToken\":\"0a1b2c3d4e5f\",\"persistentData\":[231,0, 0 ,255]}", self));
-        assert(self.success && self.id == "1000108120826" && self.authToken == "0a1b2c3d4e5f");
+            "{\"success\":true,\"id\":\"1000000000001\",\"authToken\":\"0a1b2c3d4e5f\",\"persistentData\":[231,0, 0 ,255]}", self));
+        assert(self.success && self.id == "1000000000001" && self.authToken == "0a1b2c3d4e5f");
         assert(self.pdata == std::string("\xe7\x00\x00\xff", 4));
         assert(!ParseSelfAuthResponse("{\"success\":true,\"id\":\"1\",\"authToken\":\"abc\",\"persistentData\":[256]}", self));
         assert(!ParseSelfAuthResponse("{\"success\":true,\"id\":\"1\",\"authToken\":\"abc\",\"persistentData\":[1,-2]}", self));

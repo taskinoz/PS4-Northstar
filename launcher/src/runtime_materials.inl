@@ -17,7 +17,7 @@
 // +0x4f98e) to record it in its VPK entry, under a spinlock at entry+0x14.
 // The result is not checked: for a material that is not in a VPK the entry
 // is null and the lock wrote to address 0x14 (crash at +0x4f9b2, the first
-// time a loose .vmt loaded, 2026-10-02). The 10-byte NOP at +0x4f9a6 becomes
+// time a loose .vmt loaded). The 10-byte NOP at +0x4f9a6 becomes
 // `test al, al; je +0x4f9fd`, past both the lock and its release.
 constexpr std::uintptr_t kVmtFallbackGateVa = 0x9fcdc;
 constexpr std::uintptr_t kVpkEntryLockVa = 0x4f9a6;
@@ -60,7 +60,7 @@ void InstallLooseMaterialFallback(std::uintptr_t materialSystemBase) noexcept {
 // copy was never used, although the overlay had answered false for it.
 //
 // The cache answers false for a file in a mounted VPK only when the overlay
-// has a mod copy of it, so its false branch (+0x6b24c) now goes straight to
+// has a mod copy of it, so its false branch (+0x6b24c) goes straight to
 // the open path, ignoring any read-ahead data. Any other miss reopens a file
 // that was read ahead anyway, which is slower but loads the same texture.
 constexpr std::uintptr_t kVtfCacheMissVa = 0x6b24c;

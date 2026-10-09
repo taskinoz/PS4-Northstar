@@ -1,9 +1,13 @@
+# Checks the game's engine.prx against the recorded profile: its SHA-256, and
+# the bytes at each anchor the runtime relies on. Fails on any other build.
 [CmdletBinding()]
 param(
-    [string]$Config = (Join-Path $PSScriptRoot '..\config\local.json'),
-    [string]$Profile = (Join-Path $PSScriptRoot '..\config\stage2-offsets-CUSA04013.json')
+    [string]$GameRoot,
+    [string]$Profile = (Join-Path $PSScriptRoot '..\tests\engine-profile\CUSA04013.json')
 )
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\Env.ps1"
+if (-not $GameRoot) { $GameRoot = Get-GameRoot }
 
 function Convert-HexUInt64([string]$Value) {
     if ($Value -notmatch '^0x[0-9a-fA-F]+$') { throw "Invalid hexadecimal value: $Value" }
@@ -17,9 +21,8 @@ function Convert-HexBytes([string]$Value) {
     $result
 }
 
-$settings = Get-Content -Raw -LiteralPath ([IO.Path]::GetFullPath($Config)) | ConvertFrom-Json
 $profileData = Get-Content -Raw -LiteralPath ([IO.Path]::GetFullPath($Profile)) | ConvertFrom-Json
-$enginePath = Join-Path ([IO.Path]::GetFullPath($settings.ps4GameRoot)) 'bin\ps4_retail\engine.prx'
+$enginePath = Join-Path ([IO.Path]::GetFullPath($GameRoot)) 'bin\ps4_retail\engine.prx'
 if (-not (Test-Path -LiteralPath $enginePath -PathType Leaf)) { throw "Engine PRX not found: $enginePath" }
 
 $actualHash = (Get-FileHash -LiteralPath $enginePath -Algorithm SHA256).Hash.ToLowerInvariant()

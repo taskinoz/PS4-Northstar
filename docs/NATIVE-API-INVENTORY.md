@@ -2,7 +2,7 @@
 
 PC baseline: NorthstarLauncher `4df8857814dd683147f1cc5fdae0b3b419a7f1cf`. Regenerate with `python scripts/Update-NorthstarApiInventory.py`; verify with `--check`.
 
-This inventories explicit registrations, **not implementation or runtime compatibility**. Compare handler bodies and PS4 signatures before promoting any goal. Shared engine builtin overrides, ConVars and plugin interfaces are separate feature goals in [GOALS.md](GOALS.md).
+This lists each Squirrel native PC Northstar declares with `ADD_SQFUNC`, beside the PS4 runtime's registration of the same name (`launcher/src/runtime_ui_api.inl`). It lists registrations, not behaviour. Engine builtin overrides, ConVars and the natives PC registers by other means are not listed; see [INTERNALS.md](INTERNALS.md).
 
 | PC native | PC return / arguments | PC context | PS4 handler/context | PC source |
 |---|---|---|---|---|
@@ -71,6 +71,6 @@ This inventories explicit registrations, **not implementation or runtime compati
 
 ## Interpretation
 
-Empty arrays, default arguments, constant false/true and logged no-ops are adapters. In particular, HTTP/downloads/server-list, server chat/disconnect/userinfo and persistence-write registrations do not establish working implementations. `kCtxAll` means UI/CLIENT/SERVER. Duplicate names can have different signatures by context (NSSendMessage).
+`kCtxAll` means UI, CLIENT and SERVER. A name can have a different signature per context (`NSSendMessage`). A few handlers are deliberate no-ops where the PS4 has no counterpart; INTERNALS.md says which.
 
-Coverage: 62 explicit PC ADD_SQFUNC declarations; 78 distinct names in the PS4 registration table. These counts measure different things and are not a completion percentage.
+Coverage: 62 explicit PC ADD_SQFUNC declarations; 82 distinct names in the PS4 registration table. These counts measure different things and are not a completion percentage.

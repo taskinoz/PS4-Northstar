@@ -1,174 +1,224 @@
-# Building PS4 Northstar from source
+# Building PS4 Northstar
 
-For developers. Players should use the release downloads and the [installation guide](INSTALL.md). Run commands from the repository root in PowerShell.
+For developers. Players should use the release downloads and [INSTALL.md](INSTALL.md).
+Commands run from the repository root in PowerShell unless noted. How the runtime works is in
+[INTERNALS.md](INTERNALS.md).
 
 ## Requirements
 
-- The game, shadPS4 and settings from [INSTALL.md](INSTALL.md#what-you-need).
-- For the runtime: the LLVM/OpenOrbis toolchain listed in [tools/README.md](../tools/README.md), and Python 3.
-- For the token helper: [Bun](https://bun.sh), Rust (`cargo`) and, on Windows, the Visual Studio C++ build tools.
+- **The game and shadPS4**, set up as in [INSTALL.md](INSTALL.md#what-you-need), for testing.
+- **The runtime:** the OpenOrbis toolchain and LLVM 18 (`clang++`, `ld.lld`, `llvm-nm` on
+  `PATH`); see [tools/README.md](../tools/README.md). Python 3.
+- **The token helper:** [Bun](https://bun.sh), Rust (`cargo`) and, on Windows, the Visual
+  Studio C++ build tools.
 
-Never repack or edit the retail VPKs, and don't run the old Stage 1 repacking scripts. An install that has Stage 1 patched VPKs or staged `r2` scripts must go back to clean retail archives first.
+## Settings
 
-## 1. Configure
+The scripts read machine-specific paths from environment variables, or from a `.env` file at
+the repository root (ignored by git). Copy [.env.example](../.env.example) to `.env` and fill
+it in:
 
-The Northstar mods come from two pinned submodules, `vendor/NorthstarMods` and `vendor/NorthstarNavs`, at the revisions Northstar v1.31.13 packages (`vendor/northstar-release.json`). Assemble the release the same way Northstar's own packaging does:
+| Setting | Used for |
+| --- | --- |
+| `NORTHSTAR_PS4_GAME_ROOT` | The shadPS4 game folder (with `eboot.bin` and `vpk_ps4`). Deploying, testing, profile sync. |
+| `SHADPS4_EXE` | The `shadPS4.exe` the test scripts launch. |
+| `SHADPS4_USER_DIR` | shadPS4's user folder (`log\`, `data\`). Default `%APPDATA%\shadPS4`. |
+| `NORTHSTAR_MODS_ROOT` | Northstar's mods. Default `work\northstar-release\1.31.13\mods`. |
+| `PS4_EXTRACTED_ROOT` | The game's `frontend` and `mp_common` VPKs unpacked, for tests against real files. Optional. |
+| `OO_PS4_TOOLCHAIN` | The OpenOrbis toolchain. Default `tools\openorbis-0.5.4\OpenOrbis\PS4Toolchain`. |
+| `PS4_ADDRESS` | A PS4 running GoldHEN, for `scripts/ps4/`. |
+
+A variable set in the environment takes precedence over `.env`.
+
+## Northstar's mods
+
+Northstar's mods come from two pinned submodules, `vendor/NorthstarMods` and
+`vendor/NorthstarNavs`, at the revisions Northstar v1.31.13 packages
+(`vendor/northstar-release.json`). Assemble them as Northstar's own release does:
 
 ```powershell
 git submodule update --init --depth 1
 python scripts/Build-NorthstarMods.py
 ```
 
-That writes the mods to `work/northstar-release/1.31.13/mods`, byte-identical to an installed 1.31.13 (`--compare <PC mods dir>` checks this). Copy `config/project.example.json` to `config/local.json` (or edit the existing one) and set at least:
+This writes `work/northstar-release/1.31.13/mods`, byte-identical to an installed 1.31.13
+(`--compare <PC mods folder>` checks it). The submodules are checked out with
+`core.autocrlf=false` and `core.eol=lf`, which the script sets: upstream commits some files with
+CRLF and stores localisation as UTF-16.
 
-```json
-{
-  "ps4GameRoot": "D:\\PS4\\ShadPS4\\CUSA04013",
-  "northstarModsRoot": "C:\\path\\to\\repo\\work\\northstar-release\\1.31.13\\mods"
-}
-```
-
-`northstarModsRoot` points directly at the folder holding the mod folders, not at an `R2Northstar` folder above it. It can point at a PC install's `R2Northstar\mods` instead, but then the profile follows whatever version that install updates to.
-
-## 2. Package the mods
+## The runtime
 
 ```powershell
-.\scripts\New-NorthstarProfile.ps1 -Output .\dist\install-profile -IncludePs4CompatibilityMods
+.\scripts\Build-Northstar.ps1
 ```
 
-- **Copies, never edits:** mod folders are copied byte-for-byte and their hashes verified, with the source's `enabledmods.json` when present. Game archives are not touched.
-- **`-IncludePs4CompatibilityMods`** adds this port's mods: `Northstar.PS4` (required; the PS4 fixes are overrides in it, so Northstar's own mods stay unchanged) and `Northstar.DirectConnect`.
-- **`-ConvertRpaksForPs4`** converts the copied profile's uncompressed Titanfall 2 v7 texture/material RPaks and STARPaks to the PS4 layout. The PC source stays unchanged. Compressed, patch, array and other layouts stop with an error instead of being installed, and the runtime refuses a PC-layout pak copied in by hand.
-- **`-IncludeAIHarness`** adds the development harness ([AI-HARNESS.md](AI-HARNESS.md)).
-- **Keeping an install in sync:** `.\scripts\Sync-NorthstarProfile.ps1` updates an installed profile the same way.
+Builds `dist\northstar-ps4\northstar_ps4.prx` and its build record,
+`northstar_ps4.build.json`. A PRX embeds its output path, so build a release in the folder
+whose bytes are tested and shipped. `-ForceBranchStubs` makes every hook go through a jump
+stub, as on a PS4, for testing that path in shadPS4.
 
-For a fresh install, copy `dist/install-profile/R2Northstar` beside the game's `eboot.bin`. Preserve an existing profile outside the game folder first; don't merge an old modded profile into a new one.
-
-Profile layout rules:
-- Discovery uses each mod's `Name` and `Version` for enabled state. New mods default to enabled.
-- Lower `LoadPriority` loads first, and higher priority wins file overrides. Equal priorities are ordered by folder name.
-- Limits: 128 mod folders, names below 64 bytes, `mod.json` up to 64 KB, and 256 ConVars per mod.
-- The PRX reads `/app0/R2Northstar`. A generated `.ns_mod_manifest` is used only when directory enumeration fails.
-
-## 3. Build and install the runtime
+### Install it in shadPS4
 
 Close the game first.
 
 ```powershell
-.\scripts\Test-NorthstarProfile.ps1
-.\scripts\Build-Northstar.ps1 -EnableRuntimeManifest -Output "$PWD\dist\northstar-runtime-manifest"
-.\scripts\Deploy-Stage2Poc.ps1 -Source "$PWD\dist\northstar-runtime-manifest\northstar_ps4.prx"
+.\scripts\Deploy-Runtime.ps1
+.\scripts\Enable-Bootstrap.ps1
+.\scripts\Sync-NorthstarProfile.ps1 -ConvertRpaksForPs4
 ```
 
-- **Supported build:** `-EnableRuntimeManifest` builds the script manifest from the vanilla one and the enabled mods, serves mod files through the game filesystem, and hooks the UI, CLIENT and SERVER script VMs. The default build and `-EnableExperimentalScriptLoading` are older experiments.
-- **Output path:** release PRXs embed the output path, so build in the folder whose bytes you ship.
-- **Build record:** the build writes `northstar_ps4.build.json` beside the PRX; keep it to identify the build.
-- **Deploying:** the deploy script backs up the previous PRX in `work/stage2/deploy-backups` and verifies the installed hash.
+- `Deploy-Runtime.ps1` copies the PRX to `<game>\bin\ps4_retail\`, backs up the previous one
+  in `work\deploy-backups`, and checks the installed hash.
+- `Enable-Bootstrap.ps1` patches `eboot.bin`, once. It refuses any eboot but the retail one,
+  keeps the original as `eboot.bin.northstar-stage2.bak`, and `-Disable` restores it.
+- `Sync-NorthstarProfile.ps1` brings `<game>\R2Northstar\mods` in line with Northstar's mods
+  plus this repository's `mods/Northstar.PS4` and `mods/Northstar.DirectConnect`.
+  `-ConvertRpaksForPs4` converts mod RPaks to the PS4 layout in the copy; `-Prune` removes mods
+  the sources don't have. Mod folders are copied byte for byte; the sources are never changed.
 
-Enable the eboot bootstrap once, on the matching retail eboot only:
+`New-NorthstarProfile.ps1 -Output <folder> -IncludePs4CompatibilityMods` writes a fresh
+`R2Northstar` folder instead, and `-IncludeAIHarness` adds the [test harness](AI-HARNESS.md).
 
-```powershell
-.\scripts\Enable-Stage2Bootstrap.ps1 -GameRoot 'D:\PS4\ShadPS4\CUSA04013'
+### Install it on a PS4
+
+With GoldHEN's FTP server on (port 2121):
+
+```bash
+python scripts/ps4/upload.py <ps4 address> --prx dist/northstar-ps4/northstar_ps4.prx
+python scripts/ps4/upload.py <ps4 address> --mods <folder holding R2Northstar>
+python scripts/ps4/upload.py <ps4 address> --enable-plugin
 ```
 
-It refuses an unknown eboot hash; don't force past that. It keeps the original as `eboot.bin.northstar-stage2.bak`, and `-Disable` restores it.
+`--release <folder with the release zips>` extracts and uploads a release's three mod zips in
+order. Files whose size already matches are skipped, so an interrupted upload can be rerun.
 
-## 4. Check the installation
+GoldHEN's kernel log (TCP 3232) carries the runtime's log:
 
-```powershell
-.\scripts\Get-NorthstarInstallStatus.ps1
+```bash
+python scripts/ps4/klog.py <ps4 address>
+python scripts/ps4/lastboot.py
 ```
 
-This is read-only. It matches the installed PRX hash to local build records and reports one of:
-- **Bootstrap only:** the safe build, which loads no mods.
-- **Filesystem overrides only:** not a complete script loader.
-- **Experimental native mod loader:** the runtime-manifest build.
-- **Unknown build:** no matching record. `-BuildInfo <path to northstar_ps4.build.json>` supplies one.
+`klog.py` records to `work/ps4-klog.txt`. `lastboot.py` prints the last boot's `[NorthstarPS4]`
+lines and crash report, with secrets filtered out, and maps crash addresses to runtime symbols
+using `dist/northstar-ps4/northstar_ps4.elf`.
 
-In the log (`%APPDATA%\shadPS4\log\shad_log.txt`), look only at the current boot:
-- **Progress, not success:** `runtime manifest generated` and `mod file served`.
-- **Failures:** `FatalError` and `SCRIPT COMPILE ERROR`.
-- **Script startup:** a successful boot logs each `UI Before:` / `UI After:` callback and ends with `UI lifecycle completed`. A callback a mod declares but never defines is logged as `callback not found` and skipped, as on PC.
-- **Mod VPKs:** `mod VPK discovered`, then a non-null `mod VPK mount`.
-- **Converted Northstar.Custom paks:** `mod rpak load` with non-negative handles, and `mod starpak redirect` for both streams.
+## Checking a boot
+
+In `shad_log.txt` (shadPS4) or the kernel log (PS4), for the current boot only:
+
+| Line | Meaning |
+| --- | --- |
+| `[NorthstarPS4] runtime loaded` | The runtime started |
+| `runtime manifest generated` | The scripts manifest was built from the enabled mods |
+| `UI lifecycle completed` | The UI VM ran every mod callback |
+| `mod VPK mount` with a non-null handle | A mod VPK mounted |
+| `mod rpak load` with a non-negative handle | A mod pak loaded |
+| `FatalError`, `SCRIPT COMPILE ERROR`, `SCRIPT ERROR` | Failures |
+
+A callback a mod declares but never defines is logged as `callback not found` and skipped, as
+on PC.
 
 ## Tests
 
 | Command | What it covers |
 | --- | --- |
-| `.\scripts\Test-NorthstarProfile.ps1` | Profile packaging, plus host tests for the runtime's portable code in `launcher/include` and `tests/`. |
-| `.\scripts\Test-Stage2EngineProfile.ps1` | Engine-profile checks. |
-| `.\scripts\Test-AtlasTokenHelper.ps1` | The token helper against a fake EA app, Atlas and console (`tests/token_helper/fake_services.py`; needs Python's `cryptography`). |
-| `cargo test` in `token-helper/src-tauri` | The token helper's Rust tests. |
+| `.\scripts\Test-NorthstarProfile.ps1` | Host tests for the runtime's portable code (`launcher/include`, `tests/*.cpp`, built with `clang++`), KeyValues merges of every shipped patch, and profile packaging. With `NORTHSTAR_MODS_ROOT` and `PS4_EXTRACTED_ROOT` set, it also runs against the real playlist and paks. |
+| `.\scripts\Test-EngineProfile.ps1` | The game's module hashes and byte anchors against [tests/engine-profile/CUSA04013.json](../tests/engine-profile/CUSA04013.json). |
+| `cargo test` in `token-helper/src-tauri` | The token helper. With `NS_TEST_EBOOT` set to an original `eboot.bin`, also the bootstrap patch on the real eboot. |
+| `.\scripts\Test-AtlasTokenHelper.ps1` | The token helper's terminal mode against a fake EA app, Atlas and console (`tests/token_helper/fake_services.py`, needs Python's `cryptography`). |
+| `.\scripts\Test-BootLoop.ps1 [-Count 8] [-HostMatch]` | Boots shadPS4 repeatedly, signed in against the fakes, and counts boots that reach the lobby. `-HostMatch` also hosts a match. Needs AI.Harness enabled and about 9 GB of free memory. |
 
-Boot stability is measured by booting several times in a row (8–12), not once.
+Boot stability is measured over several boots in a row (8 or more), never one.
 
-## Mod VPKs
+`.\scripts\Invoke-TestBoot.ps1` builds, deploys and boots once, following the log until a
+success or failure pattern (`-SkipBuild`, `-SkipDeploy`, `-KeepRunning`, `-SuccessPattern`).
+`.\scripts\Start-NorthstarSession.ps1 -Label <name>` launches a play session with
+`--log-append` and archives its log lines and a record of the installed build and mods under
+`work\sessions\`.
 
-Enabled mods' VPKs are mounted through the game filesystem. Keep the PC layout, with every archive chunk together:
+## Test automation
 
-```text
-R2Northstar/mods/Northstar.Custom/
-  mod.json
-  vpk/
-    englishclient_mp_northstar_common.bsp.pak000_dir.vpk
-    client_mp_northstar_common.bsp.pak000_000.vpk
-```
+- **AI.Harness** ([AI-HARNESS.md](AI-HARNESS.md)) runs launch, console, menu and other actions
+  in the UI VM and replies through a mailbox.
+- **`Send-PadInput.ps1`** presses pad buttons through shadPS4's keyboard mapping, without
+  taking focus.
+- **`Capture-GameWindow.ps1`** saves a PNG of the game window, even while it is covered.
 
-Mounting rules:
-- **When they mount:** without `vpk/vpk.json`, a mod's archives preload. `"Preload": true` does the same. `false`, or an entry without that member, mounts only when the engine mounts an archive of the same name. Comments and trailing commas are allowed.
-- **Names:** only the `english*.bsp.pak000_dir.vpk` naming is discovered.
-- **Textures:** keep them in PC layout inside mod VPKs. The PS4's own layout is only for the game's archives.
-- **Building a test VPK:** `tools/RSPNVPK` builds one with `-n 0`. Its `feature/vpk-expansion` branch fixes multi-archive chunk numbers.
+## Generated files
+
+| Generator | Output |
+| --- | --- |
+| `scripts/pdef/build_ps4_pdef.py` | `mods/Northstar.PS4/mod/cfg/server/persistent_player_data_version_929.pdef` (PC 231 plus the black market) |
+| `scripts/pdef/find_console_fields.py <stock roots>` | Which console-only save fields stock scripts use |
+| `scripts/menus/build_mod_list_override.py`, `build_mod_settings_override.py`, `build_colorsliders_override.py` | Northstar.PS4's controller-ready menu overrides, from `vendor/NorthstarMods` |
+| `scripts/Update-NorthstarApiInventory.py` | [NATIVE-API-INVENTORY.md](NATIVE-API-INVENTORY.md) |
+| `scripts/Convert-NorthstarModRpaks.ps1` | PS4-layout copies of a mod's RPaks and STARPaks |
+
+Rerun a generator when its source changes, and commit its output.
 
 ## The token helper
 
-`token-helper/` is a Tauri 2 app: Rust in `src-tauri/`, the page in `ui/`. Bun installs and runs the Tauri CLI.
+`token-helper/` is a Tauri 2 app: Rust in `src-tauri/`, the page in `ui/`.
 
 ```powershell
 .\scripts\Build-TokenHelper.ps1            # exe in dist\token-helper
 .\scripts\Build-TokenHelper.ps1 -Bundle    # plus the Windows installer
 ```
 
-Or, in `token-helper\`: `bun install`, then `bun tauri build`, or `bun tauri dev` while working on it.
+Or in `token-helper/`: `bun install`, then `bun tauri build`, or `bun tauri dev` while working
+on it. Tauri builds only for the system it runs on, so
+[.github/workflows/token-helper.yml](../.github/workflows/token-helper.yml) builds Windows, a
+universal macOS `.dmg`, and Linux AppImage and `.deb`, from the Actions tab or a
+`token-helper-v<version>` tag. `make-icon.ps1` redraws `app-icon.png`; `bun tauri icon
+app-icon.png` regenerates the icon set.
 
-The installer is `src-tauri/src/install.rs`:
-- **The eboot patch** is the one `Enable-Stage2Bootstrap.ps1` writes, and its exact reverse, each checked against the original's and the patched eboot's SHA-256.
-- **Tests:** `cargo test` with `NS_TEST_EBOOT` pointing at an original `eboot.bin` also checks the real game's eboot.
-- **Source overrides:** `--releases-api`, `--northstar-zip-url` and the `--*-sha256` options point it at other sources. `tests/token_helper/fake_github.py` serves a folder of files as a release for trying it. Tauri builds only for the system it runs on, so `.github/workflows/token-helper.yml` builds Windows, a universal macOS `.dmg`, and Linux AppImage and `.deb`. Run it from the Actions tab once it's on the default branch, or push a `token-helper-v<version>` tag. `make-icon.ps1` redraws `app-icon.png`, and `bun tauri icon app-icon.png` regenerates the icon set.
+The installer (`src-tauri/src/install.rs`) writes the same eboot patch as
+`Enable-Bootstrap.ps1`. `--releases-api`, `--northstar-zip-url` and the `--*-sha256` options
+point it at other sources; `tests/token_helper/fake_github.py` serves a folder as a release.
+
+## Releases
+
+1. Build the runtime in `dist\northstar-ps4` and test it (host tests, engine profile, a boot
+   loop, and play on shadPS4 and a PS4).
+2. Assemble the assets:
+
+   ```bash
+   python scripts/New-ReleaseAssets.py <version> --previous <previous version>
+   ```
+
+   This writes `dist/release/<version>/`: the PRX and build record,
+   `northstar-ps4-mods-<version>.zip` (this repository's mods, as tracked in git),
+   `northstar-custom-ps4-rpaks-<version>.zip` (copied from the previous release) and
+   `northstar-mods-1.31.13.zip`. Every zip keeps the `R2Northstar/mods/` prefix.
+3. Add the token helper builds from the token-helper workflow.
+4. Publish a GitHub release with those files.
+
+The token helper installs the newest release (pre-releases included) that has both
+`northstar_ps4.prx` and a `northstar-ps4-mods-*.zip`, and checks every download against the
+SHA-256 `digest` GitHub publishes. Without a `northstar-mods-*.zip` it downloads Northstar's own
+release zip and checks it against the hash in `install.rs`.
 
 ## Installing a release by hand
 
-Players use the token helper's **Install** tab, which does the following. Developers can do the same by hand from a release's files:
+1. Extract `northstar-mods-1.31.13.zip`, `northstar-ps4-mods-<version>.zip` and
+   `northstar-custom-ps4-rpaks-<version>.zip` into the game folder, in that order, replacing
+   files.
+2. Copy `northstar_ps4.prx` to `<game folder>\bin\ps4_retail\northstar_ps4.prx`.
+3. Run `.\scripts\Enable-Bootstrap.ps1` once.
 
-1. Copy `R2Northstar\mods` from Northstar 1.31.13 (the `northstar-mods-<version>.zip` release asset, or `Northstar.release.v1.31.13.zip` from Northstar's releases) into the game folder.
-2. Extract `northstar-ps4-mods-<version>.zip` and `northstar-custom-ps4-rpaks-<version>.zip` into the game folder, replacing files.
-3. Copy `northstar_ps4.prx` to `<game folder>\bin\ps4_retail\northstar_ps4.prx`.
-4. Run `.\scripts\Enable-Stage2Bootstrap.ps1 -GameRoot <game folder>` once (`-Disable` restores the original).
+To go back to the ordinary game, run `.\scripts\Enable-Bootstrap.ps1 -Disable`. It checks that
+the backup is the retail eboot (SHA-256 `590956ab…`) first.
 
-## Release assets
+## Rules
 
-The token helper's installer takes the newest release, pre-releases included, that has both `northstar_ps4.prx` and a `northstar-ps4-mods-*.zip`. From that release it uses:
-- `northstar-custom-ps4-rpaks-*.zip`, when present;
-- `northstar-mods-*.zip`, when present: Northstar's mods laid out as `R2Northstar/mods/...`, made from `work/northstar-release/<version>/mods`. Without it, the installer downloads Northstar's own release zip (107 MB) and checks it against the SHA-256 in `install.rs`.
-
-Every download is checked against the `digest` GitHub publishes for the asset. Release zips must keep the `R2Northstar/mods/` prefix.
-
-## Going back to the ordinary game
-
-The bootstrap-only PRX keeps the eboot bootstrap but loads no mods:
-
-```powershell
-.\scripts\Build-Stage2Poc.ps1 -Output .\dist\northstar-safe-bootstrap
-.\scripts\Deploy-Stage2Poc.ps1 -Source "$PWD\dist\northstar-safe-bootstrap\northstar_ps4.prx"
-```
-
-To remove the bootstrap, check that `eboot.bin.northstar-stage2.bak` is the original retail eboot (SHA-256 `590956ab2c9251f588348a1c066ed4045ce94ffc87c25faa5872a1f92ec35824`), then run `.\scripts\Enable-Stage2Bootstrap.ps1 -GameRoot <game folder> -Disable`. Neither changes the VPKs or the mod sources.
-
-## Development automation
-
-- **AI.Harness** ([AI-HARNESS.md](AI-HARNESS.md)) queues a Northstar launch before boot and sends console and menu commands with replies.
-- **`scripts/Send-PadInput.ps1`** presses pad buttons.
-- **`scripts/Capture-GameWindow.ps1`** takes screenshots.
-
-These test menus and rendering without a person at the controller. Keep `net_debug_atlas_packet` off outside debugging. Share logs only after filtering them to `[NorthstarPS4]` lines without `playerToken=` or `password=`.
+- Never change the retail archives (`vpk_ps4/`) or Northstar's mods. PS4 differences go in the
+  runtime or as overrides in `Northstar.PS4`, and the port stays compatible with PC servers and
+  clients.
+- Every code patch is gated on the module's hash and the exact bytes it replaces. PC Northstar
+  offsets are never valid on the PS4.
+- Game files, extracted archives, Northstar binaries, toolchains and build output stay out of
+  git (`tools/`, `work/`, `dist/` are ignored).
+- Never log or commit an Atlas token, `atlas_identity.json`, or a server password. When sharing a
+  log, keep only `[NorthstarPS4]` lines and drop any with `playerToken=` or `password=`. Keep
+  `net_debug_atlas_packet` off outside debugging: it logs players' addresses and tokens.

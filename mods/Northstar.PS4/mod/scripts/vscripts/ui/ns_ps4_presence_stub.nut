@@ -13,7 +13,7 @@ global function NSUpdateGameStateClientStart
 // generated PS4 mod hook dispatch calls is a boot-time compile error the
 // same as any other undefined variable ("FatalError: ui/_menus.nut: UI
 // SCRIPT COMPILE ERROR: Undefined variable "NSUpdateGameStateUIStart""),
-// confirmed live 2026-08-15.
+// seen in game.
 //
 // Both stubbed here as no-ops. This port has no Discord (or other rich
 // presence) integration at all, so there's nothing meaningful for these to

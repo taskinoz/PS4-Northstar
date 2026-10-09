@@ -1,36 +1,34 @@
 # tools/
 
-Mod packaging needs none of these tools. VPK repacking is retired.
+External toolchains and reference sources. Everything here except this file is ignored by git;
+a fresh clone has only this checklist.
 
-Nothing under `tools/` is original project content — it's downloaded toolchains, built binaries, and reference source clones, all `.gitignore`d (`tools/*` with an exception for this file). A fresh clone starts with an empty `tools/` directory; this file is the checklist for what needs to go where before the scripts in `scripts/` will run.
+## Required
 
-## Required — the automated pipeline reads these directly
-
-| Path | What it is | Where it comes from |
+| Path | What it is | Source |
 | --- | --- | --- |
-| `tools/openorbis-0.5.4/OpenOrbis/PS4Toolchain/` | PS4 native toolchain (headers, `crtlib.o`, `create-fself.exe`) used by `scripts/Build-Stage2Poc.ps1` | [OpenOrbis/OpenOrbis-PS4Toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4Toolchain) release `v0.5.4`, asset `toolchain-llvm-18.tar.gz`. Archive SHA-256 `3c7cd5bb593ca74fa1c13fd59f3938dc0fc07985167f7275063019e63abe4526` (see `docs/TECHNICAL-NOTES.md`). Extract so this exact path exists. Also put `clang++`, `ld.lld`, and `llvm-nm` (LLVM 18) on `PATH`. |
+| `tools/openorbis-0.5.4/OpenOrbis/PS4Toolchain/` | The OpenOrbis PS4 toolchain (headers, libraries, `crtlib.o`, `create-fself.exe`), used by `scripts/Build-Northstar.ps1` | [OpenOrbis-PS4Toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4Toolchain) release `v0.5.4`, asset `toolchain-llvm-18.tar.gz` (SHA-256 `3c7cd5bb593ca74fa1c13fd59f3938dc0fc07985167f7275063019e63abe4526`). Extract it so this path exists, or set `OO_PS4_TOOLCHAIN` to it elsewhere. |
 
-`scripts/Test-Environment.ps1` does **not** check for these — it only validates the PC/PS4 game roots in `config/local.json`. If a Stage-specific script fails with "not found", check this table first.
+LLVM 18's `clang++`, `ld.lld`, `llvm-nm` and `llvm-objdump` must also be on `PATH`. The host tests
+use the same `clang++`.
 
-## Setup-time / manual tools — not called by any script, but needed to prepare inputs or continue native RE work
+## Optional
 
-| Path | What it is | Notes |
+| Path | What it is | Used for |
 | --- | --- | --- |
-| `tools/tf2vpk/` (source), `tools/tf2vpk-bin/` (built exes) | VPK inspection/unpacking CLI | [pg9182/tf2vpk](https://github.com/pg9182/tf2vpk). Used interactively to list and extract vanilla content (for example to check whether a map ships in a VPK) and to inspect PS4 VPK chunk layout. Build from source with the Go toolchain below, or use a prebuilt exe. |
-| `tools/go-portable/` | A portable Go toolchain | Only needed to build `tf2vpk` from source if you don't already have Go installed. Not required if you have your own Go, or if you already have built `tf2vpk-bin`. |
-| `tools/python-packages/` (`capstone`, `lief`) | Vendored Python packages for disassembling/parsing the retail PRX/ELF files during reverse-engineering | Not called by any script; used ad hoc for analysis (see `docs/TECHNICAL-NOTES.md` for examples). Reproduce with `python -m pip install --target tools/python-packages capstone lief`, or just `pip install capstone lief` into your own environment and skip vendoring. |
-| `tools/RSPNVPK/` | RSPNVPK source (C#) | [taskinoz/RSPNVPK](https://github.com/taskinoz/RSPNVPK). Only used by the retired Stage 1 VPK repacking ([FOUNDATION.md](../docs/FOUNDATION.md)); not needed for the current runtime. |
+| `tools/tf2vpk-bin/` | [tf2vpk](https://github.com/pg9182/tf2vpk) | Listing and unpacking the game's VPKs, for example into `PS4_EXTRACTED_ROOT` for the tests against real files |
+| `tools/RSPNVPK/` | [RSPNVPK](https://github.com/taskinoz/RSPNVPK) (`feature/vpk-expansion` fixes multi-archive chunk numbers) | Building test mod VPKs |
+| `tools/go-portable/` | A Go toolchain | Building tf2vpk from source |
+| `tools/python-packages/` | `capstone`, `lief` (`pip install --target tools/python-packages capstone lief`) | Disassembling and reading the game's modules |
 
-## Reference-only clones — not needed to build or run anything
+## Reference sources
 
-| Path | What it is |
-| --- | --- |
-| `tools/NorthstarLauncher-reference/` | Read-only clone of [R2Northstar/NorthstarLauncher](https://github.com/R2Northstar/NorthstarLauncher) (PC Windows client/launcher). Source of truth for what native services Northstar needs — **never reuse its Windows `engine.dll`/`client.dll` offsets on PS4**; PS4 addresses must always come from analyzing the PS4 binaries directly. Also the reference implementation for every native service the port reproduces (see the G-rows in `docs/GOALS.md`). |
-| `tools/Enhanced-Menu-Mod-reference/` | Read-only clone of a PC Northstar UI mod, useful as an example of how Northstar UI script mods are structured. |
-| `tools/Atlas-reference/` | Read-only clone of [R2Northstar/Atlas](https://github.com/R2Northstar/Atlas), the master server. Source of truth for its HTTP API and error codes. |
+Read-only clones, for comparing with PC Northstar. None is needed to build.
 
-Emulator builds downloaded for testing (for example the shadPS4 CI builds used to bisect regressions) go under `work/shadps4-builds/`, not here.
+| Path | Repository | |
+| --- | --- | --- |
+| `tools/NorthstarLauncher-reference/` | [R2Northstar/NorthstarLauncher](https://github.com/R2Northstar/NorthstarLauncher) | PC Northstar's native code; `scripts/Update-NorthstarApiInventory.py` reads it. Its Windows offsets never apply to the PS4. |
+| `tools/Atlas-reference/` | [R2Northstar/Atlas](https://github.com/R2Northstar/Atlas) | The master server: its API, error codes and packet formats |
 
-## Safety note
-
-None of this directory is, or should ever contain, Titanfall 2 game data, Northstar release binaries, or extracted/rebuilt archives — see the repository policy in the top-level README. Toolchains and reference clones only.
+Nothing in `tools/` may be game data, Northstar release binaries or extracted archives.
+Emulator builds downloaded for testing go in `work/`.

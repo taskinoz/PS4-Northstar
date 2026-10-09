@@ -16,29 +16,20 @@
 // wait for common.rpak (see LoadModRpaks).
 //
 // The hook is on the loader's two call sites, `+0x78c0` and `+0x7ed1`, rewritten
-// with the same rel32 patcher the lifecycle hooks use. Two other approaches
-// were tried and abandoned: searching module data for the function's address
-// found nothing but a coincidental 64-bit match in `tier0.sprx`, and a prologue
-// detour needs an executable trampoline, which shadPS4 refuses - marking this
-// module's own data page RWX aborts the emulator with "Protect: Unreachable
-// code!". Patching the call sites needs no new executable memory at all,
-// because the loader itself is left intact and called directly as the original.
-// The mechanism below is proven end to end: both call sites patch, both of
-// Northstar.Custom's converted paks are dispatched after `common.rpak` with
-// valid handles, and the engine opens their RPaks and redirected STARPaks. The
-// first experiment failed before asset compatibility was reached:
-// the engine looked for `mp_weapon_shotgun_doublebarrel.starpak` at
-// `/app0/r2/`, where a mod's streamed data does not live, and then wedged.
-// The code below now reads each v7 header's streamed paths and patches the
-// worker's sole stream-open call at `+0x6773`, redirecting it to the owning
-// mod's paks directory. That redirect is host-tested against the shipped pak;
-// its live boot test was blocked by shadPS4's corrupt shader-cache assertion.
+// with the same rel32 patcher the lifecycle hooks use. The loader's address
+// appears nowhere as data (it is not the exported entry), and a prologue detour
+// would need an executable trampoline, which shadPS4 refuses ("Protect:
+// Unreachable code!"). Patching the call sites leaves the loader intact, and it
+// is called directly as the original.
 //
-// This is the opposite of how the VPK work turned out, where the shipped
-// archive held bytes identical to the PS4 originals. PC mod textures use
-// linear blocks, while retail PS4 texture headers carry platform byte 8 and
-// Morton-swizzled blocks. Discovery therefore refuses anything except the
-// verified PS4 texture layout before a load request can reach the engine.
+// A mod pak's streamed data is not under `/app0/r2/`, where the worker looks
+// for STARPaks. Each v7 header's streamed paths are read at discovery, and the
+// worker's only stream-open call, at `+0x6773`, is redirected to the owning
+// mod's paks directory.
+//
+// PC mod textures use linear blocks, while PS4 texture headers carry platform
+// byte 8 and Morton-swizzled blocks. Discovery refuses anything except the PS4
+// layout before a load request can reach the engine.
 constexpr bool kModRpakLoadingEnabled = true;
 constexpr std::uintptr_t kRtechLoadPakVa = 0x76f0;
 constexpr std::uintptr_t kRtechLoadPakCallSites[] = {0x78c0, 0x7ed1};
@@ -253,14 +244,14 @@ void LoadModRpaks(const char* requested, void* allocator) noexcept {
     // Postload pak often holds materials whose textures are in its
     // "_preload" pak. Loaded the other way round (both are due at
     // common.rpak here), the Octane knife's materials went in before their
-    // textures and the boot stalled (2026-10-02).
+    // textures and the boot stalled.
     for (const bool preloadPass : {true, false}) {
         for (auto& pak : g_modRpaks) {
             if (pak.handle != kInvalidPakHandle || pak.preload != preloadPass) continue;
             // PS4 difference: Preload paks load once common.rpak has, not
             // inside the engine's next pak request. Loaded there, two
             // 2048x2048 skin packs left about half of all boots hung or
-            // crashed (2026-10-01).
+            // crashed.
             const bool due = requested &&
                 RpakNameMatches(pak.preload ? std::string(kPreloadAfterPak) : pak.after, requested);
             if (!due) continue;
@@ -306,10 +297,9 @@ bool VanillaHasPak(const std::string& name) noexcept {
 }
 
 // Every mod pak is loaded here, on the thread making the engine's own request
-// and after that request returns, as PC loads its Postload paks. The module
-// tracker used to load overdue ones from its own thread; the pak system is not
-// safe to drive from there while its own threads run, and boots crashed at
-// 0x700000782c41 on either thread (2026-10-01).
+// and after that request returns, as PC loads its Postload paks. The pak
+// system is not safe to drive from another thread while its own threads run:
+// loads from the module tracker crashed boots at 0x700000782c41.
 std::int32_t ModLoadPakAsync(const char* path, void* allocator, std::int32_t flags) noexcept {
     // The engine hands us a working allocator on every call, so mod paks never
     // need one located independently.

@@ -59,9 +59,9 @@ int main() {
     CHECK(!ParseAtlasPacket(reinterpret_cast<const std::uint8_t*>(other.data()), other.size(), type, data));
 
     // Connect requests: the start of one captured from the PS4 client, then
-    // uid 1000108120826, the name and the token.
+    // uid 1000000000001, the name and the token.
     std::string connect("\xff\xff\xff\xff" "A" "\x1a\x00\x00\x00" "\xd1\x07\x00\x00" "\x01\x02\x03\x04" "\x05\x06\x07\x08", 21);
-    const std::uint64_t uid = 1000108120826ull;
+    const std::uint64_t uid = 1000000000001ull;
     for (int i = 0; i < 8; ++i) connect += static_cast<char>((uid >> (8 * i)) & 0xff);
     connect += std::string("Titanfall-PS4\0" "0123456789abcdef\0", 31);
     connect += "trailing";
@@ -69,10 +69,10 @@ int main() {
     CHECK(ParseConnectRequest(reinterpret_cast<const std::uint8_t*>(connect.data()), connect.size(), request));
     CHECK(request.uid == uid && request.name == "Titanfall-PS4" && request.HasString("0123456789abcdef"));
     // A PC client: an empty string between the name and the token.
-    std::string pc = connect.substr(0, 29) + std::string("Alluisve\0\0" "5707de674c78924d83dfc8a345b96c7\0", 42);
+    std::string pc = connect.substr(0, 29) + std::string("PCPlayer\0\0" "0fedcba9876543210fedcba98765432\0", 42);
     CHECK(ParseConnectRequest(reinterpret_cast<const std::uint8_t*>(pc.data()), pc.size(), request));
-    CHECK(request.name == "Alluisve" && request.strings.size() == 2 && request.strings[0].empty() &&
-          request.HasString("5707de674c78924d83dfc8a345b96c7") && !request.HasString("other"));
+    CHECK(request.name == "PCPlayer" && request.strings.size() == 2 && request.strings[0].empty() &&
+          request.HasString("0fedcba9876543210fedcba98765432") && !request.HasString("other"));
     // Cut inside the name: no name, no request.
     CHECK(!ParseConnectRequest(reinterpret_cast<const std::uint8_t*>(connect.data()), 35, request));
     std::string notConnect = connect;

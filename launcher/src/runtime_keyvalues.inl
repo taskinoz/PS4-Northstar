@@ -2,22 +2,19 @@
 //
 // A mod patches a KeyValues file by shipping `<mod>/keyvalues/<path>`, which is
 // a *sibling* of the `<mod>/mod` tree the filesystem overlay serves, so these
-// files are never served directly and were ignored entirely before this. That
-// left the client on the stock `playlists_v2.txt` with none of Northstar's
-// custom gamemodes defined while a PC server ran the merged one, which is the
-// single cause behind every custom-gamemode failure (see TECHNICAL-NOTES).
+// files are never served directly. Without the merge the client keeps the
+// stock `playlists_v2.txt`, with none of Northstar's custom gamemodes, while a
+// PC server runs the merged one.
 //
 // PC delegates the merge to the engine: `ModManager::TryBuildKeyValues` writes
-// a wrapper that `#base`-includes each patch and the original. **That does not
-// work here.** This engine honours `#base` in the loaders that shipped using it
-// (`scripts/aisettings`, `scripts/weapons`, `resource/ui/menus`, ...) but the
-// playlist loader ignores it: a served wrapper was read, none of its includes
-// were opened, and the empty root object produced
-// `FatalError: Failed to load playlist data` and no main menu.
+// a wrapper that `#base`-includes each patch and the original. This engine
+// honours `#base` in the loaders that ship files using it (`scripts/aisettings`,
+// `scripts/weapons`, `resource/ui/menus`, ...) but the playlist loader ignores
+// it: it reads the wrapper, opens none of its includes, and fails with
+// `FatalError: Failed to load playlist data`.
 //
-// So the merge happens here instead and emits one complete file. That is
-// uniform - it needs no per-loader knowledge of whether `#base` is honoured -
-// and `keyvalues.h` is host-tested against the real 360 KB playlist and both
+// So the merge happens here and emits one complete file, for every loader
+// alike. `keyvalues.h` is host-tested against the real 360 KB playlist and the
 // shipped patches.
 using northstar::ps4::mods::KeyValueList;
 using northstar::ps4::mods::MergeKeyValues;
@@ -226,16 +223,15 @@ bool BuildKeyValuesPatch(void* self, const char* normalized) noexcept {
     }
     if (applied == 0) return false;
 
-    // Keep generated files compact. Size is no longer constrained by the
-    // retail file, but avoiding tens of thousands of formatting bytes still
-    // reduces startup I/O and memory use.
+    // Generated files are written compact: both Size hooks report the real
+    // length, so a file may be any size, and leaving out tens of thousands of
+    // formatting bytes saves startup I/O and memory.
     const std::string output = SerialiseKeyValues(merged, false);
     // A merge can only add to or replace within the original, so a result that
     // lost any of the original's keys means something went wrong. Refuse
     // rather than serve it: an empty playlist is a boot failure, not a degraded
-    // mode. (This used to compare byte sizes, which refused
-    // melee_pilot_arena.txt: its comments make the compact merge less than
-    // half the original's size.)
+    // mode. Byte sizes are no measure: comments make a compact merge of
+    // melee_pilot_arena.txt less than half the original's size.
     if (!KeyValuesKeepsKeys(original, merged)) {
         LogFormat("[NorthstarPS4] keyvalues refused %s: the merge lost keys of the original\n", normalized);
         return false;

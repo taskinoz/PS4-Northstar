@@ -1,25 +1,88 @@
+# Builds the runtime, northstar_ps4.prx, with the OpenOrbis toolchain, and
+# writes its build record, northstar_ps4.build.json, beside it in -Output.
+#
+# A PRX embeds the output path, so build a release in the folder whose bytes
+# are tested and shipped.
 [CmdletBinding()]
 param(
-    [string] $Toolchain = (Join-Path $PSScriptRoot '..\tools\openorbis-0.5.4\OpenOrbis\PS4Toolchain'),
+    [string] $Toolchain,
     [string] $Output = (Join-Path $PSScriptRoot '..\dist\northstar-ps4'),
-    [switch] $EnableRuntimeManifest,
-    [switch] $EnableExperimentalScriptLoading
+    # Test builds only: every rel32 hook goes through a jump stub, as on a PS4.
+    [switch] $ForceBranchStubs
 )
 $ErrorActionPreference = 'Stop'
-# The normal development build discovers mods and serves loose overrides.
-# Script injection remains opt-in: the PS4 VM lifecycle ABI is not yet proven.
-$options = @{
-    Toolchain = $Toolchain
-    Output = $Output
-    EnableM6FsOverlay = $true
-    EnableM6ModMetadata = $true
-    EnableM6Localise = $true
-    EnableRuntimeManifest = $EnableRuntimeManifest
+. "$PSScriptRoot\Env.ps1"
+if (-not $Toolchain) { $Toolchain = Get-NorthstarSetting 'OO_PS4_TOOLCHAIN' (Join-Path $RepoRoot 'tools\openorbis-0.5.4\OpenOrbis\PS4Toolchain') }
+$toolchainRoot = [IO.Path]::GetFullPath($Toolchain)
+$outputRoot = [IO.Path]::GetFullPath($Output)
+$env:OO_PS4_TOOLCHAIN = $toolchainRoot
+$sourceRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\launcher'))
+$clang = (Get-Command clang++.exe -ErrorAction Stop).Source
+$lld = (Get-Command ld.lld.exe -ErrorAction Stop).Source
+$converter = Join-Path $toolchainRoot 'bin\windows\create-fself.exe'
+foreach ($path in @($toolchainRoot, $converter, (Join-Path $toolchainRoot 'lib\crtlib.o'))) {
+    if (-not (Test-Path -LiteralPath $path)) { throw "Required OpenOrbis path not found: $path" }
 }
-if ($EnableExperimentalScriptLoading) {
-    $options.EnableM6ScriptProbe = $true
-    $options.EnableM6ScriptInject = $true
-    $options.EnableM6ScriptInjectFromMods = $true
+[IO.Directory]::CreateDirectory($outputRoot) | Out-Null
+$object = Join-Path $outputRoot 'module.o'
+$runtimeObject = Join-Path $outputRoot 'runtime.o'
+$elf = Join-Path $outputRoot 'northstar_ps4.elf'
+$oelf = Join-Path $outputRoot 'northstar_ps4.oelf'
+$prx = Join-Path $outputRoot 'northstar_ps4.prx'
+$compileArgs = @('--target=x86_64-pc-freebsd12-elf','-fPIC','-funwind-tables','-fno-exceptions','-fno-rtti','-c','-isysroot',$toolchainRoot,'-isystem',(Join-Path $toolchainRoot 'include'),'-isystem',(Join-Path $toolchainRoot 'include\c++\v1'),'-I',(Join-Path $sourceRoot 'include'),'-o',$object,(Join-Path $sourceRoot 'src\module.cpp'))
+& $clang @compileArgs
+if ($LASTEXITCODE) { throw "OpenOrbis compile failed: $LASTEXITCODE" }
+$runtimeCompileArgs = $compileArgs.Clone()
+$runtimeCompileArgs[$runtimeCompileArgs.Count - 2] = $runtimeObject
+$runtimeCompileArgs[$runtimeCompileArgs.Count - 1] = Join-Path $sourceRoot 'src\runtime.cpp'
+if ($ForceBranchStubs) { $runtimeCompileArgs = @('-DNORTHSTAR_PS4_FORCE_BRANCH_STUBS=1') + $runtimeCompileArgs }
+& $clang @runtimeCompileArgs
+if ($LASTEXITCODE) { throw "OpenOrbis runtime compile failed: $LASTEXITCODE" }
+# GoldHEN's plugin loader looks these up by name on a PS4.
+$pluginExports = @('plugin_load','plugin_unload','g_pluginName','g_pluginDesc','g_pluginAuth','g_pluginVersion') | ForEach-Object { "--export-dynamic-symbol=$_" }
+$linkArgs = @('-m','elf_x86_64','-pie') + $pluginExports + @('--script',(Join-Path $sourceRoot 'link.x'),'--eh-frame-hdr','-L',(Join-Path $toolchainRoot 'lib'),$object,$runtimeObject,'-lc','-lc++','-lkernel','-lSceNet','-lSceNetCtl','-lSceSsl','-lSceHttp','-lSceImeDialog','-lSceUserService','-lSceSystemService',(Join-Path $toolchainRoot 'lib\crtlib.o'),'-o',$elf)
+& $lld @linkArgs
+if ($LASTEXITCODE) { throw "OpenOrbis link failed: $LASTEXITCODE" }
+# shadPS4 runs a PRX's DT_INIT but not OpenOrbis's hidden module_start, so
+# DT_INIT points at the same idempotent initializer that .init_array runs.
+$nm = (Get-Command llvm-nm.exe -ErrorAction Stop).Source
+$initSymbol = (& $nm -an $elf | Select-String '\bNorthstarPs4Init$' | Select-Object -First 1).Line
+if (-not $initSymbol) { throw 'NorthstarPs4Init was not found in the linked ELF.' }
+$initAddress = [Convert]::ToUInt64(($initSymbol -split '\s+')[0], 16)
+$elfBytes = [IO.File]::ReadAllBytes($elf)
+$phoff = [BitConverter]::ToUInt64($elfBytes, 0x20)
+$phentsize = [BitConverter]::ToUInt16($elfBytes, 0x36)
+$phnum = [BitConverter]::ToUInt16($elfBytes, 0x38)
+$dynamicOffset = $null
+$dynamicSize = 0
+for ($i = 0; $i -lt $phnum; $i++) {
+    $off = [int]($phoff + ($i * $phentsize))
+    if ([BitConverter]::ToUInt32($elfBytes, $off) -eq 2) {
+        $dynamicOffset = [BitConverter]::ToUInt64($elfBytes, $off + 8)
+        $dynamicSize = [BitConverter]::ToUInt64($elfBytes, $off + 32)
+        break
+    }
 }
-& (Join-Path $PSScriptRoot 'Build-Stage2Poc.ps1') @options
-if (-not $?) { throw 'Northstar PS4 build failed.' }
+if ($null -eq $dynamicOffset) { throw 'PT_DYNAMIC was not found in the linked ELF.' }
+$patchedInit = $false
+for ($off = [int]$dynamicOffset; $off -lt ($dynamicOffset + $dynamicSize); $off += 16) {
+    if ([BitConverter]::ToUInt64($elfBytes, $off) -eq 12) {
+        [Array]::Copy([BitConverter]::GetBytes([uint64]$initAddress), 0, $elfBytes, $off + 8, 8)
+        $patchedInit = $true
+        break
+    }
+}
+if (-not $patchedInit) { throw 'DT_INIT was not found in the linked ELF.' }
+[IO.File]::WriteAllBytes($elf, $elfBytes)
+& $converter "-in=$elf" "-out=$oelf" "--lib=$prx" '--paid' '0x3800000000000011'
+if ($LASTEXITCODE) { throw "OpenOrbis PRX conversion failed: $LASTEXITCODE" }
+if (-not (Test-Path -LiteralPath $prx -PathType Leaf)) { throw "OpenOrbis did not produce $prx" }
+$file = Get-Item -LiteralPath $prx
+$buildInfo = [ordered]@{
+    schemaVersion = 1
+    prxSha256 = (Get-FileHash -LiteralPath $prx -Algorithm SHA256).Hash.ToLowerInvariant()
+    authentication = 'atlas-token-helper'
+    notes = 'Signs in to Atlas through the NorthstarPS4 Token Helper, which renews the token in game. Runs in shadPS4 (loaded by the eboot bootstrap) and on a PS4 as a GoldHEN plugin (mods in /data/northstar_ps4/R2Northstar). In shadPS4, builds before ca89b01 crash when leaving a loaded map, and builds from c6fa48c7 (#5110) until f6cd16e8 (#5133) render matches black. Mod RPaks must be converted to the PS4 layout; unsupported archives are refused.'
+}
+$buildInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $outputRoot 'northstar_ps4.build.json') -Encoding UTF8
+[pscustomobject]@{ File=$file.FullName; Bytes=$file.Length; SHA256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); Toolchain=$toolchainRoot }

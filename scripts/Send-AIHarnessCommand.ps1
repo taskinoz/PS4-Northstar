@@ -3,12 +3,14 @@ param(
     [ValidateSet('status','launch','console','menu','back','json','cvar','playlistvar','datatable','datatablevector','localize','http','httpretire','join','download')][string] $Action = 'status',
     [string] $Command,
     [string] $Menu,
-    [string] $Mailbox = (Join-Path $env:APPDATA 'shadPS4\data\northstar_ps4\ai_harness'),
+    [string] $Mailbox,
     [int] $TimeoutSeconds = 60,
     [switch] $QueueOnly,
     [switch] $FromConsoleFile
 )
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\Env.ps1"
+if (-not $Mailbox) { $Mailbox = Join-Path (Get-ShadPs4UserDir) 'data\northstar_ps4\ai_harness' }
 if ($FromConsoleFile) {
     $Command = [IO.File]::ReadAllText((Join-Path (Split-Path $Mailbox -Parent) 'console.txt'))
     $Action = 'console'

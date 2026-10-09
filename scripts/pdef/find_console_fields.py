@@ -20,9 +20,11 @@ import os
 import re
 import sys
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+sys.path.insert(0, os.path.join(REPO, "scripts"))
+from northstar_env import game_root  # noqa: E402
 
-MODS = "D:/PS4/ShadPS4/CUSA04013/R2Northstar/mods"
-P929 = "D:/PS4/ShadPS4/CUSA04013/r2/cfg/server/persistent_player_data_version_929.pdef"
+MODS = os.path.join(game_root(), "R2Northstar", "mods")
+P929 = os.path.join(game_root(), "r2", "cfg", "server", "persistent_player_data_version_929.pdef")
 P231 = os.path.join(REPO, "vendor", "NorthstarMods", "Northstar.CustomServers", "mod", "cfg", "server", "persistent_player_data_version_231.pdef")
 Q = chr(34)
 

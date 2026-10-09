@@ -3,22 +3,19 @@
 Launches the game for a hands-on play session and preserves the log.
 
 .DESCRIPTION
-Invoke-Stage2Iteration.ps1 is for automated probes: it watches for a pattern
-and kills the process. This script is for the opposite case - the user plays,
-connects, and something crashes or hangs - so it never terminates the game and
-it captures whatever the session produced.
+Invoke-TestBoot.ps1 is for automated checks: it watches for a pattern and
+stops the game. This script is for a person playing: it never stops the game,
+and it keeps whatever the session logged.
 
 The Qt launcher starts shadPS4 without --log-append, which truncates
-shad_log.txt on every launch. A crash or hang investigated after the next
-launch therefore has no evidence left. This script always passes --log-append
-and archives the session's own lines under work/stage2/sessions/, so evidence
-survives both a crash and a later relaunch.
+shad_log.txt on every launch, so a crash is lost at the next launch. This script
+passes --log-append and archives the session's own lines, with sign-in tokens
+and passwords redacted, under work/sessions/.
 #>
 [CmdletBinding()]
 param(
-    [string]$Config = (Join-Path $PSScriptRoot '..\config\local.json'),
-    [string]$ShadPs4Exe = 'C:\Users\tristan\AppData\Roaming\shadPS4QtLauncher\versions\Pre-release\shadPS4.exe',
-    [string]$ShadLog = 'C:\Users\tristan\AppData\Roaming\shadPS4\log\shad_log.txt',
+    [string]$ShadPs4Exe,
+    [string]$ShadLog,
     # Short note about what is being tested, e.g. 'fastball' or 'mp-lobby'.
     [string]$Label = 'session',
     # Safety net only; a play session normally ends when the window is closed.
@@ -27,11 +24,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$configPath = [IO.Path]::GetFullPath($Config)
-if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { throw "Configuration file not found: $configPath" }
-$settings = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
-$gameRoot = [IO.Path]::GetFullPath($settings.ps4GameRoot)
+. "$PSScriptRoot\Env.ps1"
+if (-not $ShadPs4Exe) { $ShadPs4Exe = Get-ShadPs4Exe }
+if (-not $ShadLog) { $ShadLog = Join-Path (Get-ShadPs4UserDir) 'log\shad_log.txt' }
+$gameRoot = Get-GameRoot
 $eboot = Join-Path $gameRoot 'eboot.bin'
 $prx = Join-Path $gameRoot 'bin\ps4_retail\northstar_ps4.prx'
 foreach ($required in @($ShadPs4Exe, $eboot, $prx)) {
@@ -39,7 +35,7 @@ foreach ($required in @($ShadPs4Exe, $eboot, $prx)) {
 }
 
 $safeLabel = ($Label -replace '[^A-Za-z0-9._-]', '-')
-$sessionRoot = Join-Path $repoRoot ('work\stage2\sessions\' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $safeLabel)
+$sessionRoot = Join-Path $RepoRoot ('work\sessions\' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $safeLabel)
 [IO.Directory]::CreateDirectory($sessionRoot) | Out-Null
 $transcriptPath = Join-Path $sessionRoot 'session.log'
 $resultPath = Join-Path $sessionRoot 'result.json'
@@ -77,8 +73,7 @@ function Get-FileFingerprint([string]$Path) {
     }
 }
 
-# Record which build actually ran. A session whose PRX hash does not match the
-# build under test is the single most misleading thing in this workflow.
+# Record which build ran, by the installed PRX's hash.
 $installedHash = (Get-FileHash -LiteralPath $prx -Algorithm SHA256).Hash.ToLowerInvariant()
 $buildInfoPath = Join-Path (Split-Path $prx -Parent) 'northstar_ps4.build.json'
 $buildInfo = $null
@@ -93,7 +88,7 @@ foreach ($binary in @('eboot.bin', 'bin\ps4_retail\client.prx', 'bin\ps4_retail\
     if ($fingerprint) { $binaryFingerprints[$binary] = $fingerprint }
 }
 
-$dataRoot = Join-Path $env:APPDATA 'shadPS4\data\northstar_ps4'
+$dataRoot = Join-Path (Get-ShadPs4UserDir) 'data\northstar_ps4'
 $enabledPath = Join-Path $dataRoot 'enabledmods.json'
 $enabledSettings = $null
 if (Test-Path -LiteralPath $enabledPath -PathType Leaf) {

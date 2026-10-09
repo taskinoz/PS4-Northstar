@@ -1,15 +1,19 @@
+# Packages an R2Northstar profile into a new -Output folder: Northstar's mods
+# (NORTHSTAR_MODS_ROOT, or -ModsRoot), copied and hash-checked, plus this
+# repository's mods on request. Never edits a source or an existing profile.
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [string] $Config = (Join-Path $PSScriptRoot '..\config\local.json'),
+    [string] $ModsRoot,
     [string] $Output = (Join-Path $PSScriptRoot '..\dist\northstar-profile'),
     [switch] $IncludePs4CompatibilityMods,
     [switch] $IncludeAIHarness,
     [switch] $ConvertRpaksForPs4
 )
 $ErrorActionPreference = 'Stop'
-$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$settings = Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
-$source = [IO.Path]::GetFullPath($settings.northstarModsRoot)
+. "$PSScriptRoot\Env.ps1"
+$repositoryRoot = $RepoRoot
+if (-not $ModsRoot) { $ModsRoot = Get-NorthstarModsRoot }
+$source = [IO.Path]::GetFullPath($ModsRoot)
 $outputRoot = [IO.Path]::GetFullPath($Output)
 if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "Mod source not found: $source" }
 # A fresh output prevents deleted/disabled source files lingering in a rebuilt package.

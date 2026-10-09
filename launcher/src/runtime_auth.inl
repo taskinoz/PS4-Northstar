@@ -1,45 +1,32 @@
-// Atlas authentication groundwork.
+// Atlas authentication.
 //
-// **How Northstar auth actually works**, from the reference implementation:
+// How Northstar authentication works (PC NorthstarLauncher and Atlas):
 //
-//  1. The client exchanges its Origin token with the master server
-//     (`/client/origin_auth?id=<uid>&token=<originToken>`) and gets back a
-//     Northstar player token, kept as `m_sOwnClientAuthToken`.
+//  1. The client exchanges an EA auth code with the master server
+//     (`/client/origin_auth?id=<uid>&token=<code>`) for a Northstar player
+//     token. On the PS4 the token helper does this on a PC; the EA credential
+//     never reaches the console.
 //  2. To join a server it calls
 //     `/client/auth_with_server?id=<uid>&playerToken=<token>&server=<id>&password=<pw>`
-//     and gets back `{ip, port, authToken}` - a token minted for that one
-//     connection.
-//  3. It puts that token in the **`serverfilter` convar** and runs
+//     and gets back `{ip, port, authToken}`, a token for that one connection.
+//  3. It puts that token in the `serverfilter` convar and runs
 //     `connect <ip>:<port>`. `serverfilter` is an ordinary userinfo convar that
 //     Northstar repurposes, so the token rides along in the connect handshake.
-//  4. The server receives `(uid, serverFilter)` as parameters of
-//     `CBaseServer::ConnectClient` and calls `CheckAuthentication(uid, token)`,
-//     which looks the token up and compares the uid Atlas recorded against the
-//     uid the client sent. A mismatch is the `"Authentication Failed."` seen in
-//     this project's captured server log, where the PS4 client arrived as
-//     `uid 1`.
+//  4. The server receives `(uid, serverFilter)` in `CBaseServer::ConnectClient`
+//     and calls `CheckAuthentication(uid, token)`, which compares the uid Atlas
+//     recorded with the uid the client sent; a mismatch is
+//     "Authentication Failed.".
 //
-// So a genuine connection needs the client to present **both** halves: a token
-// Atlas minted, and the uid Atlas minted it for. The plan of record is that a
-// PC-side helper performs steps 1 and 2 - the EA credential never reaches the
-// PS4 - and the console receives only the uid and the per-connection token.
+// So a connection needs both the token and the uid it was minted for.
 //
-// **What the probe below established.**
+// `serverFilter` is registered camelCase ("Only connects to matchmaking servers
+// with the same value"); FindVar is case-insensitive. `nucleus_pid` holds "0"
+// and is not the connect uid: the connect packet is built from
+// `platform_user_id` (engine 0x155516), which the engine rewrites before each
+// connect - see EnsureConnectUid.
 //
-// `serverFilter` **does exist on this build** and is reachable. Searching the
-// binaries for `serverfilter` found nothing, which briefly looked like the
-// console build had dropped it; the registered name is camelCase
-// (`"Only connects to matchmaking servers with the same value"`) and FindVar is
-// case-insensitive, so the lookup succeeds. Writing it round-trips: it reads
-// back exactly what was written, which proves the token half of the handshake
-// can be driven from here without a server in the loop.
-//
-// `nucleus_pid` also exists and holds `"0"`. The connect uid does not come from
-// it: the connect packet is built from `platform_user_id` (engine 0x155516),
-// which the engine rewrites before each connect - see EnsureConnectUid.
-//
-// The ConVar layout for this build, from the same probe: +0x18 name, +0x20
-// help, +0x40 default value, +0x48 current value.
+// ConVar layout: +0x18 name, +0x20 help, +0x40 default value, +0x48 current
+// value.
 constexpr const char* kAuthProbeConVars[] = {
     "platform_user_id",
     "mp_allowed",
@@ -199,16 +186,16 @@ void ProbeAuthConVars(void* cvar, ModFindVarFn findVar,
     }
 }
 
-// Applying an exported Atlas identity.
+// Applying the Atlas identity.
 //
 // `platform_user_id` - "Platform user id (origin user id on PC, xuid on
 // xboxone)" - is the uid half, and it is an ordinary writable convar holding
-// "0" on this platform. `Export-AtlasCredentials.ps1` writes the uid and player
-// token from a signed-in PC client to the file below; when it is present the
-// uid is applied at startup.
+// "0" on this platform. The token helper writes the uid and player token to
+// the file below (or pushes them over the network, runtime_signin.inl); when it
+// is present the uid is applied at startup.
 //
-// Nothing happens without that file, so a profile with no exported identity
-// behaves exactly as before.
+// Without that file the game is not signed in, and Launch Northstar says how
+// to sign in.
 //
 // The engine does build the connect packet from this convar (engine 0x155516),
 // but rewrites it from the PSN account id first (0xb87d3), to "1" when that id
@@ -403,15 +390,12 @@ void* g_serverFilterConVar = nullptr;
 // serverFilter. So platform_user_id is the right convar - but setting it once
 // at startup is not enough. At engine+0xb87d3 the engine rewrites it from the
 // PSN account id it fetches into engine+0x2e7a310 (`%llu`), or to the literal
-// "1" when that id is zero. Under shadPS4 PSN is signed out, the id is zero,
-// and every join after that refresh went out as uid 1 - exactly what a PC
-// server's log showed ("shadPS4's (uid 1) connection was rejected:
-// Authentication Failed."), and why Atlas accepting the join was not enough.
+// "1" when that id is zero, as it is with PSN signed out, and the server then
+// refuses the player with "Authentication Failed.".
 //
-// Seeding the account-id global would not hold: the engine re-fetches it
-// before each rewrite. So the join path calls this right before issuing
-// `connect`, and it logs what it found, which confirms or refutes the
-// overwrite on the first join.
+// Seeding the account-id global does not hold: the engine re-fetches it before
+// each rewrite. So the join path calls this right before issuing `connect`,
+// and it logs the value it replaced.
 bool EnsureConnectUid() noexcept {
     if (!g_platformUserIdConVar || !g_atlasUid[0]) return false;
     char before[64]{};

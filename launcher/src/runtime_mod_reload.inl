@@ -6,13 +6,13 @@
 // The server browser calls ReloadMods() (menu_ns_modmenu.nut) whenever joining
 // a server changes which client-required mods are on: NSReloadMods, then
 // `reload_localization`, `loadPlaylists`, `weapon_reparse` and `uiscript_reset`,
-// and the connect's map load follows. On PS4 each of those was checked in the
-// lobby: `uiscript_reset` rebuilds the UI VM through this runtime's VM hooks,
-// and `loadPlaylists` and `weapon_reparse` run cleanly. `reload_localization`
-// does not: it rebuilds localize.prx's token table while another thread reads
-// it, and the game faulted at localize+0x7aed, a hash-chain walk, on the first
-// try. So its command is replaced (runtime_concommands.inl) with the part that
-// matters here, adding newly enabled mods' files, which never clears the table.
+// and the connect's map load follows. On PS4 `uiscript_reset` rebuilds the UI
+// VM through this runtime's VM hooks, and `loadPlaylists` and `weapon_reparse`
+// work as on PC. The stock `reload_localization` rebuilds localize.prx's token
+// table while another thread reads it (a fault at localize+0x7aed, a
+// hash-chain walk), so its command is replaced (runtime_concommands.inl) with
+// the part that matters here, adding newly enabled mods' files, which never
+// clears the table.
 //
 // What a reload rebuilds, all from the enabled set on disk:
 //   - the file overlay (mod search paths and file index), as a new snapshot;
@@ -92,12 +92,9 @@ void AddModLocalisationFiles(std::int32_t& total, std::int32_t& loaded) noexcept
     *fallbackField = savedFallback;
 }
 
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 // Called by NSReloadMods on the UI thread after enabledmods.json is saved.
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
 void ReloadAudioOverrides() noexcept; // runtime_audio.inl
 void RegisterModConCommands() noexcept; // runtime_mod_concommands.inl
-#endif
 
 void ReloadModState() noexcept {
     g_modsReloaded = true;
@@ -121,10 +118,9 @@ void ReloadModState() noexcept {
     uiapi::ClearDatatableCache();
 
     // UI and CLIENT callbacks are read when their hooks are installed; SERVER
-    // rereads at every VM. Without this, a mod enabled by the reload had its
-    // scripts compiled but its callbacks never run: joining a Parkour server
-    // skipped PKMode_Init in the CLIENT VM, the gamemode was never created, and
-    // every frame raised "The index roundBased does not exist" with no HUD.
+    // rereads at every VM. A mod enabled by the reload needs its callbacks
+    // reread too, or its scripts compile and its callbacks never run (a
+    // gamemode mod's init callback creates the gamemode the server uses).
     if (!LoadLifecycleCallbacks(g_runtimeUiLifecycle) || !LoadLifecycleCallbacks(g_runtimeClientLifecycle))
         LogFormat("[NorthstarPS4] reload: UI/CLIENT callback metadata could not be read\n");
 
@@ -142,13 +138,10 @@ void ReloadModState() noexcept {
         }
     }
 
-#if defined(NORTHSTAR_PS4_ENABLE_RUNTIME_MANIFEST)
     ReloadAudioOverrides();
     RegisterModConCommands();
-#endif
 
     uiapi::catalog.clear();
     uiapi::catalogReady = false;
     LogFormat("[NorthstarPS4] mods reloaded: %zu enabled\n", overlay->dirs.size());
 }
-#endif

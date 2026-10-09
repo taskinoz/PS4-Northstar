@@ -7,7 +7,7 @@
 //!   port's mods (`northstar-ps4-mods-*.zip`) and Northstar.Custom's converted
 //!   paks (`northstar-custom-ps4-rpaks-*.zip`);
 //! - bin/ps4_retail/northstar_ps4.prx, the runtime;
-//! - the bootstrap in eboot.bin that loads it, as scripts/Enable-Stage2Bootstrap.ps1
+//! - the bootstrap in eboot.bin that loads it, as scripts/Enable-Bootstrap.ps1
 //!   adds it, with the original kept as eboot.bin.northstar-stage2.bak;
 //! - R2Northstar/ps4-northstar-install.json, what was installed.
 //!
@@ -599,7 +599,7 @@ pub mod tests {
     }
 
     /// The real game's eboot, when NS_TEST_EBOOT points at an original copy:
-    /// the patch must give exactly the bytes Enable-Stage2Bootstrap.ps1 writes.
+    /// the patch must give exactly the bytes Enable-Bootstrap.ps1 writes.
     #[test]
     fn real_eboot_matches_the_script() {
         let Ok(path) = std::env::var("NS_TEST_EBOOT") else { return };

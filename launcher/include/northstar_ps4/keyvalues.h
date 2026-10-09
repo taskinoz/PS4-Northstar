@@ -7,8 +7,7 @@
 //
 // This exists because the engine's playlist loader does not honour `#base`, so
 // a Northstar KeyValues patch cannot be delegated to the engine the way PC
-// does it (see TECHNICAL-NOTES). The merge has to happen here and produce one
-// complete file.
+// does it. The merge happens here and produces one complete file.
 //
 // Duplicate keys within a block are real and must survive: the shipped
 // playlists_v2.txt contains 18 of them, including eleven `lang` blocks under
