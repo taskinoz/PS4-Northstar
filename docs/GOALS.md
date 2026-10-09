@@ -36,6 +36,7 @@ Verified on a PS4 (2026-10-08, one console, GoldHEN plugin; see [INSTALL.md](INS
 - The runtime loads as a GoldHEN plugin for the retail game (disc install, final patch), with mods in `/data/northstar_ps4/R2Northstar`, and boots to the main menu with Northstar's UI.
 - Network sign-in through the token helper, Atlas own-server auth with the account's pdata, the server browser, and pdata written back on disconnect.
 - Hosting a private match that a PC player joined through the server browser; fastball with Northstar.Custom's BT (mod VPK mounted from a lowercase copy).
+- With the v1.0.0-rc2 runtime (2026-10-09): a fastball match hosted on the PS4 with a PC player and a shadPS4 player joined; the token helper hides the Code box for the paired console.
 - The sign-in-replaced message: when Atlas refuses the token and the token helper is closed, Launch Northstar says so; with the helper open it renews the token and continues.
 
 Known limits:
