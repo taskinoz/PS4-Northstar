@@ -25,7 +25,7 @@ from northstar_env import game_root  # noqa: E402
 
 MODS = os.path.join(game_root(), "R2Northstar", "mods")
 P929 = os.path.join(game_root(), "r2", "cfg", "server", "persistent_player_data_version_929.pdef")
-P231 = os.path.join(REPO, "vendor", "NorthstarMods", "Northstar.CustomServers", "mod", "cfg", "server", "persistent_player_data_version_231.pdef")
+P231 = os.path.join(REPO, "vendor", "Northstar", "mods", "Northstar.CustomServers", "mod", "cfg", "server", "persistent_player_data_version_231.pdef")
 Q = chr(34)
 
 # Functions whose first argument is a persistence path...

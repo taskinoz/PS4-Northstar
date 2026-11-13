@@ -39,9 +39,15 @@ function Get-GameRoot {
     [IO.Path]::GetFullPath((Get-RequiredNorthstarSetting 'NORTHSTAR_PS4_GAME_ROOT' 'the shadPS4 game folder (the one with eboot.bin)'))
 }
 
-# Northstar's mods: Build-NorthstarMods.py writes them to work/northstar-release/<version>/mods.
+# Northstar's mods: Build-NorthstarMods.py writes them to work/northstar-release/<version>/mods,
+# <version> being the release pinned in vendor/northstar-release.json.
+function Get-NorthstarVersion {
+    (Get-Content -Raw -LiteralPath (Join-Path $RepoRoot 'vendor\northstar-release.json') | ConvertFrom-Json).version
+}
+
 function Get-NorthstarModsRoot {
-    [IO.Path]::GetFullPath((Get-NorthstarSetting 'NORTHSTAR_MODS_ROOT' (Join-Path $RepoRoot 'work\northstar-release\1.31.13\mods')))
+    $default = Join-Path $RepoRoot ('work\northstar-release\' + (Get-NorthstarVersion) + '\mods')
+    [IO.Path]::GetFullPath((Get-NorthstarSetting 'NORTHSTAR_MODS_ROOT' $default))
 }
 
 function Get-ShadPs4Exe {

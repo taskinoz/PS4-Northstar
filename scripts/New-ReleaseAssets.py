@@ -9,20 +9,23 @@ Writes:
 - northstar-custom-ps4-rpaks-<version>.zip: copied from the previous release's
   folder (Northstar.Custom's paks converted for the PS4, which change only with
   Northstar.Custom);
-- northstar-mods-1.31.13.zip: Northstar's mods from work/northstar-release/1.31.13/mods
-  (scripts/Build-NorthstarMods.py), under R2Northstar/mods/.
+- northstar-mods-<northstar version>.zip: Northstar's mods from
+  work/northstar-release/<northstar version>/mods (scripts/Build-NorthstarMods.py),
+  under R2Northstar/mods/; the version is the pin in vendor/northstar-release.json.
 
 The token helper builds come from the token-helper CI workflow and are added by hand.
 """
 import argparse
 import hashlib
+import json
 import os
 import shutil
 import subprocess
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-NORTHSTAR_VERSION = '1.31.13'
+with open(os.path.join(ROOT, 'vendor', 'northstar-release.json'), encoding='utf-8') as _pin:
+    NORTHSTAR_VERSION = json.load(_pin)['version']
 
 
 def sha(path):

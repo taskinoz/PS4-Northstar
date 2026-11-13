@@ -1,17 +1,23 @@
 {
-  "version": "1.31.13",
-  "source": "https://github.com/R2Northstar/Northstar/blob/v1.31.13/flake.lock",
-  "mods": {
-    "path": "vendor/NorthstarMods",
-    "rev": "509b14c727c127754b3f2566ee39e548386412cb"
+  "version": "1.31.15",
+  "source": "https://github.com/R2Northstar/Northstar/tree/v1.31.15",
+  "northstar": {
+    "note": "Northstar's monorepo: launcher, mods, plugins and docs. Release packaging: nix/mods.nix and nix/northstar-release.nix.",
+    "path": "vendor/Northstar",
+    "tag": "v1.31.15",
+    "rev": "5f97e32f5e5c0ac0bf070f7733c63a93acd76259",
+    "mods": "mods",
+    "launcher": "launcher"
   },
   "navs": {
+    "note": "Still a separate repository; the release fetches tag v4 (nix/northstar-navmeshes.nix).",
     "path": "vendor/NorthstarNavs",
     "tag": "v4",
     "rev": "0d3c1332ca40b7835f880251509da677184bec3e"
   },
-  "launcher": {
-    "note": "Not vendored; pinned here for reference, matching tools/NorthstarLauncher-reference.",
-    "rev": "1b0ce15673a0027b21639746fd74d4f7da1e504d"
+  "release_zip": {
+    "url": "https://github.com/R2Northstar/Northstar/releases/download/v1.31.15/Northstar.release.v1.31.15.zip",
+    "sha256": "65580b0962899fae3710c73d3a4dd46b73badd14bb1d20ffd15d7c3f8f0040cf",
+    "size": 107270914
   }
 }

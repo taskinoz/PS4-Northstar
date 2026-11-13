@@ -1,12 +1,13 @@
-"""Regenerates docs/NATIVE-API-INVENTORY.md from a NorthstarLauncher clone in
-tools/NorthstarLauncher-reference and the PS4 registration table."""
+"""Regenerates docs/NATIVE-API-INVENTORY.md from the launcher in the vendored
+Northstar monorepo (vendor/Northstar/launcher) and the PS4 registration table."""
 import argparse
 from pathlib import Path
 import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-PC = ROOT / "tools/NorthstarLauncher-reference"
+NORTHSTAR = ROOT / "vendor/Northstar"
+PC = NORTHSTAR / "launcher"
 DECL = re.compile(r'ADD_SQFUNC\s*\(\s*"([^"\n]*)"\s*,\s*(\w+)\s*,\s*"((?:\\.|[^"\\])*)"\s*,\s*"(?:\\.|[^"\\])*"\s*,\s*([^)]*)\)', re.S)
 REG = re.compile(r'\{"(\w+)",\s*"((?:\\.|[^"\\])*)",\s*"((?:\\.|[^"\\])*)",\s*(\w+),\s*(\w+)\}')
 
@@ -14,7 +15,7 @@ def cell(text):
     return text.replace("|", "\\|").replace("\n", " ")
 
 def generate():
-    revision = subprocess.check_output(["git", "-C", str(PC), "rev-parse", "HEAD"], text=True).strip()
+    revision = subprocess.check_output(["git", "-C", str(NORTHSTAR), "rev-parse", "HEAD"], text=True).strip()
     ps4 = {}
     for match in REG.finditer((ROOT / "launcher/src/runtime_ui_api.inl").read_text()):
         ps4.setdefault(match[1], []).append((match[4], match[5]))
@@ -32,7 +33,7 @@ def generate():
             rows.append(f"| `{m[2]}` | `{cell(m[1])}` / `{cell(m[3])}` | `{cell(re.sub(r'\s+', ' ', m[4]).strip())}` | {handlers} | `{relative}:{line}` |")
     return "\n".join([
         "# Native API inventory", "",
-        f"PC baseline: NorthstarLauncher `{revision}`. Regenerate with `python scripts/Update-NorthstarApiInventory.py`; verify with `--check`.", "",
+        f"PC baseline: Northstar monorepo `{revision}` (`launcher/`). Regenerate with `python scripts/Update-NorthstarApiInventory.py`; verify with `--check`.", "",
         "This lists each Squirrel native PC Northstar declares with `ADD_SQFUNC`, beside the PS4 runtime's registration of the same name (`launcher/src/runtime_ui_api.inl`). It lists registrations, not behaviour. Engine builtin overrides, ConVars and the natives PC registers by other means are not listed; see [INTERNALS.md](INTERNALS.md).", "",
         "| PC native | PC return / arguments | PC context | PS4 handler/context | PC source |",
         "|---|---|---|---|---|", *rows, "",

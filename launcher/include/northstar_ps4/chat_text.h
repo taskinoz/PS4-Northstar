@@ -81,6 +81,13 @@ inline void RemoveAsciiControlSequences(char* str, bool allowColorCodes) {
     }
 }
 
+// PC exploitfixes_clantag.cpp: newlines in a player's clan tag (player_info_t,
+// 16 bytes) become spaces. Stops at the terminator or the field's end.
+inline void FilterClanTagNewlines(char* tag, std::size_t size) {
+    for (std::size_t i = 0; i < size && tag[i]; ++i)
+        if (tag[i] == '\n') tag[i] = ' ';
+}
+
 struct ChatColor {
     std::uint8_t r, g, b, a;
     std::uint32_t Packed() const {

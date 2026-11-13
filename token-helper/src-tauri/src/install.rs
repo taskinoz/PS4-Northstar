@@ -28,8 +28,11 @@ pub const PATCHED_EBOOT_SHA256: &str = "5a4b52ff7224cca7bb9f5f25888847d5d2bd1669
 pub const RELEASES_API: &str = "https://api.github.com/repos/taskinoz/PS4-Northstar/releases?per_page=20";
 /// Northstar's own release, used for its mods when a PS4 Northstar release has no mods zip.
 pub const NORTHSTAR_ZIP_URL: &str =
-    "https://github.com/R2Northstar/Northstar/releases/download/v1.31.13/Northstar.release.v1.31.13.zip";
-pub const NORTHSTAR_ZIP_SHA256: &str = "e622b96e7609912060a61ba3eed382eeafd6cc7b62c105ea609a36bc36e75322";
+    "https://github.com/R2Northstar/Northstar/releases/download/v1.31.15/Northstar.release.v1.31.15.zip";
+/// GitHub's published digest of that asset (also in vendor/northstar-release.json).
+pub const NORTHSTAR_ZIP_SHA256: &str = "65580b0962899fae3710c73d3a4dd46b73badd14bb1d20ffd15d7c3f8f0040cf";
+/// The Northstar release the mods come from; also the launcher version sent to Atlas.
+pub const NORTHSTAR_VERSION: &str = "1.31.15";
 const NORTHSTAR_MODS: [&str; 3] = ["Northstar.Client", "Northstar.Custom", "Northstar.CustomServers"];
 const PS4_MODS: [&str; 2] = ["Northstar.PS4", "Northstar.DirectConnect"];
 const BACKUP_NAME: &str = "eboot.bin.northstar-stage2.bak";
@@ -461,8 +464,9 @@ fn install_from(
         Some(asset) => get(asset)?,
         None => {
             let path = work.join("northstar.zip");
-            progress("Downloading Northstar's mods (Northstar 1.31.13, 102 MB)...".into());
-            download(&sources.northstar_zip_url, &path, Some(&sources.northstar_zip_sha256), "Northstar 1.31.13", progress)?;
+            progress(format!("Downloading Northstar's mods (Northstar {NORTHSTAR_VERSION}, 102 MB)..."));
+            let label = format!("Northstar {NORTHSTAR_VERSION}");
+            download(&sources.northstar_zip_url, &path, Some(&sources.northstar_zip_sha256), &label, progress)?;
             path
         }
     };

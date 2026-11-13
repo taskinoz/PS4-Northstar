@@ -23,7 +23,7 @@ it in:
 | `NORTHSTAR_PS4_GAME_ROOT` | The shadPS4 game folder (with `eboot.bin` and `vpk_ps4`). Deploying, testing, profile sync. |
 | `SHADPS4_EXE` | The `shadPS4.exe` the test scripts launch. |
 | `SHADPS4_USER_DIR` | shadPS4's user folder (`log\`, `data\`). Default `%APPDATA%\shadPS4`. |
-| `NORTHSTAR_MODS_ROOT` | Northstar's mods. Default `work\northstar-release\1.31.13\mods`. |
+| `NORTHSTAR_MODS_ROOT` | Northstar's mods. Default `work\northstar-release\<version>\mods`, the version pinned in `vendor\northstar-release.json`. |
 | `PS4_EXTRACTED_ROOT` | The game's `frontend` and `mp_common` VPKs unpacked, for tests against real files. Optional. |
 | `OO_PS4_TOOLCHAIN` | The OpenOrbis toolchain. Default `tools\openorbis-0.5.4\OpenOrbis\PS4Toolchain`. |
 | `PS4_ADDRESS` | A PS4 running GoldHEN, for `scripts/ps4/`. |
@@ -32,19 +32,31 @@ A variable set in the environment takes precedence over `.env`.
 
 ## Northstar's mods
 
-Northstar's mods come from two pinned submodules, `vendor/NorthstarMods` and
-`vendor/NorthstarNavs`, at the revisions Northstar v1.31.13 packages
-(`vendor/northstar-release.json`). Assemble them as Northstar's own release does:
+Northstar's mods come from two pinned submodules (`vendor/northstar-release.json`):
+
+- `vendor/Northstar`: Northstar's monorepo ([R2Northstar/Northstar](https://github.com/R2Northstar/Northstar),
+  launcher, mods, plugins and docs) at the release tag. The mods are in `mods/`, PC's native
+  code in `launcher/`.
+- `vendor/NorthstarNavs`: the navmeshes, still a separate repository, at the tag the release
+  fetches.
+
+Assemble them as Northstar's own release does (the monorepo's `nix/mods.nix` and
+`nix/northstar-release.nix`):
 
 ```powershell
 git submodule update --init --depth 1
 python scripts/Build-NorthstarMods.py
 ```
 
-This writes `work/northstar-release/1.31.13/mods`, byte-identical to an installed 1.31.13
-(`--compare <PC mods folder>` checks it). The submodules are checked out with
-`core.autocrlf=false` and `core.eol=lf`, which the script sets: upstream commits some files with
-CRLF and stores localisation as UTF-16.
+This writes `work/northstar-release/<version>/mods` (`--compare <mods folder>` checks it against
+an install). Don't initialise the monorepo's own submodules (curl, minhook, minizip); nothing
+here needs them. The submodules are checked out with `core.autocrlf=false` and `core.eol=lf`,
+which the script sets: upstream commits some files with CRLF and stores localisation as UTF-16.
+
+To move to a new Northstar release, check out its tag in `vendor/Northstar`, and update
+`vendor/northstar-release.json` (version, tag, commit, release zip and its GitHub digest) and
+the zip constants in `token-helper/src-tauri/src/install.rs`. Scripts read the version from the
+pin file.
 
 ## The runtime
 
@@ -151,7 +163,7 @@ success or failure pattern (`-SkipBuild`, `-SkipDeploy`, `-KeepRunning`, `-Succe
 | --- | --- |
 | `scripts/pdef/build_ps4_pdef.py` | `mods/Northstar.PS4/mod/cfg/server/persistent_player_data_version_929.pdef` (PC 231 plus the black market) |
 | `scripts/pdef/find_console_fields.py <stock roots>` | Which console-only save fields stock scripts use |
-| `scripts/menus/build_mod_list_override.py`, `build_mod_settings_override.py`, `build_colorsliders_override.py` | Northstar.PS4's controller-ready menu overrides, from `vendor/NorthstarMods` |
+| `scripts/menus/build_mod_list_override.py`, `build_mod_settings_override.py`, `build_colorsliders_override.py` | Northstar.PS4's controller-ready menu overrides, from `vendor/Northstar/mods` |
 | `scripts/Update-NorthstarApiInventory.py` | [NATIVE-API-INVENTORY.md](NATIVE-API-INVENTORY.md) |
 | `scripts/Convert-NorthstarModRpaks.ps1` | PS4-layout copies of a mod's RPaks and STARPaks |
 
@@ -190,7 +202,7 @@ point it at other sources; `tests/token_helper/fake_github.py` serves a folder a
    This writes `dist/release/<version>/`: the PRX and build record,
    `northstar-ps4-mods-<version>.zip` (this repository's mods, as tracked in git),
    `northstar-custom-ps4-rpaks-<version>.zip` (copied from the previous release) and
-   `northstar-mods-1.31.13.zip`. Every zip keeps the `R2Northstar/mods/` prefix.
+   `northstar-mods-<Northstar version>.zip`. Every zip keeps the `R2Northstar/mods/` prefix.
 3. Add the token helper builds from the token-helper workflow.
 4. Publish a GitHub release with those files.
 
@@ -201,7 +213,7 @@ release zip and checks it against the hash in `install.rs`.
 
 ## Installing a release by hand
 
-1. Extract `northstar-mods-1.31.13.zip`, `northstar-ps4-mods-<version>.zip` and
+1. Extract `northstar-mods-<Northstar version>.zip`, `northstar-ps4-mods-<version>.zip` and
    `northstar-custom-ps4-rpaks-<version>.zip` into the game folder, in that order, replacing
    files.
 2. Copy `northstar_ps4.prx` to `<game folder>\bin\ps4_retail\northstar_ps4.prx`.

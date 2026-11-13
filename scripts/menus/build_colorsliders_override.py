@@ -9,7 +9,7 @@ import os
 
 NL = chr(10)
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SRC = os.path.join(REPO, 'vendor', 'NorthstarMods', 'Northstar.Client', 'mod', 'resource', 'ui', 'menus',
+SRC = os.path.join(REPO, 'vendor', 'Northstar', 'mods', 'Northstar.Client', 'mod', 'resource', 'ui', 'menus',
                    'colorsliders.menu')
 DST = 'mods/Northstar.PS4/mod/resource/ui/menus/colorsliders.menu'
 
