@@ -1,17 +1,17 @@
 # Native API inventory
 
-PC baseline: NorthstarLauncher `4df8857814dd683147f1cc5fdae0b3b419a7f1cf`. Regenerate with `python scripts/Update-NorthstarApiInventory.py`; verify with `--check`.
+PC baseline: Northstar monorepo `5f97e32f5e5c0ac0bf070f7733c63a93acd76259` (`launcher/`). Regenerate with `python scripts/Update-NorthstarApiInventory.py`; verify with `--check`.
 
 This lists each Squirrel native PC Northstar declares with `ADD_SQFUNC`, beside the PS4 runtime's registration of the same name (`launcher/src/runtime_ui_api.inl`). It lists registrations, not behaviour. Engine builtin overrides, ConVars and the natives PC registers by other means are not listed; see [INTERNALS.md](INTERNALS.md).
 
 | PC native | PC return / arguments | PC context | PS4 handler/context | PC source |
 |---|---|---|---|---|
 | `NSSendMessage` | `void` / `string message, bool isIngame, bool isTeam` | `ScriptContext::CLIENT` | `SendMessage` / `kCtxClient`; `ServerSendMessage` / `kCtxServer` | `client/chatcommand.cpp:19` |
-| `NSFetchVerifiedModsManifesto` | `void` / `` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `FetchVerifiedMods` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:763` |
-| `NSIsModDownloadable` | `bool` / `string name, string version` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `IsModDownloadable` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:770` |
-| `NSDownloadMod` | `void` / `string name, string version` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `DownloadMod` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:790` |
-| `NSGetModInstallState` | `ModInstallState` / `` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `GetModInstallState` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:802` |
-| `NSCancelModDownload` | `void` / `` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `CancelModDownload` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:831` |
+| `NSFetchVerifiedModsManifesto` | `void` / `` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `FetchVerifiedMods` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:765` |
+| `NSIsModDownloadable` | `bool` / `string name, string version` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `IsModDownloadable` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:772` |
+| `NSDownloadMod` | `void` / `string name, string version` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `DownloadMod` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:792` |
+| `NSGetModInstallState` | `ModInstallState` / `` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `GetModInstallState` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:804` |
+| `NSCancelModDownload` | `void` / `` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `CancelModDownload` / `kCtxAll` | `mods/autodownload/moddownloader.cpp:833` |
 | `NSSaveFile` | `void` / `string file, string data` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `SaveFile` / `kCtxAll` | `mods/modsavefiles.cpp:253` |
 | `NSSaveJSONFile` | `void` / `string file, table data` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `SaveJsonFile` / `kCtxAll` | `mods/modsavefiles.cpp:307` |
 | `NS_InternalLoadFile` | `int` / `string file` | `ScriptContext::SERVER \| ScriptContext::CLIENT \| ScriptContext::UI` | `LoadFile` / `kCtxAll` | `mods/modsavefiles.cpp:363` |
@@ -65,8 +65,8 @@ This lists each Squirrel native PC Northstar declares with `ADD_SQFUNC`, beside 
 | `GetUserInfoKVBool_Internal` | `bool` / `entity player, string key, bool defaultValue = false` | `ScriptContext::SERVER` | `UserInfoKvBool` / `kCtxServer` | `scripts/server/scriptuserinfo.cpp:87` |
 | `NSSendMessage` | `void` / `int playerIndex, string text, bool isTeam` | `ScriptContext::SERVER` | `SendMessage` / `kCtxClient`; `ServerSendMessage` / `kCtxServer` | `server/serverchathooks.cpp:123` |
 | `NSBroadcastMessage` | `void` / `int fromPlayerIndex, int toPlayerIndex, string text, bool isTeam, bool isDead, int messageType` | `ScriptContext::SERVER` | `ServerBroadcastMessage` / `kCtxServer` | `server/serverchathooks.cpp:134` |
-| `NSGetCurrentModName` | `string` / `` | `ScriptContext::UI \| ScriptContext::CLIENT \| ScriptContext::SERVER` | `CurrentModName` / `kCtxAll` | `squirrel/squirrel.cpp:652` |
-| `NSGetCallingModName` | `string` / `int depth = 0` | `ScriptContext::UI \| ScriptContext::CLIENT \| ScriptContext::SERVER` | `CallingModName` / `kCtxAll` | `squirrel/squirrel.cpp:672` |
+| `NSGetCurrentModName` | `string` / `` | `ScriptContext::UI \| ScriptContext::CLIENT \| ScriptContext::SERVER` | `CurrentModName` / `kCtxAll` | `squirrel/squirrel.cpp:686` |
+| `NSGetCallingModName` | `string` / `int depth = 0` | `ScriptContext::UI \| ScriptContext::CLIENT \| ScriptContext::SERVER` | `CallingModName` / `kCtxAll` | `squirrel/squirrel.cpp:706` |
 | `NSGetLoadedMapNames` | `array<string>` / `` | `ScriptContext::UI \| ScriptContext::CLIENT \| ScriptContext::SERVER` | `ServerLoadedMapNames` / `kCtxAll` | `util/printmaps.cpp:160` |
 
 ## Interpretation

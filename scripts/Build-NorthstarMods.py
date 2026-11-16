@@ -1,15 +1,15 @@
 """Assemble the Northstar release mods from the pinned submodules.
 
-The PS4 profile used to be built from whatever PC Northstar install happened to
-be on the machine, so it changed whenever that install updated. It is now built
-from two submodules pinned to exactly what Northstar v1.31.13 packages
-(vendor/northstar-release.json, taken from that release's flake.lock):
+The PS4 profile is built from two submodules pinned to exactly what the
+Northstar release packages (vendor/northstar-release.json):
 
-  vendor/NorthstarMods  R2Northstar/NorthstarMods @ 509b14c7
+  vendor/Northstar      R2Northstar/Northstar (the monorepo: launcher, mods,
+                        plugins, docs) @ the release tag; mods are in mods/
   vendor/NorthstarNavs  R2Northstar/NorthstarNavs @ v4
 
-and this script repeats the release's own packaging (R2Northstar/Northstar,
-pkgs/mods and pkgs/northstar), which is only two steps:
+and this script repeats the release's own packaging (the monorepo's
+nix/mods.nix, nix/northstar-navmeshes.nix and nix/northstar-release.nix),
+which is only two steps:
 
   1. copy the mods and stamp the release version into the three mod.json
      files (`jq ".Version = \"<version>\""`: re-indented to two spaces);
@@ -23,8 +23,10 @@ settings the checkout matches the release byte for byte, and a Windows
 default checkout does not.
 
 --compare <mods dir> checks the result byte for byte against an existing
-install. Against the PC install this was built from, every one of the 818
-files matches.
+install, e.g. R2Northstar/mods from the release zip.
+
+The monorepo's own submodules (the launcher's curl, minhook, minizip) are not
+needed and are never initialised.
 
 Usage:
   python scripts/Build-NorthstarMods.py [--output DIR] [--compare MODS_DIR]
@@ -58,13 +60,20 @@ def prepare_submodule(relpath, rev):
     if head != rev:
         sys.exit("%s is at %s, but the pin is %s. Run: git submodule update %s"
                  % (relpath, head[:12], rev[:12], relpath))
-    if git(path, "config", "--get", "core.autocrlf") != "false" or \
-            git(path, "config", "--get", "core.eol") != "lf":
+    # Files checked out before these settings keep their converted line endings
+    # (git status doesn't show it), so the checkout is redone once per revision
+    # and the revision recorded.
+    def setting(key):
+        result = subprocess.run(["git", "-C", path, "config", "--get", key], capture_output=True, text=True)
+        return result.stdout.strip()
+    if setting("core.autocrlf") != "false" or setting("core.eol") != "lf" or \
+            setting("northstarps4.exactcheckout") != rev:
         print("%s: switching to byte-exact checkout (autocrlf=false, eol=lf)" % relpath)
         git(path, "config", "core.autocrlf", "false")
         git(path, "config", "core.eol", "lf")
         git(path, "rm", "-q", "--cached", "-r", ".")
         git(path, "reset", "-q", "--hard", "HEAD")
+        git(path, "config", "northstarps4.exactcheckout", rev)
     return path
 
 
@@ -114,7 +123,8 @@ def main():
     parser.add_argument("--compare")
     args = parser.parse_args()
 
-    mods_src = prepare_submodule(pin["mods"]["path"], pin["mods"]["rev"])
+    northstar = prepare_submodule(pin["northstar"]["path"], pin["northstar"]["rev"])
+    mods_src = os.path.join(northstar, pin["northstar"]["mods"])
     navs_src = prepare_submodule(pin["navs"]["path"], pin["navs"]["rev"])
 
     out = os.path.abspath(args.output)

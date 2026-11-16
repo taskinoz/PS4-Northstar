@@ -47,8 +47,8 @@ NL = chr(10)
 TAB = chr(9)
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
-# The vendored NorthstarMods pin (vendor/northstar-release.json).
-PC_231 = os.path.join(REPO, "vendor", "NorthstarMods", "Northstar.CustomServers", "mod", "cfg", "server", "persistent_player_data_version_231.pdef")
+# The vendored Northstar pin (vendor/northstar-release.json).
+PC_231 = os.path.join(REPO, "vendor", "Northstar", "mods", "Northstar.CustomServers", "mod", "cfg", "server", "persistent_player_data_version_231.pdef")
 # The game's own save definition, loose in its r2 folder.
 STOCK_929 = os.path.join(game_root(), "r2", "cfg", "server", "persistent_player_data_version_929.pdef")
 OUTPUT = "mods/Northstar.PS4/mod/cfg/server/persistent_player_data_version_929.pdef"

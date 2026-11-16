@@ -674,6 +674,24 @@ call (`engine+0x1a596e`) records per thread whether a datagram arrived, and both
 **Baselines.** The string-table baseline overflow's `Host_Error` call (`engine+0xe997d`) goes to
 a thunk that disconnects that client instead of stopping the server.
 
+**Reliable fragments** (PC NorthstarLauncher#941). `CNetChan::ProcessSubChannelData` is inlined
+into `NET_ProcessSocket`. When it skips a fragment it already has, one path takes a 10-bit byte
+count (up to 1023, `engine+0x1a7b17`) and reads it into a 0x230-byte stack buffer at
+`[rbp-0x260]` (`engine+0x1a7dd1`, ReadBits `engine+0x20fff0`); the stack canary is at
+`[rbp-0x30]`. The sibling paths clamp to 0x230 (`engine+0x1a7b91`) or use it (`engine+0x1a7ada`).
+`engine+0x1a7ddd` jumps to `ns_fragment_bound_thunk`, which drops a larger fragment's packet at
+`engine+0x1a846c`, the target of the function's own fragment-size check (`jg` at
+`engine+0x1a7ebc`). PC: `engine.dll+0x2127c9`, failure path `+0x212912`.
+
+**Clan tags** (PC NorthstarLauncher#942). `CEngineClient::GetPlayerInfo` (`engine+0x47510`,
+PC `engine.dll+0x52660`) is slot 28 of the engine client vtable (`engine+0x3985b8`; the
+`VEngineClient013` object is `engine+0x927180`) and is reached only through that slot. The hook
+turns newlines in the copied `player_info_t` clan tag (`+0x100`, 16 bytes; the struct is 0x158
+bytes, as on PC) into spaces.
+
+Not ported: PC's `gamestate_info_ffa` RUI hook and its stack fix (NorthstarLauncher#935), since
+the port has no counterpart of that hook.
+
 **Server-sent commands.** The client's `ProcessStringCmd` (`engine+0x155e80`) wraps a remote
 server's commands in execution markers (`engine+0xef330`, count at `engine+0x3e78fe0`); a remote
 server is always restricted (`[this+0xfac4]` is 1 from the constructor). Past 0x800 markers the

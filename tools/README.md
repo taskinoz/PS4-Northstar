@@ -27,7 +27,7 @@ Read-only clones, for comparing with PC Northstar. None is needed to build.
 
 | Path | Repository | |
 | --- | --- | --- |
-| `tools/NorthstarLauncher-reference/` | [R2Northstar/NorthstarLauncher](https://github.com/R2Northstar/NorthstarLauncher) | PC Northstar's native code; `scripts/Update-NorthstarApiInventory.py` reads it. Its Windows offsets never apply to the PS4. |
+| `vendor/Northstar/launcher/` (a submodule, not in `tools/`) | [R2Northstar/Northstar](https://github.com/R2Northstar/Northstar) `launcher/` | PC Northstar's native code; `scripts/Update-NorthstarApiInventory.py` reads it. Its Windows offsets never apply to the PS4. |
 | `tools/Atlas-reference/` | [R2Northstar/Atlas](https://github.com/R2Northstar/Atlas) | The master server: its API, error codes and packet formats |
 
 Nothing in `tools/` may be game data, Northstar release binaries or extracted archives.

@@ -206,6 +206,30 @@ asm(".text\n"
     "    jmpq *ns_baseline_overflow_target(%rip)\n"
     ".size ns_baseline_overflow_thunk, . - ns_baseline_overflow_thunk\n");
 
+// The reliable-fragment bound (runtime_netmessage_fixes.inl, fragmentfix)
+// jumps here from engine+0x1a7ddd with the fragment's byte count in r9d. The
+// overwritten `shl r9d, 3; lea rsi, [rbp-0x260]` runs here before resuming;
+// a count past the 0x230-byte stack buffer drops the packet instead.
+extern "C" __attribute__((visibility("hidden"))) std::uintptr_t ns_fragment_resume = 0;
+extern "C" __attribute__((visibility("hidden"))) std::uintptr_t ns_fragment_drop = 0;
+extern "C" __attribute__((visibility("hidden"))) std::uint32_t ns_fragment_dropped = 0;
+extern "C" __attribute__((visibility("hidden"))) void ns_fragment_bound_thunk();
+asm(".text\n"
+    ".p2align 4\n"
+    ".globl ns_fragment_bound_thunk\n"
+    ".hidden ns_fragment_bound_thunk\n"
+    ".type ns_fragment_bound_thunk, @function\n"
+    "ns_fragment_bound_thunk:\n"
+    "    cmpl $0x230, %r9d\n"
+    "    ja 1f\n"
+    "    shll $3, %r9d\n"
+    "    leaq -0x260(%rbp), %rsi\n"
+    "    jmpq *ns_fragment_resume(%rip)\n"
+    "1:\n"
+    "    lock incl ns_fragment_dropped(%rip)\n"
+    "    jmpq *ns_fragment_drop(%rip)\n"
+    ".size ns_fragment_bound_thunk, . - ns_fragment_bound_thunk\n");
+
 namespace northstar::ps4 {
 namespace {
 constexpr std::size_t kMaxModules = 256;
@@ -270,7 +294,7 @@ constexpr std::uint8_t kClientUiRegistrationStartupPreimage[] = {
 // The singleton instance pointer lives in .bss at kLocalizeInstanceVa and is
 // returned by the trivial accessor at kLocalizeAccessorVa (`lea rax,[rip+...];
 // ret`). Windows localize.dll AddFile (RVA 0x6D80) shares the same structure;
-// see tools/NorthstarLauncher-reference/primedev/client/modlocalisation.cpp for
+// see vendor/Northstar/launcher/primedev/client/modlocalisation.cpp for
 // the equivalent PC hook that calls AddFile(path, nullptr, false).
 constexpr std::uintptr_t kLocalizeAddFileVa = 0x5c60;
 constexpr std::uintptr_t kLocalizeInstanceVa = 0x1d280;

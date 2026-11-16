@@ -109,7 +109,7 @@ impl Default for Options {
             key_file: default_key_file(),
             advertise_host: String::new(),
             master_server: "https://northstar.tf".into(),
-            launcher_version: "1.31.13".into(),
+            launcher_version: crate::install::NORTHSTAR_VERSION.into(),
             content_id: "1039093".into(),
             title: "Titanfall2".into(),
             client_id: "TITANFALL2-PC-SERVER".into(),

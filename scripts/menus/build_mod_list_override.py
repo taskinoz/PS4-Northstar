@@ -18,7 +18,7 @@ import os
 
 NL = chr(10)
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SOURCE = os.path.join(ROOT, 'vendor', 'NorthstarMods', 'Northstar.Client', 'mod', 'scripts', 'vscripts', 'ui',
+SOURCE = os.path.join(ROOT, 'vendor', 'Northstar', 'mods', 'Northstar.Client', 'mod', 'scripts', 'vscripts', 'ui',
                       'menu_ns_modmenu.nut')
 TARGET = os.path.join(ROOT, 'mods', 'Northstar.PS4', 'mod', 'scripts', 'vscripts', 'ui', 'menu_ns_modmenu.nut')
 

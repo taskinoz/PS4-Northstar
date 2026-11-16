@@ -22,10 +22,12 @@ bool g_hostFrameHookInstalled = false;
 bool g_hostFrameContextSeen[3]{};
 
 void DisconnectBaselineOverflows() noexcept;  // runtime_netmessage_fixes.inl
+void ReportFragmentDrops() noexcept;  // runtime_netmessage_fixes.inl
 
 void RuntimeHostFrameUpdate(double currentTime, float frameTime) noexcept {
     g_originalHostFrameUpdate(currentTime, frameTime);
     DisconnectBaselineOverflows();
+    ReportFragmentDrops();
     AddBootModLocalisationIfMissed();
 
     // ScriptContext values are SERVER=0, CLIENT=1 and UI=2. The async API

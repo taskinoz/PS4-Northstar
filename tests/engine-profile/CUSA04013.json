@@ -10,7 +10,11 @@
     "conCommandBaseConstructor": { "virtualAddress": "0x204e60", "preimage": "4889f84c8d1d96f51a004d85c9488d3d" },
     "engineCvarRegistrationThunk": { "virtualAddress": "0x2df1c0", "preimage": "554889e54156534889f04989fe488d3d" },
     "hostStateFrameUpdate": { "virtualAddress": "0x1334d0", "preimage": "554889e54157415641554154534881ecd8010000" },
-    "hostStateFrameUpdateCall": { "virtualAddress": "0x176151", "preimage": "e87ad3fbff" }
+    "hostStateFrameUpdateCall": { "virtualAddress": "0x176151", "preimage": "e87ad3fbff" },
+    "subchannelFragmentSkipRead": { "virtualAddress": "0x1a7dd1", "preimage": "4585d27428488bbd78fdffff41c1e103488db5a0fdffff4489d34489cae8fd810600" },
+    "subchannelFragmentClamp": { "virtualAddress": "0x1a7b91", "preimage": "81fa000004000f87cf08000081fa3002" },
+    "subchannelFragmentSizeCheck": { "virtualAddress": "0x1a7eba", "preimage": "39d10f8faa050000" },
+    "engineClientGetPlayerInfo": { "virtualAddress": "0x47510", "preimage": "554889e553504889d385f67e37" }
   },
   "interfaces": {
     "engineCvar": "VEngineCvar007", "findVarSlot": 16, "registerCommandBaseSlotCandidate": 31

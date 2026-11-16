@@ -33,7 +33,7 @@ servers, through the same master server (Atlas, `northstar.tf`).
 | `scripts/` | PowerShell and Python tooling. `Env.ps1` / `northstar_env.py` load settings. |
 | `scripts/ps4/` | Real-PS4 tooling: FTP upload, kernel-log recorder, last-boot summary. |
 | `tests/` | Host test suites (`*.cpp`), `engine-profile/CUSA04013.json`, `token_helper/` fakes. |
-| `vendor/` | NorthstarMods and NorthstarNavs submodules pinned to Northstar v1.31.13. |
+| `vendor/` | Northstar's monorepo (launcher, mods, plugins, docs) and NorthstarNavs as submodules, pinned to a Northstar release in `vendor/northstar-release.json`. |
 | `docs/INTERNALS.md` | Addresses, layouts and platform behaviour, by subsystem. Read the relevant section before changing a hook. |
 
 ## Tools and settings
@@ -69,7 +69,7 @@ servers, through the same master server (Atlas, `northstar.tf`).
   never a token, auth code, refresh key or password.
 - **Portable logic goes in a header** under `launcher/include/northstar_ps4/` with a test in
   `tests/`, registered in `Test-NorthstarProfile.ps1`.
-- **Behave as PC Northstar does.** Port PC's rules (the NorthstarLauncher source) and note any
+- **Behave as PC Northstar does.** Port PC's rules (the launcher in `vendor/Northstar/launcher`) and note any
   deliberate difference.
 - **PS4-specific script or menu fixes** go in `mods/Northstar.PS4` as overrides or KeyValues
   patches, never as edits to Northstar's mods.

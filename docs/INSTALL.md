@@ -199,7 +199,8 @@ starts, and the mods live in the console's storage.
 - From the [releases page](https://github.com/taskinoz/PS4-Northstar/releases), a release after
   v1.0.0-rc1:
   - `northstar_ps4.prx`;
-  - `northstar-mods-1.31.13.zip`, `northstar-ps4-mods-<version>.zip` and
+  - `northstar-mods-<Northstar version>.zip` (for example `northstar-mods-1.31.15.zip`),
+    `northstar-ps4-mods-<version>.zip` and
     `northstar-custom-ps4-rpaks-<version>.zip`.
 - An **FTP client** on your computer, such as [FileZilla](https://filezilla-project.org).
 - The [token helper](#the-token-helper), on a computer on the same network as the PS4.
@@ -208,7 +209,7 @@ starts, and the mods live in the console's storage.
 
 1. **Put the mods together.** Make an empty folder and extract the three zips into it, in this
    order, letting each replace files from the one before:
-   1. `northstar-mods-1.31.13.zip`
+   1. `northstar-mods-<Northstar version>.zip`
    2. `northstar-ps4-mods-<version>.zip`
    3. `northstar-custom-ps4-rpaks-<version>.zip`
 

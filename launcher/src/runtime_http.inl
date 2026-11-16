@@ -35,7 +35,7 @@ const char* HttpErrorText(int code) noexcept {
 // Atlas only authenticates clients whose User-Agent starts with
 // `R2Northstar/<semver>` at or above its configured minimum
 // (Atlas-reference pkg/api/api0/api.go, CheckLauncherVersion); anything else
-// is refused as "not R2Northstar". PC sends `R2Northstar/1.31.13`, or
+// is refused as "not R2Northstar". PC sends `R2Northstar/<release>`, or
 // `R2Northstar/x.y.z+dev` for dev builds, which skip the minimum entirely.
 //
 // This port sends the deployed Northstar.Client version with `+ps4` build

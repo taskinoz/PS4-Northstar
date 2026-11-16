@@ -7,9 +7,8 @@ global function NSUpdateGameStateClientStart
 // Rich Presence integration). Neither is defined in any Northstar.Client
 // script -- confirmed by grep across the real PC mod's whole scripts/vscripts
 // tree -- so they must be native, registered by a NorthstarLauncher C++
-// presence module this port doesn't implement (not found in
-// tools/NorthstarLauncher-reference either, so possibly newer than that
-// checkout). Referencing an undefined identifier in a Before/After hook the
+// presence module this port doesn't implement (Northstar's monorepo,
+// launcher and plugins included, doesn't define them either). Referencing an undefined identifier in a Before/After hook the
 // generated PS4 mod hook dispatch calls is a boot-time compile error the
 // same as any other undefined variable ("FatalError: ui/_menus.nut: UI
 // SCRIPT COMPILE ERROR: Undefined variable "NSUpdateGameStateUIStart""),

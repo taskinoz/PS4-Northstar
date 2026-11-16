@@ -80,6 +80,17 @@ int main() {
     assert(Utf8ToUtf16("\xff" "a", 2) == u"�a");
     assert(Utf8ToUtf16("\xed\xa0\x80", 3) == u"���");
 
+    // Clan tags: newlines become spaces, within the 16-byte field only.
+    {
+        char tag[16] = "a\nb\n";
+        FilterClanTagNewlines(tag, sizeof(tag));
+        CHECK(tag, "a b ");
+        char full[18];
+        std::memcpy(full, "0123456789abcde\n\n", 18);  // no terminator inside the field
+        FilterClanTagNewlines(full, 16);
+        assert(full[15] == ' ' && full[16] == '\n');
+    }
+
     // Colours pack as the game reads them: r in the low byte.
     assert((ChatColor{1, 2, 3, 4}.Packed() == 0x04030201u));
 

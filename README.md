@@ -46,7 +46,7 @@ Downloads, with notes and known issues for each version, are on the
 | `token-helper/` | The token helper (Tauri 2: Rust and a web page). |
 | `scripts/` | Build, install, test and generator scripts. Settings come from `.env` ([.env.example](.env.example)). |
 | `tests/` | Host tests, the game's engine profile, and fake services for the token helper. |
-| `vendor/` | Northstar's mods and navmeshes at v1.31.13, as submodules. |
+| `vendor/` | Northstar's monorepo and navmeshes at v1.31.15, as submodules. |
 | `docs/` | The guides and the [native API inventory](docs/NATIVE-API-INVENTORY.md). |
 | `tools/` | External toolchains ([checklist](tools/README.md)). |
 

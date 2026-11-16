@@ -22,7 +22,8 @@
 // (engine+0x3818680, stride 0x2d738) is the server's.
 //
 // ReadUsercmd and GetEntByIndex (server.prx), the LZSS rewrite, the
-// WriteBaselines overflow and the NET_ReceiveDatagram limit are further down.
+// WriteBaselines overflow, the NET_ReceiveDatagram limit and the reliable
+// fragment bound are further down; the clan-tag filter is a slot hook here.
 // Not ported: CL_CopyExistingEntity, the UTF-8 parser fix and
 // CNetChan::ProcessMessages limits (ns_limits).
 
@@ -146,6 +147,24 @@ bool ClientStringCmd(void* clientState, void* message) noexcept {
     return g_clientStringCmd(clientState, message);
 }
 
+// PC exploitfixes_clantag.cpp (NorthstarLauncher#942): a clan tag with a
+// newline breaks the lines it is shown in (chat, scoreboard, obituaries).
+// CEngineClient::GetPlayerInfo (PC engine.dll+0x52660, vtable slot 28) copies
+// the string table's 0x158-byte player_info_t; on PS4 it is engine+0x47510,
+// slot 28 of the engine client's vtable (engine+0x3985b8, the VEngineClient013
+// object at engine+0x927180) and only reached through that slot. Newlines in
+// the copied clan tag become spaces, as on PC.
+constexpr std::size_t kPlayerInfoClanTagOffset = 0x100;
+constexpr std::size_t kPlayerInfoClanTagSize = 16;
+using GetPlayerInfoFn = bool (*)(void* engineClient, int index, void* info);
+GetPlayerInfoFn g_getPlayerInfo = nullptr;
+
+bool GetPlayerInfo(void* engineClient, int index, void* info) noexcept {
+    const bool result = g_getPlayerInfo(engineClient, index, info);
+    if (info) chat::FilterClanTagNewlines(static_cast<char*>(info) + kPlayerInfoClanTagOffset, kPlayerInfoClanTagSize);
+    return result;
+}
+
 struct SlotHook {
     const char* message;
     std::uintptr_t vtableVa;
@@ -166,6 +185,7 @@ bool WriteEngineData(std::uintptr_t address, std::uintptr_t value) noexcept {
 void InstallLzssFix(std::uintptr_t engineBase) noexcept;  // below
 void InstallBaselineOverflowFix(std::uintptr_t engineBase) noexcept;  // below
 void InstallDatagramLimit(std::uintptr_t engineBase) noexcept;  // below
+void InstallFragmentBound(std::uintptr_t engineBase) noexcept;  // below
 
 void InstallNetMessageFixes(std::uintptr_t engineBase, std::size_t engineSize) noexcept {
     using namespace netfixes;
@@ -173,6 +193,7 @@ void InstallNetMessageFixes(std::uintptr_t engineBase, std::size_t engineSize) n
     InstallLzssFix(engineBase);
     InstallBaselineOverflowFix(engineBase);
     InstallDatagramLimit(engineBase);
+    InstallFragmentBound(engineBase);
     g_engineBase = engineBase;
     alignas(16) static std::uint8_t logStorage[0x90]{};
     g_logConVar = atlasserver::RegisterConVar(logStorage, "ns_exploitfixes_log", "1", "Whether to log whenever ExploitFixes.cpp blocks/corrects something");
@@ -192,6 +213,8 @@ void InstallNetMessageFixes(std::uintptr_t engineBase, std::size_t engineSize) n
         {"clc_Move", 0x3afe10, 4, 0x2ef130, reinterpret_cast<void*>(&MoveProcess), reinterpret_cast<void**>(&g_moveProcess)},
         {"client ProcessStringCmd", 0x3a25a0, 2, 0x155e80, reinterpret_cast<void*>(&ClientStringCmd),
             reinterpret_cast<void**>(&g_clientStringCmd)},
+        {"CEngineClient GetPlayerInfo", 0x3985b8, 28, 0x47510, reinterpret_cast<void*>(&GetPlayerInfo),
+            reinterpret_cast<void**>(&g_getPlayerInfo)},
     };
     // Every vtable's GetName (slot 11) must be the function that names it.
     const struct { std::uintptr_t vtableVa, getNameVa; } names[] = {
@@ -703,4 +726,79 @@ void InstallDatagramLimit(std::uintptr_t engineBase) noexcept {
         installed = installed && Redirect(engineBase, callVa, reinterpret_cast<const void*>(&GetPacketGuard));
     LogFormat(installed ? "[NorthstarPS4] NET_ReceiveDatagram limit installed\n"
                         : "[NorthstarPS4] NET_ReceiveDatagram limit: write failed\n");
+}
+
+// NorthstarLauncher#941: one reliable-subchannel fragment path in
+// CNetChan::ProcessSubChannelData doesn't bound the fragment's size. PC reads
+// a 10-bit byte count (up to 1023) into a 0x230-byte stack buffer when it
+// skips a fragment it already has; the sibling paths clamp to 0x230. PC jumps
+// to a cave that drops the packet when the count is larger.
+//
+// On PS4 ProcessSubChannelData is inlined into NET_ProcessSocket
+// (engine+0x1a6350). The same paths are there: the clamp at engine+0x1a7b91
+// (cmp 0x40000, cmovg 0x230), the default 0x230 at engine+0x1a7ada, and the
+// unbounded 10-bit count at engine+0x1a7b17 (and r9d, 0x3ff). The skip read at
+// engine+0x1a7dd1 reads r9d * 8 bits into [rbp-0x260], a 0x230-byte buffer
+// below the stack canary at [rbp-0x30]. `shl r9d, 3; lea rsi, [rbp-0x260]` at
+// engine+0x1a7ddd becomes a jump to ns_fragment_bound_thunk (runtime.cpp),
+// which drops the packet at engine+0x1a846c, the target of the function's
+// own fragment-size check (`jg` at engine+0x1a7ebc).
+namespace fragmentfix {
+constexpr std::uintptr_t kSiteVa = 0x1a7ddd;
+constexpr std::uintptr_t kResumeVa = 0x1a7de8;
+constexpr std::uintptr_t kDropVa = 0x1a846c;
+constexpr std::uintptr_t kPreimageVa = 0x1a7dd1;
+// test r10d, r10d; je; mov rdi, [rbp-0x288]; shl r9d, 3; lea rsi, [rbp-0x260];
+// mov ebx, r10d; mov edx, r9d; call ReadBits (engine+0x20fff0)
+constexpr std::uint8_t kPreimage[] = {0x45, 0x85, 0xd2, 0x74, 0x28, 0x48, 0x8b, 0xbd, 0x78, 0xfd, 0xff, 0xff, 0x41, 0xc1,
+    0xe1, 0x03, 0x48, 0x8d, 0xb5, 0xa0, 0xfd, 0xff, 0xff, 0x44, 0x89, 0xd3, 0x44, 0x89, 0xca, 0xe8, 0xfd, 0x81, 0x06, 0x00};
+// The sibling clamp: cmp edx, 0x40000; ja <drop>; cmp edx, 0x230
+constexpr std::uintptr_t kClampVa = 0x1a7b91;
+constexpr std::uint8_t kClamp[] = {0x81, 0xfa, 0x00, 0x00, 0x04, 0x00, 0x0f, 0x87, 0xcf, 0x08, 0x00, 0x00, 0x81, 0xfa, 0x30,
+    0x02};
+// The fragment-size check: cmp ecx, edx; jg <drop>
+constexpr std::uintptr_t kSizeCheckVa = 0x1a7eba;
+constexpr std::uint8_t kSizeCheck[] = {0x39, 0xd1, 0x0f, 0x8f, 0xaa, 0x05, 0x00, 0x00};
+std::uint32_t g_reported = 0;
+} // namespace fragmentfix
+
+void InstallFragmentBound(std::uintptr_t engineBase) noexcept {
+    using namespace fragmentfix;
+    const auto matches = [engineBase](std::uintptr_t va, const std::uint8_t* bytes, std::size_t size) {
+        return std::memcmp(reinterpret_cast<const void*>(engineBase + va), bytes, size) == 0;
+    };
+    if (!matches(kPreimageVa, kPreimage, sizeof(kPreimage)) || !matches(kClampVa, kClamp, sizeof(kClamp)) ||
+        !matches(kSizeCheckVa, kSizeCheck, sizeof(kSizeCheck))) {
+        LogFormat("[NorthstarPS4] subchannel fragment bound refused: engine profile mismatch\n");
+        return;
+    }
+    const auto next = engineBase + kSiteVa + 5;
+    const auto relative = static_cast<std::int64_t>(Reachable(next, reinterpret_cast<std::uintptr_t>(&ns_fragment_bound_thunk))) -
+        static_cast<std::int64_t>(next);
+    if (relative < -2147483648LL || relative > 2147483647LL) {
+        LogFormat("[NorthstarPS4] subchannel fragment bound refused: thunk outside rel32 range\n");
+        return;
+    }
+    ns_fragment_resume = engineBase + kResumeVa;
+    ns_fragment_drop = engineBase + kDropVa;
+    // jmp thunk, then int3 over the rest of the 11 replaced bytes (nothing
+    // branches into them).
+    std::uint8_t jump[kResumeVa - kSiteVa] = {0xe9};
+    const auto displacement = static_cast<std::int32_t>(relative);
+    std::memcpy(jump + 1, &displacement, sizeof(displacement));
+    std::memset(jump + 5, 0xcc, sizeof(jump) - 5);
+    if (WriteEngineCode(engineBase + kSiteVa, jump, sizeof(jump)))
+        LogFormat("[NorthstarPS4] subchannel fragment bound installed\n");
+    else
+        LogFormat("[NorthstarPS4] subchannel fragment bound: write failed\n");
+}
+
+// From the host frame: reports fragments dropped since the last report.
+void ReportFragmentDrops() noexcept {
+    const std::uint32_t dropped = __atomic_load_n(&ns_fragment_dropped, __ATOMIC_RELAXED);
+    if (dropped == fragmentfix::g_reported) return;
+    const std::uint32_t added = dropped - fragmentfix::g_reported;
+    fragmentfix::g_reported = dropped;
+    if (stringcommands::ConVarIntValue(netfixes::g_logConVar, 1) != 0)
+        LogFormat("[NorthstarPS4] exploit fix: dropped %u packet(s) with an oversized reliable fragment\n", added);
 }

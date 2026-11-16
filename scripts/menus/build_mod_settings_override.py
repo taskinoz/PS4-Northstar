@@ -26,7 +26,7 @@ import os
 
 NL = chr(10)
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-CLIENT = os.path.join(ROOT, 'vendor', 'NorthstarMods', 'Northstar.Client', 'mod')
+CLIENT = os.path.join(ROOT, 'vendor', 'Northstar', 'mods', 'Northstar.Client', 'mod')
 PS4 = os.path.join(ROOT, 'mods', 'Northstar.PS4', 'mod')
 
 
